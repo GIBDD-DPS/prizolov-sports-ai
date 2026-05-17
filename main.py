@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ============================================
 # Prizolov Sports AI - Main Execution Engine
-# Version: 3.03 (Strict Pre-Import Path Injection)
+# Version: 3.04 (Absolute Root Import Patch)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
@@ -11,12 +11,10 @@ import sys
 import os
 from pathlib import Path
 
-# Внедряем пути строго до выполнения любых локальных импортов проекта
+# Принудительно очищаем и перестраиваем пути поиска для Amvera Cloud environment
 current_dir = Path(__file__).resolve().parent
-if str(current_dir) not in sys.path:
-    sys.path.insert(0, str(current_dir))
-if str(current_dir.parent) not in sys.path:
-    sys.path.insert(0, str(current_dir.parent))
+sys.path.insert(0, str(current_dir))
+sys.path.insert(0, str(current_dir / "prizolov_sports_ai"))
 
 import argparse
 import asyncio
@@ -24,8 +22,11 @@ import signal
 import logging
 import random  # Для демонстрационной генерации CV-данных в отсутствие реальной камеры
 
-# Импортируем локальные модули только после инжекции путей в sys.path
-from prizolov_sports_ai.core.orchestrator import PrizolovSportsOrchestrator
+# Используем прямой отказоустойчивый импорт оркестратора из локальной папки ядра
+try:
+    from prizolov_sports_ai.core.orchestrator import PrizolovSportsOrchestrator
+except ModuleNotFoundError:
+    from core.orchestrator import PrizolovSportsOrchestrator
 
 # Настройка логирования для контейнеров Docker / Systemd
 logging.basicConfig(
