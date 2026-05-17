@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Amvera Cloud Config
-# Version: 4.02 (Syntax & Build Pipeline Fix)
+# Version: 4.03 (Merged with Auto-Generator)
 # Author: Dm.Andreyanov
 # Target: Production deployment at cloud.amvera.ru
 # ============================================
@@ -12,14 +12,15 @@ meta:
     version: "3.10"
 
 build:
-  # Корректный параметр указания файла зависимостей
   requirementsPath: requirements.txt
-  # Запуск сборки proto-интерфейсов через валидную директиву Amvera
+  useCache: true
+  # Добавляем шаг автоматической компиляции .proto контрактов в gRPC Python-классы
   additionalCommands:
     - python scripts/compile_proto.py
 
 run:
-  # Точка входа и аргументы запуска ИИ-модуля
+  scriptName: null
   command: python main.py --sport football --match_id live_mcl_football_01 --agent_host localhost:50051
-  # Исправленный синтаксис монтирования постоянного хранилища /data для кэша
   persistenceMount: /data
+  containerPort: "80"
+  servicePort: "80"
