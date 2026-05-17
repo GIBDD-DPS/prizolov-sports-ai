@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Amvera Cloud Config
-# Version: 4.03 (Merged with Auto-Generator)
+# Version: 4.04 (Strict Amvera Compliant Specification)
 # Author: Dm.Andreyanov
 # Target: Production deployment at cloud.amvera.ru
 # ============================================
@@ -14,9 +14,6 @@ meta:
 build:
   requirementsPath: requirements.txt
   useCache: true
-  # Добавляем шаг автоматической компиляции .proto контрактов в gRPC Python-классы
-  additionalCommands:
-    - python scripts/compile_proto.py
 
 run:
   scriptName: null
