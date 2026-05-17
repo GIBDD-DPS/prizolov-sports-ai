@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ============================================
 # Prizolov Sports AI - Main Execution Engine
-# Version: 3.04 (Absolute Root Import Patch)
+# Version: 3.05 (Absolute Deployment Patch)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
@@ -11,7 +11,7 @@ import sys
 import os
 from pathlib import Path
 
-# Принудительно очищаем и перестраиваем пути поиска для Amvera Cloud environment
+# Жесткое перестроение путей для инфраструктуры Amvera Cloud
 current_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(current_dir))
 sys.path.insert(0, str(current_dir / "prizolov_sports_ai"))
@@ -20,15 +20,15 @@ import argparse
 import asyncio
 import signal
 import logging
-import random  # Для демонстрационной генерации CV-данных в отсутствие реальной камеры
+import random
 
-# Используем прямой отказоустойчивый импорт оркестратора из локальной папки ядра
+# Отказоустойчивый импорт оркестратора без использования жесткого имени пакета
 try:
-    from prizolov_sports_ai.core.orchestrator import PrizolovSportsOrchestrator
-except ModuleNotFoundError:
     from core.orchestrator import PrizolovSportsOrchestrator
+except ModuleNotFoundError:
+    from prizolov_sports_ai.core.orchestrator import PrizolovSportsOrchestrator
 
-# Настройка логирования для контейнеров Docker / Systemd
+# Настройка логирования для контейнеров Docker / Amvera
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
@@ -45,7 +45,6 @@ def handle_exit_signal(signum, frame):
     logger.info(f"Получен системный сигнал остановки ({signum}). Завершение работы...")
     keep_running = False
 
-# Регистрируем обработчики для корректного закрытия в докере
 signal.signal(signal.SIGINT, handle_exit_signal)
 signal.signal(signal.SIGTERM, handle_exit_signal)
 
@@ -63,7 +62,7 @@ async def main_inference_loop(sport: str, match_id: str, host: str):
     initial_protocol = {"score_a": 0, "score_b": 0}
     orchestrator.update_official_protocol(initial_protocol)
     
-    # Тайминги для симуляции игры (для продакшена здесь подключается OpenCV VideoCapture/RTSP)
+    # Тайминги для симуляции игры
     elapsed_seconds = 0
     total_match_seconds = 5400 if sport == "football" else (3600 if sport == "hockey" else 2400)
     
@@ -71,7 +70,7 @@ async def main_inference_loop(sport: str, match_id: str, host: str):
     
     try:
         while keep_running:
-            # 2. Симуляция получения обработанных данных с YOLOv10 / RTMPose (CV-слой)
+            # 2. Симуляция получения обработанных данных с CV-слоя
             elapsed_seconds += 1
             time_left_ratio = max(0.0, 1.0 - (elapsed_seconds / total_match_seconds))
             
@@ -131,15 +130,13 @@ async def main_inference_loop(sport: str, match_id: str, host: str):
         logger.info("=== Модуль Prizolov Sports AI успешно выгружен из системы ===")
 
 if __name__ == "__main__":
-    # Настройка парсера аргументов командной строки
     parser = argparse.ArgumentParser(description="Prizolov Sports AI Production Runner")
-    parser.add_argument("--sport", type=str, required=True, help="Вид спорта: football, hockey, basketball, теннис и т.д.")
+    parser.add_argument("--sport", type=str, required=True, help="Вид спорта: football, hockey, basketball...")
     parser.add_argument("--match_id", type=str, default="live_match_001", help="Уникальный строковый ID матча")
     parser.add_argument("--agent_host", type=str, default="localhost:50051", help="Адрес gRPC сервера Prizolov Agent OS")
     
     args = parser.parse_args()
     
-    # Запуск асинхронной среды исполнения
     try:
         asyncio.run(main_inference_loop(sport=args.sport, match_id=args.match_id, host=args.agent_host))
     except KeyboardInterrupt:
