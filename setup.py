@@ -1,6 +1,7 @@
 # setup.py
 # ============================================
 # Prizolov Sports AI - Setup
+# Version: 3.01 (Major Architecture Upgrade)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
@@ -9,7 +10,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="prizolov-sports-ai",
-    version="1.0.0",
+    version="3.01.0",
     description="High-performance Sports Computer Vision & Broad Line Analytics engine for Prizolov Agent OS",
     author="Dm.Andreyanov",
     organization="Prizolov Market / Prizolov Lab",
@@ -39,7 +40,7 @@ setup(
             "onnxruntime-gpu>=1.16.0",   # Для инференса моделей на GPU через ONNX/TensorRT
         ],
     },
-    python_requires=">=3.9",            # Повышено до 3.9 для лучшей поддержки тайпинга и асинхронности
+    python_requires=">=3.9",            # Поддержка современного тайпинга и оптимизированной асинхронности
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
