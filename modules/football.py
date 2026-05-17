@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Football Analytics Module
-# Version: 3.01 (Initial Architecture Release)
+# Version: 3.02 (Absolute Deployment Refactoring)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
@@ -8,7 +8,11 @@
 
 import numpy as np
 from typing import Dict, Any, List, Tuple
-from ..core.line_generator import BroadLineGenerator
+
+try:
+    from core.line_generator import BroadLineGenerator
+except ModuleNotFoundError:
+    from prizolov_sports_ai.core.line_generator import BroadLineGenerator
 
 class FootballAnalyticsModule:
     """Профильный модуль ИИ-аналитики и генерации широкой линии для футбола"""
@@ -27,31 +31,31 @@ class FootballAnalyticsModule:
         self.corners_a = 0
         self.corners_b = 0
         
-        # Базовая атакующая интенсивность команд (лямбды для Пуассона, обновляются по ходу игры)
-        self.base_lambda_a = 1.2  # Среднее ожидаемое число голов за матч для команды А
-        self.base_lambda_b = 1.0  # Среднее ожидаемое число голов за матч для команды Б
+        # Базовая атакующая интенсивность команд (лямбды для Пуассона)
+        self.base_lambda_a = 1.2
+        self.base_lambda_b = 1.0
         
-        # Накопительные счетчики владения (в количестве кадров активности)
+        # Накопительные счетчики владения
         self.possession_frames_a = 0
         self.possession_frames_b = 0
 
     def set_match_state(self, score_a: int, score_b: int, corners_a: int, corners_b: int) -> None:
-        """Обновление официального протокола матча (из внешних API или ручного ввода)"""
+        """Обновление официального протокола матча"""
         self.current_score_a = score_a
         self.current_score_b = score_b
         self.corners_a = corners_a
         self.corners_b = corners_b
 
     def calculate_homography_coords(self, pixel_coords: Tuple[float, float], h_matrix: np.ndarray) -> Tuple[float, float]:
-        """Превращает пиксельные координаты экрана в метрические координаты поля (0-105м, 0-68м)"""
+        """Превращает пиксельные координаты экрана в метрические координаты поля"""
         if h_matrix is None:
             return pixel_coords
-        point = np.array([pixel_coords[0], pixel_coords[1], 1.0])
+        point = np.array([pixel_coords, pixel_coords, 1.0])
         transformed = np.dot(h_matrix, point)
-        if transformed[2] == 0:
+        if transformed == 0:
             return pixel_coords
-        real_x = transformed[0] / transformed[2]
-        real_y = transformed[1] / transformed[2]
+        real_x = transformed / transformed
+        real_y = transformed / transformed
         return (float(real_x), float(real_y))
 
     def evaluate_offside(self, 
@@ -59,21 +63,15 @@ class FootballAnalyticsModule:
                          attackers_metric: List[float], 
                          ball_metric_x: float, 
                          is_pass_event: bool) -> Tuple[bool, List[int]]:
-        """
-        Фиксация офсайдного положения в метрической системе координат.
-        defenders_metric: список X-координат защитников.
-        attackers_metric: список кортежей (player_id, X-координата) нападающих.
-        """
+        """Фиксация офсайдного положения в метрической системе координат"""
         if not is_pass_event or len(defenders_metric) < 2:
             return False, []
 
-        # Сортируем защитников (предполагаем, что ворота обороны находятся на отметке X = 105.0)
         sorted_defenders = sorted(defenders_metric, reverse=True)
-        offside_line = sorted_defenders[1] # Второй защитник со стороны своих ворот
+        offside_line = sorted_defenders
 
         offside_players = []
         for player_id, act_x in attackers_metric:
-            # Игрок ближе к воротам, чем линия офсайда и чем мяч в момент паса
             if act_x > offside_line and act_x > ball_metric_x:
                 offside_players.append(player_id)
 
@@ -83,11 +81,7 @@ class FootballAnalyticsModule:
                            tracking_data: Dict[str, Any], 
                            game_time_str: str, 
                            time_left_ratio: float) -> Dict[str, Any]:
-        """
-        Главный цикл обработки кадра. Принимает детекции, рассчитывает 
-        Live-статистику матча и формирует пакет широкой линии.
-        """
-        # Сбор статистики владения мячом на текущем кадре
+        """Главный цикл обработки кадра. Рассчитывает Live-статистику и формирует линию"""
         ball_owner_team = tracking_data.get("ball_owner_team", None)
         if ball_owner_team == "A":
             self.possession_frames_a += 1
@@ -101,15 +95,13 @@ class FootballAnalyticsModule:
             p_pct_a = round((self.possession_frames_a / total_p_frames) * 100, 1)
             p_pct_b = round(100.0 - p_pct_a, 1)
 
-        # Динамическая адаптация атакующей интенсивности команд (лямбд) на основе владения и опасных атак
         danger_attacks_a = tracking_data.get("danger_attacks_a", 0)
         danger_attacks_b = tracking_data.get("danger_attacks_b", 0)
         
-        # Корректировка базовой силы команд в зависимости от хода игры (Live-перформанс)
         live_lambda_a = self.base_lambda_a * (p_pct_a / 50.0) + (danger_attacks_a * 0.1)
         live_lambda_b = self.base_lambda_b * (p_pct_b / 50.0) + (danger_attacks_b * 0.1)
 
-        # 1. Расчет основных рынков (1Х2, Тоталы матча) через Пуассоновское ядро
+        # Расчет основных рынков
         base_markets = self.lg.calculate_poisson_line(
             lambda_team_a=live_lambda_a,
             lambda_team_b=live_lambda_b,
@@ -118,8 +110,7 @@ class FootballAnalyticsModule:
             current_score_b=self.current_score_b
         )
 
-        # 2. Дополнительный расчет широкой линии: Рынок Угловых (Corners)
-        # Среднее количество угловых в футболе ~9 за матч. Используем Пуассон для угловых.
+        # Расчет угловых
         lambda_corners_a = 5.0 * (live_lambda_a / max(self.base_lambda_a, 0.1))
         lambda_corners_b = 4.5 * (live_lambda_b / max(self.base_lambda_b, 0.1))
         
@@ -131,7 +122,6 @@ class FootballAnalyticsModule:
             current_score_b=self.corners_b
         )
         
-        # Переименовываем рынки угловых для широкой линии
         active_specials = []
         for outcome in corners_markets["main_outcomes"]:
             m_name = outcome["market_name"].replace("1", "Corners Team A").replace("X", "Corners Draw").replace("2", "Corners Team B")
@@ -141,7 +131,6 @@ class FootballAnalyticsModule:
             m_name = outcome["market_name"].replace("TO", "Corners Total Over").replace("TU", "Corners Total Under")
             active_specials.append({"market_name": m_name, "odds": outcome["odds"], "is_suspended": outcome["is_suspended"]})
 
-        # Сборка итогового пакета для отправки в agent_bridge
         output_package = {
             "match_id": self.match_id,
             "sport": "football",
