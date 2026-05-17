@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Main System Orchestrator
-# Version: 4.01 (Global AI & Risk Upgrade)
+# Version: 4.02 (Absolute Deployment Refactoring)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
@@ -10,16 +10,29 @@ import asyncio
 import logging
 from typing import Dict, Any, Optional
 
-from .line_generator import BroadLineGenerator
-from .prematch_context import PreMatchContextModule
-from .trend_predictor import MicroTrendPredictor
-from .risk_manager import RiskManagementEngine
-from ..agent_bridge.client import PrizolovAgentClient
-from ..modules.sentiment_miner import SentimentMinerModule
-from ..modules.football import FootballAnalyticsModule
-from ..modules.hockey import HockeyAnalyticsModule
-from ..modules.basketball import BasketballAnalyticsModule
-from ..modules.miscellaneous import MiscellaneousSportsModule
+# Исправление импортов под flat-структуру контейнера Amvera Cloud
+try:
+    from core.line_generator import BroadLineGenerator
+    from core.prematch_context import PreMatchContextModule
+    from core.trend_predictor import MicroTrendPredictor
+    from core.risk_manager import RiskManagementEngine
+    from agent_bridge.client import PrizolovAgentClient
+    from modules.sentiment_miner import SentimentMinerModule
+    from modules.football import FootballAnalyticsModule
+    from modules.hockey import HockeyAnalyticsModule
+    from modules.basketball import BasketballAnalyticsModule
+    from modules.miscellaneous import MiscellaneousSportsModule
+except ModuleNotFoundError:
+    from prizolov_sports_ai.core.line_generator import BroadLineGenerator
+    from prizolov_sports_ai.core.prematch_context import PreMatchContextModule
+    from prizolov_sports_ai.core.trend_predictor import MicroTrendPredictor
+    from prizolov_sports_ai.core.risk_manager import RiskManagementEngine
+    from prizolov_sports_ai.agent_bridge.client import PrizolovAgentClient
+    from prizolov_sports_ai.modules.sentiment_miner import SentimentMinerModule
+    from prizolov_sports_ai.modules.football import FootballAnalyticsModule
+    from prizolov_sports_ai.modules.hockey import HockeyAnalyticsModule
+    from prizolov_sports_ai.modules.basketball import BasketballAnalyticsModule
+    from prizolov_sports_ai.modules.miscellaneous import MiscellaneousSportsModule
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("PrizolovSportsAI.Orchestrator")
@@ -32,7 +45,7 @@ class PrizolovSportsOrchestrator:
         self.line_generator = BroadLineGenerator(default_margin=1.05)
         self.agent_client = PrizolovAgentClient(target_host=target_agent_host)
         
-        # Подключение новых продвинутых модулей версии 4.01
+        # Подключение продвинутых модулей
         self.prematch_context = PreMatchContextModule()
         self.trend_predictor = MicroTrendPredictor(window_size_frames=1200)
         self.sentiment_miner = SentimentMinerModule(min_capper_roi=5.0, min_bets_count=100)
@@ -74,7 +87,6 @@ class PrizolovSportsOrchestrator:
             self.active_module.base_lambda_b = calibrated_lambda_b
         elif self.current_sport == "basketball":
             self.active_module = BasketballAnalyticsModule(match_id, self.line_generator)
-            # Пересчет ORTG на основе пре-матч лямбд
             self.active_module.base_efficiency_a = calibrated_lambda_a / 1.5
             self.active_module.base_efficiency_b = calibrated_lambda_b / 1.5
         else:
@@ -84,7 +96,7 @@ class PrizolovSportsOrchestrator:
             self.active_module.strength_factor_b = calibrated_lambda_b
 
         self.is_initialized = True
-        logger.info(f"Матч {match_id} успешно оркестрован на уровне 4.01. Инфраструктура готова.")
+        logger.info(f"Матч {match_id} успешно оркестрован на уровне 4.02. Инфраструктура готова.")
 
     async def shutdown(self) -> None:
         """Корректное завершение работы оркестратора и деинициализация каналов связи"""
@@ -168,10 +180,8 @@ class PrizolovSportsOrchestrator:
             for market_group in ["main_outcomes", "totals", "active_specials"]:
                 if market_group in analytics_package["line_data"]:
                     for outcome in analytics_package["line_data"][market_group]:
-                        # Вычисляем, рекомендуют ли этот маркет лучшие капперы сети
                         sentiment_mod = self.sentiment_miner.get_market_sentiment_modifier(team_a, team_b, outcome["market_name"])
                         if sentiment_mod > 1.0:
-                            # Оптимизируем коэффициент под Value Bet тренд, делая его привлекательнее или точнее
                             outcome["odds"] = round(outcome["odds"] / (sentiment_mod * 0.98), 2)
 
             # 7. Финальный анти-арбитражный контроль (Сравнение с конкурентами из фида)
