@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
 # ============================================
 # Prizolov Sports AI - Main Execution Engine
-# Version: 3.01 (Final Architecture Release)
+# Version: 3.02 (Amvera Paths Environment Fix)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
 # ============================================
 
 import sys
+import os
+from pathlib import Path
+
+# Динамическое добавление корня проекта в sys.path для устранения ModuleNotFoundError в Amvera
+current_file = Path(__file__).resolve()
+project_root = current_file.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 import argparse
 import asyncio
 import signal
