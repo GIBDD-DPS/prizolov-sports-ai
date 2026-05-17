@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ============================================
 # Prizolov Sports AI - Main Execution Engine
-# Version: 3.02 (Amvera Paths Environment Fix)
+# Version: 3.03 (Strict Pre-Import Path Injection)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
@@ -11,17 +11,20 @@ import sys
 import os
 from pathlib import Path
 
-# Динамическое добавление корня проекта в sys.path для устранения ModuleNotFoundError в Amvera
-current_file = Path(__file__).resolve()
-project_root = current_file.parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
+# Внедряем пути строго до выполнения любых локальных импортов проекта
+current_dir = Path(__file__).resolve().parent
+if str(current_dir) not in sys.path:
+    sys.path.insert(0, str(current_dir))
+if str(current_dir.parent) not in sys.path:
+    sys.path.insert(0, str(current_dir.parent))
 
 import argparse
 import asyncio
 import signal
 import logging
 import random  # Для демонстрационной генерации CV-данных в отсутствие реальной камеры
+
+# Импортируем локальные модули только после инжекции путей в sys.path
 from prizolov_sports_ai.core.orchestrator import PrizolovSportsOrchestrator
 
 # Настройка логирования для контейнеров Docker / Systemd
@@ -68,7 +71,6 @@ async def main_inference_loop(sport: str, match_id: str, host: str):
     try:
         while keep_running:
             # 2. Симуляция получения обработанных данных с YOLOv10 / RTMPose (CV-слой)
-            # В реальном коде здесь: вызов модели и извлечение координат объектов в кадре
             elapsed_seconds += 1
             time_left_ratio = max(0.0, 1.0 - (elapsed_seconds / total_match_seconds))
             
@@ -79,7 +81,6 @@ async def main_inference_loop(sport: str, match_id: str, host: str):
             
             # Раз в минуту имитируем случайное изменение официального счета или статистики
             if elapsed_seconds % 90 == 0:
-                # Пример обновления угловых для футбола или бросков для хоккея
                 live_protocol = {
                     "score_a": random.choices([0, 1], weights=[0.9, 0.1])[0] + orchestrator.active_module.current_score_a,
                     "score_b": random.choices([0, 1], weights=[0.93, 0.07])[0] + orchestrator.active_module.current_score_b
