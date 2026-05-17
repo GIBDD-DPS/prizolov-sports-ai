@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ============================================
 # Prizolov Sports AI - Main Execution Engine
-# Version: 3.06 (Native On-the-Fly Protobuf Compiler)
+# Version: 3.07 (Strict Flat-Cloud Compiler Fix)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
@@ -14,6 +14,7 @@ from pathlib import Path
 # 1. Жесткое перестроение путей поиска модулей для Amvera Cloud environment
 current_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(current_dir))
+sys.path.insert(0, str(current_dir / "agent_bridge"))
 sys.path.insert(0, str(current_dir / "prizolov_sports_ai"))
 
 # 2. Автоматическая компиляция .proto контрактов внутри контейнера Amvera при старте
@@ -23,7 +24,6 @@ def compile_proto_on_the_fly():
         proto_file = current_dir / "proto" / "prizolov_agent.proto"
         out_bridge_dir = current_dir / "agent_bridge"
         
-        # Проверяем существование исходной директории контракта
         if proto_file.exists():
             out_bridge_dir.mkdir(parents=True, exist_ok=True)
             
@@ -38,21 +38,22 @@ def compile_proto_on_the_fly():
             exit_code = protoc.main(protoc_args)
             
             if exit_code == 0:
-                # Патчинг импортов в сгенерированном gRPC файле под прямые локальные вызовы
+                # Патчинг импортов под чистую flat-структуру Amvera без относительных точек
                 grpc_file = out_bridge_dir / "prizolov_agent_pb2_grpc.py"
                 if grpc_file.exists():
                     with open(grpc_file, "r", encoding="utf-8") as f:
                         content = f.read()
                     
+                    # Делаем импорт абсолютно прямым локальным для Amvera Cloud
                     broken_import = "import prizolov_agent_pb2 as prizolov__agent__pb2"
-                    fixed_import = "from . import prizolov_agent_pb2 as prizolov__agent__pb2"
+                    fixed_import = "import prizolov_agent_pb2 as prizolov__agent__pb2"
                     
-                    if broken_import in content:
-                        content = content.replace(broken_import, fixed_import)
-                        with open(grpc_file, "w", encoding="utf-8") as f:
-                            f.write(content)
+                    # Если утилита protoc сгенерировала относительный импорт, убираем точку
+                    content = content.replace("from . import prizolov_agent_pb2", "import prizolov_agent_pb2")
+                    
+                    with open(grpc_file, "w", encoding="utf-8") as f:
+                        f.write(content)
     except Exception as e:
-        # Не блокируем старт, если файлы уже были скомпилированы локально
         pass
 
 # Запускаем сборку интерфейсов до импорта оркестратора
