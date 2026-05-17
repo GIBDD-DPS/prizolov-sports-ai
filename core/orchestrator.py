@@ -1,38 +1,36 @@
 # ============================================
 # Prizolov Sports AI - Main System Orchestrator
-# Version: 4.02 (Absolute Deployment Refactoring)
+# Version: 4.02 (Absolute Cloud Imports Fix)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
 # ============================================
 
+import sys
+import os
+from pathlib import Path
+
+# Гарантируем, что папки ядра и пакета находятся в путях для абсолютных импортов
+current_file = Path(__file__).resolve()
+project_root = current_file.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 import asyncio
 import logging
 from typing import Dict, Any, Optional
 
-# Исправление импортов под flat-структуру контейнера Amvera Cloud
-try:
-    from core.line_generator import BroadLineGenerator
-    from core.prematch_context import PreMatchContextModule
-    from core.trend_predictor import MicroTrendPredictor
-    from core.risk_manager import RiskManagementEngine
-    from agent_bridge.client import PrizolovAgentClient
-    from modules.sentiment_miner import SentimentMinerModule
-    from modules.football import FootballAnalyticsModule
-    from modules.hockey import HockeyAnalyticsModule
-    from modules.basketball import BasketballAnalyticsModule
-    from modules.miscellaneous import MiscellaneousSportsModule
-except ModuleNotFoundError:
-    from prizolov_sports_ai.core.line_generator import BroadLineGenerator
-    from prizolov_sports_ai.core.prematch_context import PreMatchContextModule
-    from prizolov_sports_ai.core.trend_predictor import MicroTrendPredictor
-    from prizolov_sports_ai.core.risk_manager import RiskManagementEngine
-    from prizolov_sports_ai.agent_bridge.client import PrizolovAgentClient
-    from prizolov_sports_ai.modules.sentiment_miner import SentimentMinerModule
-    from prizolov_sports_ai.modules.football import FootballAnalyticsModule
-    from prizolov_sports_ai.modules.hockey import HockeyAnalyticsModule
-    from prizolov_sports_ai.modules.basketball import BasketballAnalyticsModule
-    from prizolov_sports_ai.modules.miscellaneous import MiscellaneousSportsModule
+# Исправленные абсолютные импорты без точек для стабильного деплоя в Amvera
+from core.line_generator import BroadLineGenerator
+from core.prematch_context import PreMatchContextModule
+from core.trend_predictor import MicroTrendPredictor
+from core.risk_manager import RiskManagementEngine
+from agent_bridge.client import PrizolovAgentClient
+from modules.sentiment_miner import SentimentMinerModule
+from modules.football import FootballAnalyticsModule
+from modules.hockey import HockeyAnalyticsModule
+from modules.basketball import BasketballAnalyticsModule
+from modules.miscellaneous import MiscellaneousSportsModule
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("PrizolovSportsAI.Orchestrator")
@@ -45,7 +43,7 @@ class PrizolovSportsOrchestrator:
         self.line_generator = BroadLineGenerator(default_margin=1.05)
         self.agent_client = PrizolovAgentClient(target_host=target_agent_host)
         
-        # Подключение продвинутых модулей
+        # Подключение новых продвинутых модулей
         self.prematch_context = PreMatchContextModule()
         self.trend_predictor = MicroTrendPredictor(window_size_frames=1200)
         self.sentiment_miner = SentimentMinerModule(min_capper_roi=5.0, min_bets_count=100)
@@ -151,7 +149,7 @@ class PrizolovSportsOrchestrator:
             tracking_data["live_xg_a"] *= press_multiplier_a
             tracking_data["live_xg_b"] *= press_multiplier_b
 
-            # 3. Периодический фоновый перезапуск парсинга капперов (раз в 1200 кадров / ~1 минуту)
+            # 3. Периодический фоновый перезапуск парсинга капперов (раз в 60 секунд)
             if elapsed_seconds > 0 and elapsed_seconds % 60 == 0:
                 asyncio.create_task(self.sentiment_miner.update_global_sentiment_trends())
 
@@ -180,8 +178,10 @@ class PrizolovSportsOrchestrator:
             for market_group in ["main_outcomes", "totals", "active_specials"]:
                 if market_group in analytics_package["line_data"]:
                     for outcome in analytics_package["line_data"][market_group]:
+                        # Вычисляем, рекомендуют ли этот маркет лучшие капперы сети
                         sentiment_mod = self.sentiment_miner.get_market_sentiment_modifier(team_a, team_b, outcome["market_name"])
                         if sentiment_mod > 1.0:
+                            # Оптимизируем коэффициент под Value Bet тренд
                             outcome["odds"] = round(outcome["odds"] / (sentiment_mod * 0.98), 2)
 
             # 7. Финальный анти-арбитражный контроль (Сравнение с конкурентами из фида)
