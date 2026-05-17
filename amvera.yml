@@ -1,0 +1,24 @@
+# ============================================
+# Prizolov Sports AI - Amvera Cloud Config
+# Version: 4.01 (Initial Infrastructure Release)
+# Author: Dm.Andreyanov
+# Target: Production deployment at cloud.amvera.ru
+# ============================================
+
+meta:
+  environment: python
+  toolchain:
+    name: pip
+    version: 3.10
+
+build:
+  requirements: requirements.txt
+  # Автоматически компилируем gRPC интерфейсы перед запуском инференса
+  command: python scripts/compile_proto.py
+
+run:
+  # Запуск инференса. Переменные --sport и --match_id можно переопределять в ЛК Amvera
+  command: python main.py --sport football --match_id live_mcl_football_01 --agent_host localhost:50051
+  persistence:
+    # Монтируем постоянное хранилище, чтобы кэш сентимент-анализа не сбрасывался при апдейтах
+    /data: data
