@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Agent OS Async Bridge Client
-# Version: 3.01 (Initial Architecture Release)
+# Version: 3.02 (Absolute Cloud Imports Fix)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
@@ -9,11 +9,20 @@
 import asyncio
 import logging
 import time
+import sys
+from pathlib import Path
 from typing import AsyncGenerator, Dict, Any, Optional
 
 import grpc
-from . import prizolov_agent_pb2
-from . import prizolov_agent_pb2_grpc
+
+# Гарантируем корректный поиск скомпилированных Protobuf файлов в Amvera
+current_dir = Path(__file__).resolve().parent
+if str(current_dir) not in sys.path:
+    sys.path.insert(0, str(current_dir))
+
+# Абсолютные импорты сгенерированных gRPC классов
+import prizolov_agent_pb2
+import prizolov_agent_pb2_grpc
 
 # Настройка системного логирования для мониторинга на prizolov.ru
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -114,7 +123,7 @@ class PrizolovAgentClient:
                 line_data=line_msg
             )
 
-            # Помещаем пакет в очередь. Если очередь полна, отбрасываем старые фреймы (Приоритет Live-актуальности)
+            # Помещаем пакет в очередь. Если очередь полна, отбрасываем старые фреймы
             try:
                 self.queue.put_nowait(package)
                 return True
@@ -140,7 +149,6 @@ class PrizolovAgentClient:
         while self.is_running:
             try:
                 logger.info("Попытка установки активного стрима с Agent OS...")
-                # Инициализация двунаправленного или однонаправленного gRPC стрима
                 response = await self.stub.StreamMatchAnalytics(self._packet_generator())
                 
                 if response.is_success:
@@ -153,7 +161,7 @@ class PrizolovAgentClient:
             except grpc.RpcError as e:
                 logger.warning(f"Потеря связи с Agent OS gRPC Server ({e.code()}). Повтор через {retry_delay}с...")
                 await asyncio.sleep(retry_delay)
-                retry_delay = min(retry_delay * 2, 60.0) # Экспоненциальный рост ожидания до 1 минуты
+                retry_delay = min(retry_delay * 2, 60.0)
             except Exception as e:
                 logger.error(f"Критический сбой в gRPC воркере: {e}")
                 await asyncio.sleep(5)
