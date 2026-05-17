@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ============================================
 # Prizolov Sports AI - Main Execution Engine
-# Version: 3.05 (Absolute Deployment Patch)
+# Version: 3.06 (Native On-the-Fly Protobuf Compiler)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
@@ -11,10 +11,52 @@ import sys
 import os
 from pathlib import Path
 
-# Жесткое перестроение путей для инфраструктуры Amvera Cloud
+# 1. Жесткое перестроение путей поиска модулей для Amvera Cloud environment
 current_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(current_dir))
 sys.path.insert(0, str(current_dir / "prizolov_sports_ai"))
+
+# 2. Автоматическая компиляция .proto контрактов внутри контейнера Amvera при старте
+def compile_proto_on_the_fly():
+    try:
+        from grpc_tools import protoc
+        proto_file = current_dir / "proto" / "prizolov_agent.proto"
+        out_bridge_dir = current_dir / "agent_bridge"
+        
+        # Проверяем существование исходной директории контракта
+        if proto_file.exists():
+            out_bridge_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Конфигурируем аргументы сборщика под flat-структуру Amvera
+            protoc_args = [
+                "grpc_tools.protoc",
+                f"--proto_path={proto_file.parent}",
+                f"--python_out={out_bridge_dir}",
+                f"--grpc_python_out={out_bridge_dir}",
+                str(proto_file)
+            ]
+            exit_code = protoc.main(protoc_args)
+            
+            if exit_code == 0:
+                # Патчинг импортов в сгенерированном gRPC файле под прямые локальные вызовы
+                grpc_file = out_bridge_dir / "prizolov_agent_pb2_grpc.py"
+                if grpc_file.exists():
+                    with open(grpc_file, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    
+                    broken_import = "import prizolov_agent_pb2 as prizolov__agent__pb2"
+                    fixed_import = "from . import prizolov_agent_pb2 as prizolov__agent__pb2"
+                    
+                    if broken_import in content:
+                        content = content.replace(broken_import, fixed_import)
+                        with open(grpc_file, "w", encoding="utf-8") as f:
+                            f.write(content)
+    except Exception as e:
+        # Не блокируем старт, если файлы уже были скомпилированы локально
+        pass
+
+# Запускаем сборку интерфейсов до импорта оркестратора
+compile_proto_on_the_fly()
 
 import argparse
 import asyncio
@@ -22,13 +64,13 @@ import signal
 import logging
 import random
 
-# Отказоустойчивый импорт оркестратора без использования жесткого имени пакета
+# Отказоустойчивый импорт оркестратора
 try:
     from core.orchestrator import PrizolovSportsOrchestrator
 except ModuleNotFoundError:
     from prizolov_sports_ai.core.orchestrator import PrizolovSportsOrchestrator
 
-# Настройка логирования для контейнеров Docker / Amvera
+# Настройка логирования для контейнеров Amvera Cloud
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
@@ -55,14 +97,12 @@ async def main_inference_loop(sport: str, match_id: str, host: str):
     logger.info("=== Инициализация Prizolov Sports AI Engine ===")
     orchestrator = PrizolovSportsOrchestrator(target_agent_host=host)
     
-    # 1. Запуск оркестратора и gRPC-клиента под выбранный матч
+    # Запуск оркестратора и gRPC-клиента под выбранный матч
     await orchestrator.initialize_match(match_id=match_id, sport=sport)
     
-    # Имитируем стартовый протокол матча (счет 0:0)
     initial_protocol = {"score_a": 0, "score_b": 0}
     orchestrator.update_official_protocol(initial_protocol)
     
-    # Тайминги для симуляции игры
     elapsed_seconds = 0
     total_match_seconds = 5400 if sport == "football" else (3600 if sport == "hockey" else 2400)
     
@@ -70,16 +110,13 @@ async def main_inference_loop(sport: str, match_id: str, host: str):
     
     try:
         while keep_running:
-            # 2. Симуляция получения обработанных данных с CV-слоя
             elapsed_seconds += 1
             time_left_ratio = max(0.0, 1.0 - (elapsed_seconds / total_match_seconds))
             
-            # Рассчитываем строковое отображение игрового времени
             minutes = elapsed_seconds // 60
             seconds = elapsed_seconds % 60
             game_time_str = f"{minutes:02d}:{seconds:02d}"
             
-            # Раз в минуту имитируем случайное изменение официального счета или статистики
             if elapsed_seconds % 90 == 0:
                 live_protocol = {
                     "score_a": random.choices([0, 1], weights=[0.9, 0.1])[0] + orchestrator.active_module.current_score_a,
@@ -95,7 +132,6 @@ async def main_inference_loop(sport: str, match_id: str, host: str):
                 orchestrator.update_official_protocol(live_protocol)
                 logger.info(f"[Protocol Update] Текущий счет матча: {live_protocol['score_a']}:{live_protocol['score_b']}")
 
-            # Формируем сырой пакет пространственных данных от детектора
             mock_tracking_data = {
                 "ball_x": round(random.uniform(0.0, 100.0), 2),
                 "ball_y": round(random.uniform(0.0, 50.0), 2),
@@ -107,7 +143,6 @@ async def main_inference_loop(sport: str, match_id: str, host: str):
                 "danger_attacks_b": int(elapsed_seconds * 0.12)
             }
 
-            # 3. Передача CV-данных в оркестратор для генерации и отправки линии в Agent OS
             await orchestrator.process_cv_frame(
                 tracking_data=mock_tracking_data,
                 game_time_str=game_time_str,
@@ -115,7 +150,6 @@ async def main_inference_loop(sport: str, match_id: str, host: str):
                 elapsed_seconds=elapsed_seconds
             )
             
-            # Эмуляция частоты обработки ~20 кадров/пакетов аналитики в секунду
             await asyncio.sleep(0.05)
             
             if time_left_ratio <= 0:
@@ -125,7 +159,6 @@ async def main_inference_loop(sport: str, match_id: str, host: str):
     except Exception as e:
         logger.critical(f"Критическая ошибка основного цикла инференса: {e}")
     finally:
-        # 4. Освобождение ресурсов и отключение gRPC каналов при выходе
         await orchestrator.shutdown()
         logger.info("=== Модуль Prizolov Sports AI успешно выгружен из системы ===")
 
