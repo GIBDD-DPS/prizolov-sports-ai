@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Live Admin Dashboard
-# Version: 5.01 (Initial Architecture Release)
+# Version: 5.02 (Secure Middleware Integration)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
@@ -18,20 +18,26 @@ if str(project_root) not in sys.path:
 import asyncio
 import logging
 from typing import Dict, Any, Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+# Импорт модуля кибербезопасности версии 5.01
+from core.secure_auth import SecureAuthBridge
+
 logger = logging.getLogger("PrizolovSportsAI.Dashboard")
 
-# Инициализация FastAPI приложения панели управления
+# Инициализация FastAPI приложения
 app = FastAPI(
     title="Prizolov Sports AI - Control Panel",
-    description="Live-панель управления маржой и мониторинга матчей",
-    version="5.01"
+    description="Защищенная Live-панель управления маржой и мониторинга матчей",
+    version="5.02"
 )
 
-# Глобальная ссылка на оркестратор, задается динамически при старте main.py
+# Инициализация криптографического моста авторизации
+auth_bridge = SecureAuthBridge()
+
+# Глобальная ссылка на оркестратор
 orchestrator_instance: Optional[Any] = None
 
 class MarginUpdateModel(BaseModel):
@@ -40,9 +46,23 @@ class MarginUpdateModel(BaseModel):
 class LockLineModel(BaseModel):
     is_suspended: bool
 
+async def verify_scout_access(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    """Внутреннее middleware для обязательной JWT-верификации прав доступа скаута"""
+    if not authorization or not authorization.startswith("Bearer "):
+        logger.warning("[Security Infraction] Попытка несанкционированного доступа к API без токена!")
+        raise HTTPException(status_code=401, detail="Отсутствует или некорректен токен авторизации (Bearer token required)")
+        
+    token = authorization.split(" ")[1]
+    is_valid, claims = auth_bridge.verify_jwt_token(token)
+    
+    if not is_valid:
+        raise HTTPException(status_code=403, detail=claims.get("error", "Доступ запрещен"))
+        
+    return claims
+
 @app.get("/", response_class=HTMLResponse)
 async def get_dashboard_ui():
-    """Возвращает легковесный HTML5 интерфейс панели управления, адаптированный под мобильные устройства скаутов"""
+    """Возвращает UI-интерфейс панели управления скаута"""
     if not orchestrator_instance or not orchestrator_instance.is_initialized:
         return "<h3>[System Status] Ожидание инициализации спортивного матча оркестратором...</h3>"
         
@@ -73,19 +93,37 @@ async def get_dashboard_ui():
         </div>
         
         <div class="card">
-            <h2>Экстренное управление линией</h2>
+            <h2>Экстренное управление линией (Требует JWT)</h2>
             <button class="btn btn-danger" onclick="setLock(true)">ЗАМОРОЗИТЬ ПРИЕМ СТАВОК (SUSPENDED)</button>
             <button class="btn btn-success" onclick="setLock(false)">РАЗБЛОКИРОВАТЬ ЛИНЕЙКУ</button>
         </div>
 
         <script>
+            // Токен должен внедряться в localStorage фронтендом при авторизации на prizolov.ru
+            const getAuthToken = () => localStorage.getItem('prizolov_scout_token') || '';
+
             async function setLock(isLocked) {{
-                await fetch('/api/v1/control/lock', {{
+                const token = getAuthToken();
+                if(!token) {{
+                    alert('Ошибка: Вы не авторизованы в системе Prizolov!');
+                    return;
+                }}
+                
+                const response = await fetch('/api/v1/control/lock', {{
                     method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
+                    headers: {{ 
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + token
+                    }},
                     body: JSON.stringify({{ is_suspended: isLocked }})
                 }});
-                alert(isLocked ? 'Линия успешно заморожена на prizolov.ru' : 'Линия разблокирована');
+                
+                if(response.ok) {{
+                    alert(isLocked ? 'Линия успешно заморожена на prizolov.ru' : 'Линия разблокирована');
+                }} else {{
+                    const err = await response.json();
+                    alert('Ошибка доступа: ' + err.detail);
+                }}
             }}
         </script>
     </body>
@@ -94,8 +132,8 @@ async def get_dashboard_ui():
     return html_content
 
 @app.post("/api/v1/control/margin")
-async def update_live_margin(data: MarginUpdateModel):
-    """API-эндпоинт изменения базовой маржи букмекера налету"""
+async def update_live_margin(data: MarginUpdateModel, token_claims: Dict[str, Any] = Depends(verify_scout_access)):
+    """API-эндпоинт изменения базовой маржи букмекера налету (Защищен JWT)"""
     global orchestrator_instance
     if not orchestrator_instance:
         raise HTTPException(status_code=400, detail="Оркестратор не привязан к панели")
@@ -105,19 +143,21 @@ async def update_live_margin(data: MarginUpdateModel):
         
     orchestrator_instance.line_generator.margin = data.new_margin
     orchestrator_instance.risk_manager.base_margin = data.new_margin
-    logger.info(f"[Manual Risk Control] Скаут изменил базовую маржу на: {data.new_margin:.2f}")
-    return {"status": "success", "applied_margin": data.new_margin}
+    
+    scout_id = token_claims.get("sub", "unknown_id")
+    logger.info(f"[Manual Risk Control] Скаут ID:{scout_id} изменил базовую маржу на: {data.new_margin:.2f}")
+    return {"status": "success", "applied_margin": data.new_margin, "operator_id": scout_id}
 
 @app.post("/api/v1/control/lock")
-async def toggle_line_lock(data: LockLineModel):
-    """API-эндпоинт принудительной live-заморозки коэффициентов (например, при драке или падении камер)"""
+async def toggle_line_lock(data: LockLineModel, token_claims: Dict[str, Any] = Depends(verify_scout_access)):
+    """API-эндпоинт принудительной live-заморозки коэффициентов (Защищен JWT)"""
     global orchestrator_instance
     if not orchestrator_instance or not orchestrator_instance.active_module:
         raise HTTPException(status_code=400, detail="Спортивный модуль не запущен")
         
-    # Искусственно передаем в метаданные флаг остановки игры для заморозки в рантайме
-    logger.warning(f"[Manual Risk Control] Сигнал блокировки линии переключен в: {data.is_suspended}")
-    return {"status": "success", "is_suspended": data.is_suspended}
+    scout_id = token_claims.get("sub", "unknown_id")
+    logger.warning(f"[Manual Risk Control] Сигнал блокировки линии переключен оператором ID:{scout_id} в: {data.is_suspended}")
+    return {"status": "success", "is_suspended": data.is_suspended, "operator_id": scout_id}
 
 async def start_dashboard_server(orchestrator, port: int = 8080):
     """Запускает веб-сервер панели управления внутри контейнера Amvera"""
@@ -128,6 +168,5 @@ async def start_dashboard_server(orchestrator, port: int = 8080):
     config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="warning")
     server = uvicorn.Server(config)
     
-    # Фоновый запуск веб-панели без блокировки основного asyncio конвейера ИИ
     asyncio.create_task(server.serve())
-    logger.info(f"Административная веб-панель успешно запущена на порту {port}")
+    logger.info(f"Защищенная административная веб-панель успешно запущена на порту {port}")
