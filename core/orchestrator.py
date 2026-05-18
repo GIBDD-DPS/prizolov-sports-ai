@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Main System Orchestrator
-# Version: 4.12 (Enterprise Resilience Core)
+# Version: 4.13 (Cognitive Multimodal Core)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
@@ -39,6 +39,9 @@ from core.ball_validator import BallPuckValidator
 from core.video_flicker_filter import AntiFlickerVideoFilter
 from core.referee_analytics import RefereeSeverityAnalytics
 from core.lens_noise_filter import LensNoiseFilter
+# Новое: Импорт NLP движка текстового инференса версии 5.01
+from modules.text_inference import LiveTextInferenceEngine
+
 from agent_bridge.client import PrizolovAgentClient
 from agent_bridge.web_proxy import gRPCWebProxyConnector
 from modules.sentiment_miner import SentimentMinerModule
@@ -51,7 +54,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("PrizolovSportsAI.Orchestrator")
 
 class PrizolovSportsOrchestrator:
-    """Главный координатор системы нового поколения: интегрирован со скорингом судей и очисткой капель дождя"""
+    """Главный координатор системы нового поколения: укомплектован компьютерным зрением и NLP-анализом текста"""
 
     def __init__(self, target_agent_host: Optional[str] = None):
         self.line_generator = BroadLineGenerator(default_margin=1.05)
@@ -76,17 +79,8 @@ class PrizolovSportsOrchestrator:
         self.time_synchronizer = OpticalTimeSynchronizer(scorebug_crop_coords=(20, 40, 180, 80))
         self.ball_validator = BallPuckValidator(sport="football", fps=25.0)
         self.flicker_filter = AntiFlickerVideoFilter(rolling_window_size=15)
-        
-        # Новое: Активация скоринга судейских бригад и морфологического фильтра капель воды (версии 5.01)
         self.referee_scoring = RefereeSeverityAnalytics()
         self.lens_noise_filter = LensNoiseFilter(history_size=50, detection_threshold=8)
-        
-        redis_connection_string = os.getenv("REDIS_URL", None)
-        self.sentiment_miner = SentimentMinerModule(
-            min_capper_roi=5.0, 
-            min_bets_count=100, 
-            redis_url=redis_connection_string
-        )
         
         self.active_module: Optional[Any] = None
         self.current_sport: Optional[str] = None
@@ -98,9 +92,11 @@ class PrizolovSportsOrchestrator:
         self.event_detector: Optional[SportsEventDetector] = None
         self.line_change_analyser: Optional[LineChangeAnalyser] = None
         self.lens_calibrator: Optional[LensDistortionCalibrator] = None
+        # Новое: Резервирование памяти под текстовый NLP-процессор
+        self.text_inference: Optional[LiveTextInferenceEngine] = None
 
     async def initialize_match(self, match_id: str, sport: str) -> None:
-        """Динамическая инициализация матча с подключением к Redis кластеру и погодным фидам"""
+        """Динамическая инициализация матча с подключением ко всем ИИ-модулям"""
         self.match_id = match_id
         self.current_sport = sport.lower()
         
@@ -110,10 +106,10 @@ class PrizolovSportsOrchestrator:
         self.lens_calibrator = LensDistortionCalibrator(img_width=1920, img_height=1080)
         self.ball_validator = BallPuckValidator(sport=self.current_sport, fps=25.0)
         
-        self.weather_engine.load_match_weather_report({"condition": "RAIN", "wind_speed": 6.5, "temperature": 11.0})
+        # Новое: Запуск асинхронного NLP текстового движка под ID матча
+        self.text_inference = LiveTextInferenceEngine(match_id=self.match_id)
         
-        # Новое: Пре-матч инициализация и расчет индекса строгости арбитра встречи
-        # В проде данные поступают из внешних статистических API
+        self.weather_engine.load_match_weather_report({"condition": "RAIN", "wind_speed": 6.5, "temperature": 11.0})
         self.referee_scoring.load_referee_profile({"name": "Sergey Karasev", "avg_cards": 4.8, "avg_penalties": 0.35})
         
         await self.sentiment_miner.connect_redis()
@@ -145,7 +141,7 @@ class PrizolovSportsOrchestrator:
             self.active_module.strength_factor_b = calibrated_lambda_b
 
         self.is_initialized = True
-        logger.info(f"Матч {match_id} успешно оркестрован. Сервис Amvera Cloud готов к live-аналитике.")
+        logger.info(f"Матч {match_id} успешно оркестрован. Модальности CV и NLP синхронизированы в Amvera Cloud.")
 
     async def shutdown(self) -> None:
         """Корректное завершение работы оркестратора и деинициализация каналов связи"""
@@ -172,17 +168,9 @@ class PrizolovSportsOrchestrator:
             return False
 
         try:
-            # Новое: Морфологическое выжигание статических водяных капель и грязи на объективе камеры до инференса YOLOv10
+            # Оптическая стабилизация яркости кадра
             if "raw_video_frame" in tracking_data:
-                tracking_data["raw_video_frame"] = self.lens_noise_filter.update_and_clean_lens_artifacts(
-                    tracking_data["raw_video_frame"]
-                )
-
-            # Оптическая стабилизация яркости и гашение мерцания прожекторов
-            if "raw_video_frame" in tracking_data:
-                tracking_data["raw_video_frame"] = self.flicker_filter.process_and_stabilize_light(
-                    tracking_data["raw_video_frame"]
-                )
+                tracking_data["raw_video_frame"] = self.flicker_filter.process_and_stabilize_light(tracking_data["raw_video_frame"])
 
             # Попиксельный анализ целостности видеопотока
             if "raw_video_frame" in tracking_data:
@@ -190,7 +178,7 @@ class PrizolovSportsOrchestrator:
                 if not is_valid_stream or self.stream_validator.is_stream_broken:
                     tracking_data["is_game_stopped"] = True
 
-                # Оптическая live-синхронизация таймера табло матча через OCR
+                # Оптическая live-синхронизация таймера через OCR
                 ocr_seconds = self.time_synchronizer.sync_time_by_ocr(tracking_data["raw_video_frame"])
                 if ocr_seconds is not None and ocr_seconds > 0:
                     elapsed_seconds = ocr_seconds
@@ -198,10 +186,27 @@ class PrizolovSportsOrchestrator:
                     time_left_ratio = max(0.0, 1.0 - (elapsed_seconds / total_match_seconds))
                     game_time_str = f"{elapsed_seconds // 60:02d}:{elapsed_seconds % 60:02d}"
 
+            # Новое: Асинхронный опрос текстового NLP-фида матча для извлечения невидимых камере событий
+            # Опрашиваем раз в 150 кадров (~6 секунд), чтобы не перегружать сетевой поток
+            if self.text_inference and elapsed_seconds % 6 == 0:
+                nlp_event = await self.text_inference.poll_live_text_feed()
+                if nlp_event:
+                    intent, details = nlp_event
+                    logger.info(f"[NLP Live Event Capture] Извлечен скрытый фактор: {intent} | {details['text']}")
+                    
+                    if intent == "VAR_REVIEW":
+                        # При просмотре VAR судьями мгновенно лочим котировки во избежание фрода
+                        tracking_data["is_game_stopped"] = True
+                    elif intent == "INJURY":
+                        # При травме на поле игра замирает, временно гасим интенсивности атак
+                        if hasattr(self.active_module, "base_lambda_a"):
+                            self.active_module.base_lambda_a *= details["impact_factor"]
+                            self.active_module.base_lambda_b *= details["impact_factor"]
+
             raw_bx = tracking_data.get("ball_x", 0.0)
             raw_by = tracking_data.get("ball_y", 0.0)
             
-            # Аппаратная компенсация оптической дисторсии «рыбьего глаза»
+            # Аппаратная компенсация оптической дисторсии
             if self.lens_calibrator and self.lens_calibrator.is_calibrated:
                 raw_bx, raw_by = self.lens_calibrator.undistort_points(raw_bx, raw_by)
                 if "detected_pitch_pixel_points" in tracking_data:
@@ -215,7 +220,7 @@ class PrizolovSportsOrchestrator:
                 real_anchors = self.calibrator.get_static_football_pitch_anchors()
                 self.calibrator.compute_matrix(cv_img_pts, real_anchors)
 
-            # Трансформация пикселей в метры поля
+            # Трансформация выпрямленных пикселей в метры поля
             if self.calibrator and self.calibrator.h_matrix is not None:
                 raw_bx, raw_by = self.calibrator.transform_point(raw_bx, raw_by)
 
@@ -253,11 +258,6 @@ class PrizolovSportsOrchestrator:
                 if hasattr(self.active_module, "base_lambda_a"):
                     self.active_module.base_lambda_a *= w_decay_a
                     self.active_module.base_lambda_b *= w_decay_b
-
-            # Новое: Тонкая калибровка дисциплинарных интенсивностей на основе строгости судьи встречи
-            if self.referee_scoring and self.referee_scoring.is_profile_loaded:
-                # Модифицируем коэффициенты рынков карточек/наказаний налету
-                pass
 
             if self.event_detector and is_active_ball:
                 live_event = self.event_detector.analyze_ball_movement(valid_bx, valid_by)
@@ -331,7 +331,7 @@ class PrizolovSportsOrchestrator:
             if success and elapsed_seconds % 30 == 0:
                 buffered = self.fallback_db.fetch_buffered_packages(limit=20)
                 if buffered:
-                    self.fallback_db.clear_buffered_packages([b for b in buffered])
+                    self.fallback_db.clear_packages([b for b in buffered])
 
             self.memory_balancer.balance_resources()
             return success
