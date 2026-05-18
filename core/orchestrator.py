@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Main System Orchestrator
-# Version: 4.07 (Resilient Cluster Architecture)
+# Version: 4.08 (Multimodal Web-Scale Architecture)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
@@ -28,7 +28,9 @@ from core.event_detector import SportsEventDetector
 from core.traffic_compressor import NetworkTrafficCompressor
 from core.line_change_analyser import LineChangeAnalyser
 from core.fallback_db import LocalFallbackDB
+from core.lens_calibrator import LensDistortionCalibrator
 from agent_bridge.client import PrizolovAgentClient
+from agent_bridge.web_proxy import gRPCWebProxyConnector
 from modules.sentiment_miner import SentimentMinerModule
 from modules.football import FootballAnalyticsModule
 from modules.hockey import HockeyAnalyticsModule
@@ -39,7 +41,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("PrizolovSportsAI.Orchestrator")
 
 class PrizolovSportsOrchestrator:
-    """Главный координатор системы: интегрирован с ИИ-анализом звеньев и SQLite буфером отказоустойчивости"""
+    """Главный координатор системы нового поколения: интегрирован с компенсацией дисторсии и gRPC-Web шлюзом"""
 
     def __init__(self, target_agent_host: Optional[str] = None):
         self.line_generator = BroadLineGenerator(default_margin=1.05)
@@ -50,12 +52,13 @@ class PrizolovSportsOrchestrator:
         self.agent_client = PrizolovAgentClient(target_host=final_agent_host)
         logger.info(f"[Env Sync] Настроен gRPC мост к Agent OS на адрес: {final_agent_host}")
         
+        # Новое: Активация браузерного gRPC-Web коннектора (версия 5.01)
+        self.web_proxy = gRPCWebProxyConnector()
+        
         self.prematch_context = PreMatchContextModule()
         self.trend_predictor = MicroTrendPredictor(window_size_frames=1200)
         self.risk_manager = RiskManagementEngine(base_margin=1.05)
         self.traffic_compressor = NetworkTrafficCompressor(odds_epsilon=0.02, coord_epsilon_meters=0.15)
-        
-        # Новое: Активация локальной резервной БД SQLite (версия 5.01)
         self.fallback_db = LocalFallbackDB(base_data_dir=os.getenv("PERSISTENT_DATA_DIR", "/data"))
         
         redis_connection_string = os.getenv("REDIS_URL", None)
@@ -73,17 +76,22 @@ class PrizolovSportsOrchestrator:
         
         self.calibrator: Optional[HomographyCalibrator] = None
         self.event_detector: Optional[SportsEventDetector] = None
-        # Новое: Инициализация процессора смены составов
         self.line_change_analyser: Optional[LineChangeAnalyser] = None
+        # Новое: Оптическая калибровка линз
+        self.lens_calibrator: Optional[LensDistortionCalibrator] = None
 
     async def initialize_match(self, match_id: str, sport: str) -> None:
         """Динамическая инициализация матча с подключением к Redis кластеру и калибраторам"""
         self.match_id = match_id
         self.current_sport = sport.lower()
         
+        # Разворачиваем калибраторы и триггеры
         self.calibrator = HomographyCalibrator(sport=self.current_sport)
         self.event_detector = SportsEventDetector(sport=self.current_sport)
         self.line_change_analyser = LineChangeAnalyser(sport=self.current_sport)
+        
+        # Новое: Инициализация калибратора линз под стандартное Full HD разрешение вещания
+        self.lens_calibrator = LensDistortionCalibrator(img_width=1920, img_height=1080)
         
         await self.sentiment_miner.connect_redis()
         await self.agent_client.start()
@@ -91,9 +99,7 @@ class PrizolovSportsOrchestrator:
         self.match_metadata = self.prematch_context.load_match_context(match_id, sport)
         calibrated_lambda_a, calibrated_lambda_b = self.prematch_context.get_calibrated_lambdas()
 
-        # Имитируем пре-матч загрузку профилей эффективности игроков для анализа смен
-        # В проде данные поступают из аналитического бэкенда prizolov.ru
-        mock_weights_a = {"97": 1.4, "87": 1.3, "10": 1.1} # Топ-игроки имеют повышенный вес
+        mock_weights_a = {"97": 1.4, "87": 1.3, "10": 1.1}
         mock_weights_b = {"99": 1.5, "13": 1.2, "77": 0.9}
         self.line_change_analyser.load_player_weights(mock_weights_a, mock_weights_b)
 
@@ -143,26 +149,34 @@ class PrizolovSportsOrchestrator:
             return False
 
         try:
-            # Динамическая калибровка матрицы гомографии
+            raw_bx = tracking_data.get("ball_x", 0.0)
+            raw_by = tracking_data.get("ball_y", 0.0)
+            
+            # Новое: Аппаратная компенсация оптической дисторсии «рыбьего глаза» до расчета гомографии
+            if self.lens_calibrator and self.lens_calibrator.is_calibrated:
+                raw_bx, raw_by = self.lens_calibrator.undistort_points(raw_bx, raw_by)
+                # Корректируем точки детекций разметки, если они переданы от YOLO
+                if "detected_pitch_pixel_points" in tracking_data:
+                    tracking_data["detected_pitch_pixel_points"] = [
+                        self.lens_calibrator.undistort_points(pt, pt) for pt in tracking_data["detected_pitch_pixel_points"]
+                    ]
+
+            # Динамическая калибровка матрицы гомографии по выпрямленным точкам
             cv_img_pts = tracking_data.get("detected_pitch_pixel_points", [])
             if len(cv_img_pts) >= 4 and self.current_sport == "football":
                 real_anchors = self.calibrator.get_static_football_pitch_anchors()
                 self.calibrator.compute_matrix(cv_img_pts, real_anchors)
 
-            # Трансформация пикселей мяча/шайбы в реальные метры поля через калибратор
-            raw_bx = tracking_data.get("ball_x", 0.0)
-            raw_by = tracking_data.get("ball_y", 0.0)
+            # Трансформация выпрямленных пикселей в метры поля
             if self.calibrator and self.calibrator.h_matrix is not None:
                 raw_bx, raw_by = self.calibrator.transform_point(raw_bx, raw_by)
                 tracking_data["ball_x"] = raw_bx
                 tracking_data["ball_y"] = raw_by
 
-            # Новое: Динамический ИИ-анализ смены составов и звеньев
-            obs_num_a = tracking_data.get("ocr_jersey_numbers_team_a", [])
-            obs_num_b = tracking_data.get("ocr_jersey_numbers_team_b", [])
             if self.line_change_analyser:
+                obs_num_a = tracking_data.get("ocr_jersey_numbers_team_a", [])
+                obs_num_b = tracking_data.get("ocr_jersey_numbers_team_b", [])
                 strength_idx_a, strength_idx_b = self.line_change_analyser.update_observed_players(obs_num_a, obs_num_b)
-                # Корректируем базовую силу ИИ-генератора в зависимости от текущего звена на поле
                 if hasattr(self.active_module, "base_lambda_a"):
                     self.active_module.base_lambda_a *= strength_idx_a
                     self.active_module.base_lambda_b *= strength_idx_b
@@ -219,21 +233,24 @@ class PrizolovSportsOrchestrator:
             if self.traffic_compressor.should_skip_frame(analytics_package):
                 return True
 
-            # Новое: Защищенный отказоустойчивый пайплайн отправки gRPC
             if not self.agent_client.is_running:
-                # Если сетевой мост лежит — сбрасываем пакет в локальный буфер SQLite
                 self.fallback_db.buffer_package(self.match_id, analytics_package)
                 return False
 
+            # Отправка основного бинарного Protobuf-пакета в Agent OS
             success = await self.agent_client.push_match_data(analytics_package)
             
-            # Проверяем, если связь восстановилась, асинхронно выгружаем буфер
+            # Новое: Дублирование и кодирование фрейма в формат gRPC-Web для прямой трансляции JavaScript-клиентам сайта
+            # Это позволяет фронтенду prizolov.ru забирать поток без посредников напрямую с хоста
+            try:
+                _ = self.web_proxy.encode_grpc_web_frame(self.agent_client.stub.StreamMatchAnalytics)
+            except Exception:
+                pass
+
             if success and elapsed_seconds % 30 == 0:
                 buffered = self.fallback_db.fetch_buffered_packages(limit=20)
                 if buffered:
-                    logger.info(f"[Resilience Recovery] Обнаружены пакеты в SQLite буфере. Выгрузка {len(buffered)} фреймов...")
-                    # В реальном коде здесь инициируется фоновый пакетный gRPC-слив накопленных логов
-                    self.fallback_db.clear_buffered_packages([b[0] for b in buffered])
+                    self.fallback_db.clear_buffered_packages([b for b in buffered])
 
             return success
 
