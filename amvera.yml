@@ -1,13 +1,17 @@
 # ============================================
 # Prizolov Sports AI - Amvera Infrastructure Config
-# Version: 5.08 (Docker Headless Deployment)
+# Version: 5.09 (Strict Form Handshake)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
-# Target: Production Amvera Cloud Strict Docker Validation
+# Target: Production Amvera Cloud Absolute Pass
 # ============================================
 
 meta:
   environment: "docker"
+  toolchain: "pip"
+
+build:
+  requirements: "requirements.txt"
 
 run:
   persistence:
