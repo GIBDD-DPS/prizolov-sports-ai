@@ -1,9 +1,9 @@
 # ============================================
 # Prizolov Sports AI - Production Dockerfile
-# Version: 5.01 (Initial Infrastructure Release)
+# Version: 5.02 (Headless OS Patch)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
-# Target: Optimized Multi-Stage Container Build
+# Target: Optimized Multi-Stage Container Build with OpenCV Fix
 # ============================================
 
 # Шаг 1: Сборка и подготовка зависимостей
@@ -26,10 +26,12 @@ FROM python:3.10-slim AS runner
 
 WORKDIR /app
 
-# Устанавливаем системные библиотеки, необходимые для работы OpenCV Headless
+# Исправлено: Добавлен принудительный апдейт и установка графических библиотек OpenGL/Mesa 
+# для полной ликвидации ошибки ImportError: libGL.so.1 в Amvera Cloud
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
     libgl1-mesa-glx \
+    libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Копируем установленные пакеты из предыдущего шага сборщика
