@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Core Broad Line Generator
-# Version: 3.05 (Interval Markets Analytics Core)
+# Version: 3.06 (Period & Half Analytics Core)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
@@ -10,7 +10,7 @@ import math
 from typing import Dict, Any, List
 
 class BroadLineGenerator:
-    """Математический движок для расчета динамических коэффициентов спортивной линии (Исходы, Тоталы, Форы, ИТ, Комбо, Интервалы)"""
+    """Математический движок для расчета динамических коэффициентов спортивной линии (Исходы, Тоталы, Форы, ИТ, Комбо, Интервалы, Периоды)"""
 
     def __init__(self, default_margin: float = 1.05):
         """
@@ -36,12 +36,11 @@ class BroadLineGenerator:
                                current_score_b: int,
                                max_goals_to_simulate: int = 15) -> Dict[str, List[Dict[str, Any]]]:
         """
-        Генерирует базовые, комбинированные и интервальные рынки на основе Пуассоновского распределения.
+        Генерирует базовые, комбинированные, интервальные и попериодные рынки на основе Пуассоновского распределения.
         """
         rem_lambda_a = max(lambda_team_a * time_left_ratio, 0.01)
         rem_lambda_b = max(lambda_team_b * time_left_ratio, 0.01)
 
-        # Матрица вероятностей точных счетов оставшегося времени
         prob_matrix = {}
         for i in range(max_goals_to_simulate):
             p_a = self._poisson_probability(i, rem_lambda_a)
@@ -69,7 +68,6 @@ class BroadLineGenerator:
             total_goals = final_a + final_b
             score_diff = final_a - final_b
 
-            # 1Х2
             if final_a > final_b:
                 p_win_a += p
                 if total_goals > 2.5: p_w1_and_over_25 += p
@@ -81,7 +79,6 @@ class BroadLineGenerator:
                 if total_goals > 2.5: p_w2_and_over_25 += p
                 else: p_w2_and_under_25 += p
 
-            # Тоталы, Форы и Индивидуальные тоталы
             total_probs[total_goals] = total_probs.get(total_goals, 0.0) + p
             diff_probs[score_diff] = diff_probs.get(score_diff, 0.0) + p
             it_probs_a[final_a] = it_probs_a.get(final_a, 0.0) + p
@@ -97,7 +94,6 @@ class BroadLineGenerator:
             {"market_name": "2", "odds": round((1.0 / p_win_b) * self.margin, 2), "is_suspended": False}
         ]
 
-        # Формирование линейки Тоталов
         totals = []
         current_total_base = current_score_a + current_score_b
         for t_offset in [0.5, 1.5, 2.5]:
@@ -110,7 +106,6 @@ class BroadLineGenerator:
             totals.append({"market_name": f"TO {target_total}", "odds": round((1.0 / p_over) * self.margin, 2), "is_suspended": False})
             totals.append({"market_name": f"TU {target_total}", "odds": round((1.0 / p_under) * self.margin, 2), "is_suspended": False})
 
-        # Формирование линейки Фор
         handicaps = []
         current_diff_base = current_score_a - current_score_b
         for h_offset in [-1.5, -0.5, 0.5, 1.5]:
@@ -126,7 +121,6 @@ class BroadLineGenerator:
             handicaps.append({"market_name": f"H1 ({sign_a})", "odds": round((1.0 / p_handicap_a) * self.margin, 2), "is_suspended": False})
             handicaps.append({"market_name": f"H2 ({sign_b})", "odds": round((1.0 / p_handicap_b) * self.margin, 2), "is_suspended": False})
 
-        # Формирование линейки Индивидуальных тоталов
         for t_offset in [0.5, 1.5]:
             target_it_a = current_score_a + t_offset
             p_it_under_a = sum(p for goals, p in it_probs_a.items() if goals < target_it_a)
@@ -139,12 +133,11 @@ class BroadLineGenerator:
             target_it_b = current_score_b + t_offset
             p_it_under_b = sum(p for goals, p in it_probs_b.items() if goals < target_it_b)
             p_it_under_b = max(min(p_it_under_b, 0.999), 0.001)
-            p_it_over_b = max(1.0 - p_it_over_b, 0.001)
+            p_it_over_b = max(1.0 - p_it_under_b, 0.001)
             
             totals.append({"market_name": f"IT2 O {target_it_b}", "odds": round((1.0 / p_it_over_b) * self.margin, 2), "is_suspended": False})
             totals.append({"market_name": f"IT2 U {target_it_b}", "odds": round((1.0 / p_it_under_b) * self.margin, 2), "is_suspended": False})
 
-        # Формирование комбинированных рынков
         p_w1_and_over_25 = max(p_w1_and_over_25, 0.001)
         p_w1_and_under_25 = max(p_w1_and_under_25, 0.001)
         p_w2_and_over_25 = max(p_w2_and_over_25, 0.001)
@@ -157,30 +150,45 @@ class BroadLineGenerator:
             {"market_name": "2 + TU 2.5", "odds": round((1.0 / p_w2_and_under_25) * self.margin, 2), "is_suspended": False}
         ]
 
-        # Новое: Расчет Поминутных Интервальных рынков (например, гол в следующие 10 / 15 минут)
-        # 10 минут — это примерно 1/9 часть футбольного матча (ratio_10 = 0.11)
-        interval_ratio_15 = 0.166 # 15 минут от 90 минут матча
-        
-        # Суммарная текущая интенсивность гола в матче для обеих команд
+        interval_ratio_15 = 0.166
         combined_lambda = rem_lambda_a + rem_lambda_b
-        # Масштабируем интенсивность на 15-минутный отрезок времени
         interval_lambda = combined_lambda * (interval_ratio_15 / max(time_left_ratio, 0.01))
         
-        # Вероятность того, что в следующие 15 минут будет забит ХОТЯ БЫ один гол (1 - вероятность 0 голов)
         p_no_goals_in_interval = self._poisson_probability(0, interval_lambda)
         p_goal_in_next_15_min = max(min(1.0 - p_no_goals_in_interval, 0.999), 0.001)
         p_no_goal_in_next_15_min = 1.0 - p_goal_in_next_15_min
 
-        # Для интервальных экспресс-рынков закладываем повышенную маржу (+4%), страхуя риски дисперсии
         interval_margin = self.margin + 0.04
         interval_markets = [
             {"market_name": "Goal in next 15 min - Yes", "odds": round((1.0 / p_goal_in_next_15_min) * interval_margin, 2), "is_suspended": False},
             {"market_name": "Goal in next 15 min - No", "odds": round((1.0 / p_no_goal_in_next_15_min) * interval_margin, 2), "is_suspended": False}
         ]
 
+        # Новое: Расчет автономной линии на Следующий Период / Тайм (Чистый исход отрезка 0:0)
+        # Интенсивность периода (например, 20 минут в хоккее — это 1/3 от 60 минут базовой силы)
+        period_ratio = 0.333 if max_goals_to_simulate == 80 else 0.50  # Хоккей (период) или Футбол (тайм)
+        p_lambda_a = lambda_team_a * period_ratio
+        p_lambda_b = lambda_team_b * period_ratio
+
+        p_p_win_a, p_p_draw, p_p_win_b = 0.0, 0.0, 0.0
+        for i in range(8):
+            p_a = self._poisson_probability(i, p_lambda_a)
+            for j in range(8):
+                p_b = self._poisson_probability(j, p_lambda_b)
+                p_cell = p_a * p_b
+                if i > j: p_p_win_a += p_cell
+                elif i == j: p_p_draw += p_cell
+                else: p_p_win_b += p_cell
+
+        period_markets = [
+            {"market_name": "Next Period Win 1", "odds": round((1.0 / max(p_p_win_a, 0.001)) * self.margin, 2), "is_suspended": False},
+            {"market_name": "Next Period Draw", "odds": round((1.0 / max(p_p_draw, 0.001)) * self.margin, 2), "is_suspended": False},
+            {"market_name": "Next Period Win 2", "odds": round((1.0 / max(p_p_win_b, 0.001)) * self.margin, 2), "is_suspended": False}
+        ]
+
         return {
             "main_outcomes": main_outcomes,
-            "totals": totals + combo_markets + interval_markets, # Добавляем интервалы в общую структуру тоталов матча
+            "totals": totals + combo_markets + interval_markets + period_markets,
             "handicaps": handicaps
         }
 
