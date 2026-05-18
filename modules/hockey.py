@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Hockey Analytics Module
-# Version: 3.03 (Kalman Matrix Parenthesis Fix)
+# Version: 3.04 (Strict Flat-Cloud Compilation)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
@@ -33,18 +33,9 @@ class HockeyAnalyticsModule:
         self.kf = KalmanFilter(dim_x=4, dim_z=2)
         self.kf.x = np.array([0.0, 0.0, 0.0, 0.0])
         
-        # Исправлено: Полные, синтаксически корректные матрицы со всеми скобками
-        self.kf.F = np.array([
-            [1.0, 0.0,  dt, 0.0],
-            [0.0, 1.0, 0.0,  dt],
-            [0.0, 0.0, 1.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0]
-        ])
-        
-        self.kf.H = np.array([
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0]
-        ])
+        # Настройка двумерных массивов (матриц) без переносов строк для защиты от парсера
+        self.kf.F = np.array([[1.0, 0.0, dt, 0.0], [0.0, 1.0, 0.0, dt], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]])
+        self.kf.H = np.array([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]])
         
         self.kf.P *= 10.0
         self.kf.R *= 5.0
@@ -60,7 +51,7 @@ class HockeyAnalyticsModule:
         self.kf.predict()
         if is_detected: 
             self.kf.update(np.array([detected_x, detected_y]))
-        return float(self.kf.x[0]), float(self.kf.x[1]), float(self.kf.x[2]), float(self.kf.x[3])
+        return float(self.kf.x), float(self.kf.x), float(self.kf.x), float(self.kf.x)
 
     def process_frame_data(self, tracking_data: Dict[str, Any], game_time_str: str, time_left_ratio: float) -> Dict[str, Any]:
         puck_detected = tracking_data.get("puck_visible", False)
