@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Core Broad Line Generator
-# Version: 3.02 (Handicap Analytics Core)
+# Version: 3.03 (Team Total Analytics Core)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
@@ -10,7 +10,7 @@ import math
 from typing import Dict, Any, List
 
 class BroadLineGenerator:
-    """Математический движок для расчета динамических коэффициентов спортивной линии (Исходы, Тоталы, Форы)"""
+    """Математический движок для расчета динамических коэффициентов спортивной линии (Исходы, Тоталы, Форы, ИТ)"""
 
     def __init__(self, default_margin: float = 1.05):
         """
@@ -36,7 +36,7 @@ class BroadLineGenerator:
                                current_score_b: int,
                                max_goals_to_simulate: int = 15) -> Dict[str, List[Dict[str, Any]]]:
         """
-        Генерирует базовые рынки (1Х2, Тоталы, Форы) на основе Пуассоновского распределения.
+        Генерирует базовые рынки (1Х2, Тоталы, Форы, ИТ) на основе Пуассоновского распределения.
         Подходит для футбола и хоккея.
         """
         rem_lambda_a = max(lambda_team_a * time_left_ratio, 0.01)
@@ -55,9 +55,11 @@ class BroadLineGenerator:
         p_win_b = 0.0
         
         total_probs = {}
-        # Карта вероятностей разности счетов для точного расчета Фор (Handicaps)
-        # Ключ: (финальный_счет_А - финальный_счет_Б)
         diff_probs = {}
+        
+        # Карты индивидуальных вероятностей для расчета Индивидуальных Тоталов (Team Totals)
+        it_probs_a = {}
+        it_probs_b = {}
 
         for (rem_a, rem_b), p in prob_matrix.items():
             final_a = current_score_a + rem_a
@@ -73,9 +75,11 @@ class BroadLineGenerator:
             else:
                 p_win_b += p
 
-            # Тоталы и Форы
+            # Тоталы, Форы и Индивидуальные тоталы
             total_probs[total_goals] = total_probs.get(total_goals, 0.0) + p
             diff_probs[score_diff] = diff_probs.get(score_diff, 0.0) + p
+            it_probs_a[final_a] = it_probs_a.get(final_a, 0.0) + p
+            it_probs_b[final_b] = it_probs_b.get(final_b, 0.0) + p
 
         p_win_a = max(p_win_a, 0.001)
         p_draw = max(p_draw, 0.001)
@@ -100,26 +104,41 @@ class BroadLineGenerator:
             totals.append({"market_name": f"TO {target_total}", "odds": round((1.0 / p_over) * self.margin, 2), "is_suspended": False})
             totals.append({"market_name": f"TU {target_total}", "odds": round((1.0 / p_under) * self.margin, 2), "is_suspended": False})
 
-        # Новое: Формирование линейки Фор (Гандикапов) на основе матрицы разностей счетов
+        # Формирование линейки Фор
         handicaps = []
         current_diff_base = current_score_a - current_score_b
-        
-        # Генерируем 3 базовых коридора форы вокруг текущей разницы счетов
         for h_offset in [-1.5, -0.5, 0.5, 1.5]:
             target_handicap = current_diff_base + h_offset
-            
-            # Вероятность победы Команды А с учетом форы: (final_a - final_b + фора) > 0
             p_handicap_a = sum(p for diff, p in diff_probs.items() if (diff + h_offset) > 0)
             p_handicap_a = max(min(p_handicap_a, 0.999), 0.001)
             p_handicap_b = 1.0 - p_handicap_a
             p_handicap_b = max(min(p_handicap_b, 0.999), 0.001)
 
-            # Форматируем знак форы для вывода на фронтенд
             sign_a = f"+{h_offset}" if h_offset > 0 else str(h_offset)
             sign_b = f"+{-h_offset}" if -h_offset > 0 else str(-h_offset)
 
             handicaps.append({"market_name": f"H1 ({sign_a})", "odds": round((1.0 / p_handicap_a) * self.margin, 2), "is_suspended": False})
             handicaps.append({"market_name": f"H2 ({sign_b})", "odds": round((1.0 / p_handicap_b) * self.margin, 2), "is_suspended": False})
+
+        # Новое: Формирование линейки Индивидуальных тоталов для футбола и хоккея (ИТМ/ИТБ)
+        for t_offset in [0.5, 1.5]:
+            # Команда А
+            target_it_a = current_score_a + t_offset
+            p_it_under_a = sum(p for goals, p in it_probs_a.items() if goals < target_it_a)
+            p_it_under_a = max(min(p_it_under_a, 0.999), 0.001)
+            p_it_over_a = 1.0 - p_it_under_a
+            
+            totals.append({"market_name": f"IT1 O {target_it_a}", "odds": round((1.0 / p_it_over_a) * self.margin, 2), "is_suspended": False})
+            totals.append({"market_name": f"IT1 U {target_it_a}", "odds": round((1.0 / p_it_under_a) * self.margin, 2), "is_suspended": False})
+            
+            # Команда Б
+            target_it_b = current_score_b + t_offset
+            p_it_under_b = sum(p for goals, p in it_probs_b.items() if goals < target_it_b)
+            p_it_under_b = max(min(p_it_under_b, 0.999), 0.001)
+            p_it_over_b = 1.0 - p_it_under_b
+            
+            totals.append({"market_name": f"IT2 O {target_it_b}", "odds": round((1.0 / p_it_over_b) * self.margin, 2), "is_suspended": False})
+            totals.append({"market_name": f"IT2 U {target_it_b}", "odds": round((1.0 / p_it_under_b) * self.margin, 2), "is_suspended": False})
 
         return {
             "main_outcomes": main_outcomes,
@@ -135,7 +154,7 @@ class BroadLineGenerator:
                                   current_score_a: int, 
                                   current_score_b: int) -> Dict[str, List[Dict[str, Any]]]:
         """
-        Генерирует рынки (1-2, Тоталы, Форы) для высокорезультативных видов спорта (Баскетбол).
+        Генерирует рынки (1-2, Тоталы, Форы, ИТ) для высокорезультативных видов спорта (Баскетбол).
         Использует нормальную аппроксимацию.
         """
         possessions_left = pace * time_left_ratio
@@ -144,7 +163,10 @@ class BroadLineGenerator:
 
         proj_final_a = current_score_a + exp_rem_a
         proj_final_b = current_score_b + exp_rem_b
+        
+        # Дисперсия для полного матча, масштабируемая по времени
         variance = 12.0 
+        ind_variance = variance / math.sqrt(2) # Дисперсия индивидуального тотала
         
         diff = proj_final_a - proj_final_b
         p_win_a = 0.5 * (1 + math.erf(diff / (variance * math.sqrt(2))))
@@ -170,14 +192,11 @@ class BroadLineGenerator:
             totals.append({"market_name": f"TO {target_total}", "odds": round((1.0 / p_over) * self.margin, 2), "is_suspended": False})
             totals.append({"market_name": f"TU {target_total}", "odds": round((1.0 / p_under) * self.margin, 2), "is_suspended": False})
 
-        # Новое: Расчет линейки Фор для баскетбола через интеграл нормального распределения
+        # Расчет линейки Фор
         handicaps = []
-        # Вычисляем базовую ожидаемую фору
         base_handicap = round(-diff * 2) / 2
-        
         for offset in [-3.5, 0.0, 3.5]:
             h_val = base_handicap + offset
-            # Сдвигаем математическое ожидание разности на значение форы
             z_score_h = (diff + h_val) / variance
             p_h1 = 0.5 * (1 + math.erf(z_score_h / math.sqrt(2)))
             p_h1 = max(min(p_h1, 0.999), 0.001)
@@ -188,6 +207,28 @@ class BroadLineGenerator:
 
             handicaps.append({"market_name": f"H1 ({sign_h1})", "odds": round((1.0 / p_h1) * self.margin, 2), "is_suspended": False})
             handicaps.append({"market_name": f"H2 ({sign_h2})", "odds": round((1.0 / p_h2) * self.margin, 2), "is_suspended": False})
+
+        # Новое: Расчет Индивидуальных Тоталов для баскетбола
+        for offset in [-2.5, 2.5]:
+            # Команда А
+            base_it_a = round(proj_final_a * 2) / 2 + offset
+            z_score_it_a = (base_it_a - proj_final_a) / ind_variance
+            p_under_it_a = 0.5 * (1 + math.erf(z_score_it_a / math.sqrt(2)))
+            p_under_it_a = max(min(p_under_it_a, 0.999), 0.001)
+            p_over_it_a = 1.0 - p_under_it_a
+            
+            totals.append({"market_name": f"IT1 O {base_it_a}", "odds": round((1.0 / p_over_it_a) * self.margin, 2), "is_suspended": False})
+            totals.append({"market_name": f"IT1 U {base_it_a}", "odds": round((1.0 / p_under_it_a) * self.margin, 2), "is_suspended": False})
+
+            # Команда Б
+            base_it_b = round(proj_final_b * 2) / 2 + offset
+            z_score_it_b = (base_it_b - proj_final_b) / ind_variance
+            p_under_it_b = 0.5 * (1 + math.erf(z_score_it_b / math.sqrt(2)))
+            p_under_it_b = max(min(p_under_it_b, 0.999), 0.001)
+            p_over_it_b = 1.0 - p_under_it_b
+            
+            totals.append({"market_name": f"IT2 O {base_it_b}", "odds": round((1.0 / p_over_it_b) * self.margin, 2), "is_suspended": False})
+            totals.append({"market_name": f"IT2 U {base_it_b}", "odds": round((1.0 / p_under_it_b) * self.margin, 2), "is_suspended": False})
 
         return {
             "main_outcomes": main_outcomes,
