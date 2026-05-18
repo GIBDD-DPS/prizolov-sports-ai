@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org",
+  "title": "PrizolovSportsAI_LiveProductionFeed",
+  "description": "Спецификация высокочастотного live-пакета аналитики и широкой линии для фронтенда prizolov.ru. Версия: 5.01",
+  "type": "object",
+  "required": [
+    "match_id",
+    "sport",
+    "game_time",
+    "timestamp_ms",
+    "ball_state",
+    "metrics",
+    "line_data"
+  ],
+  "properties": {
+    "match_id": {
+      "type": "string",
+      "description": "Уникальный строковый идентификатор матча в системе Prizolov"
+    },
+    "sport": {
+      "type": "string",
+      "enum": ["football", "hockey", "basketball"],
+      "description": "Вид спорта для активации контекстного UI-виджета"
+    },
+    "game_time": {
+      "type": "string",
+      "pattern": "^[0-9]{2,3}:[0-9]{2}$",
+      "description": "Текущее игровое время матча в формате ММ:СС"
+    },
+    "timestamp_ms": {
+      "type": "integer",
+      "description": "Unix-таймштамп генерации пакета на сервере ИИ (для контроля сетевого пинга)"
+    },
+    "ball_state": {
+      "type": "object",
+      "description": "Метрические координаты игрового снаряда для отрисовки 2D-радара на сайте",
+      "required": ["x", "y", "vx", "vy", "last_touch_id"],
+      "properties": {
+        "x": {
+          "type": "number",
+          "description": "Положение снаряда по горизонтали на интерактивной карте поля (в метрах)"
+        },
+        "y": {
+          "type": "number",
+          "description": "Положение снаряда по вертикали на интерактивной карте поля (в метрах)"
+        },
+        "vx": {
+          "type": "number",
+          "description": "Вектор или скорость снаряда по оси X (или высота Z для баскетбола)"
+        },
+        "vy": {
+          "type": "number",
+          "description": "Вектор или скорость снаряда по оси Y"
+        },
+        "last_touch_id": {
+          "type": "integer",
+          "description": "ID игрока, совершившего последнее касание снаряда"
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "description": "Глубокие ИИ-метрики доминирования и эффективности",
+      "required": ["possession_a", "possession_b", "xg_a", "xg_b", "dangerous_attacks_a", "dangerous_attacks_b"],
+      "properties": {
+        "possession_a": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Процент владения мячом/шайбой Команды А за последние 5 минут"
+        },
+        "possession_b": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Процент владения мячом/шайбой Команды Б"
+        },
+        "xg_a": {
+          "type": "number",
+          "description": "Ожидаемые голы (xG) или эффективность бросков (xShot) Команды А"
+        },
+        "xg_b": {
+          "type": "number",
+          "description": "Ожидаемые голы (xG) или эффективность бросков (xShot) Команды Б"
+        },
+        "dangerous_attacks_a": {
+          "type": "integer",
+          "description": "Кумулятивное количество опасных атак Команды А"
+        },
+        "dangerous_attacks_b": {
+          "type": "integer",
+          "description": "Кумулятивное количество опасных атак Команды Б"
+        }
+      }
+    },
+    "line_data": {
+      "type": "object",
+      "description": "Сгенерированная ИИ широкая live-линия с букмекерскими коэффициентами",
+      "required": ["main_outcomes", "totals", "handicaps", "active_specials"],
+      "properties": {
+        "main_outcomes": {
+          "type": "array",
+          "description": "Рынок основных исходов (П1, Х, П2 или П1, П2)",
+          "items": {
+            "$ref": "#/$defs/market_outcome"
+          }
+        },
+        "totals": {
+          "type": "array",
+          "description": "Линейка общих тоталов матча (Больше / Меньше)",
+          "items": {
+            "$ref": "#/$defs/market_outcome"
+          }
+        },
+        "handicaps": {
+          "type": "array",
+          "description": "Линейка фор на матч",
+          "items": {
+            "$ref": "#/$defs/market_outcome"
+          }
+        },
+        "active_specials": {
+          "type": "array",
+          "description": "Статистические рынки (угловые, карточки, броски, фолы)",
+          "items": {
+            "$ref": "#/$defs/market_outcome"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "market_outcome": {
+      "type": "object",
+      "required": ["market_name", "odds", "is_suspended"],
+      "properties": {
+        "market_name": {
+          "type": "string",
+          "description": "Понятное имя исхода, например: 'TO 2.5', 'Handicap 1 (-1.5)', '1'"
+        },
+        "odds": {
+          "type": "number",
+          "description": "Динамический десятичный коэффициент, рассчитанный ИИ (например: 1.85)"
+        },
+        "is_suspended": {
+          "type": "boolean",
+          "description": "Флаг блокировки приема ставок на данный исход (заморозка интерфейса)"
+        }
+      }
+    }
+  }
+}
