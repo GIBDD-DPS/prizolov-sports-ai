@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Amvera Cloud Config
-# Version: 4.06 (Restore Speed Optimization Cache)
+# Version: 4.07 (Force Cache Wipe Spec)
 # Author: Dm.Andreyanov
 # Target: Production deployment at cloud.amvera.ru
 # ============================================
@@ -13,7 +13,8 @@ meta:
 
 build:
   requirementsPath: requirements.txt
-  useCache: true
+  # Полностью отключаем кэш для принудительного обновления всех измененных файлов модулей
+  useCache: false
 
 run:
   scriptName: null
