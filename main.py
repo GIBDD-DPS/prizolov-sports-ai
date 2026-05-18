@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # ============================================
 # Prizolov Sports AI - Main Execution Engine
-# Version: 5.01 (Production CV & Live Streaming)
+# Version: 5.02 (Live Dashboard Activation Core)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
-# Target: Production deployment at prizolov.ru
+# Target: Production deployment at cloud.amvera.ru
 # ============================================
 
 import sys
@@ -54,17 +54,20 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-# Нативные CV-зависимости для Этапа 12
+# Нативные CV-зависимости
 import cv2
 try:
     from ultralytics import YOLO
 except ImportError:
     YOLO = None
 
+# Импорт локальных компонентов архитектуры
 try:
     from core.orchestrator import PrizolovSportsOrchestrator
+    from core.admin_dashboard import start_dashboard_server
 except ModuleNotFoundError:
     from prizolov_sports_ai.core.orchestrator import PrizolovSportsOrchestrator
+    from prizolov_sports_ai.core.admin_dashboard import start_dashboard_server
 
 logging.basicConfig(
     level=logging.INFO,
@@ -86,18 +89,26 @@ def run_yolo_inference(model, frame) -> list:
     """Выполнение инференса YOLOv10 в отдельном синхронном потоке"""
     if model is None:
         return []
-    # Запускаем трекинг объектов с использованием ByteTrack
     results = model.track(frame, persist=True, verbose=False)
     return results
 
-async def main_inference_loop(sport: str, match_id: str, host: str, video_source: str, weights_path: str):
+async def main_inference_loop(sport: str, match_id: str, host: str, video_source: str, weights_path: str, dashboard_port: int):
     global keep_running
     logger.info("=== Инициализация Prizolov Sports AI Engine ===")
     
     orchestrator = PrizolovSportsOrchestrator(target_agent_host=host)
+    
+    # 1. Запуск оркестратора под выбранный матч
     await orchestrator.initialize_match(match_id=match_id, sport=sport)
     
-    # 1. Загрузка весов YOLOv10 (из папки постоянных данных /data)
+    # 2. Исправлено: Активация Live-админ-панели управления в продакшене Amvera Cloud
+    await start_dashboard_server(orchestrator, port=dashboard_port)
+    
+    # Инициализация стартового протокола
+    initial_protocol = {"score_a": 0, "score_b": 0}
+    orchestrator.update_official_protocol(initial_protocol)
+    
+    # 3. Загрузка весов YOLOv10 (из папки постоянных данных /data)
     yolo_model = None
     if YOLO and weights_path and os.path.exists(weights_path):
         logger.info(f"Загрузка весов YOLOv10 для {sport} из: {weights_path}")
@@ -105,11 +116,9 @@ async def main_inference_loop(sport: str, match_id: str, host: str, video_source
     else:
         logger.warning("Модель YOLOv10 не загружена (отсутствуют веса или библиотека). Включен фолбэк-анализатор.")
 
-    # 2. Подключение к источнику трансляции (RTSP / RTMP / MP4)
+    # 4. Подключение к источнику трансляции (RTSP / RTMP / MP4)
     logger.info(f"Открытие live-трансляции: {video_source}")
     cap = cv2.VideoCapture(video_source if not video_source.isdigit() else int(video_source))
-    
-    # Оптимизация буфера для сетевых RTSP потоков (минимизация live-задержки)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
     
     if not cap.isOpened():
@@ -121,7 +130,6 @@ async def main_inference_loop(sport: str, match_id: str, host: str, video_source
     if fps <= 0: fps = 25.0
     frame_delay = 1.0 / fps
     
-    # Пул потоков для изоляции инференса нейросети от захвата кадров
     executor = ThreadPoolExecutor(max_workers=1)
     loop = asyncio.get_running_loop()
     
@@ -146,33 +154,29 @@ async def main_inference_loop(sport: str, match_id: str, host: str, video_source
             time_left_ratio = max(0.0, 1.0 - (elapsed_seconds / total_match_seconds))
             game_time_str = f"{elapsed_seconds // 60:02d}:{elapsed_seconds % 60:02d}"
 
-            # Данные трекинга по умолчанию
             tracking_data = {
                 "ball_x": 0.0, "ball_y": 0.0, "ball_owner_team": None,
                 "recent_dominance_ratio": 0.5, "live_xg_a": 0.0, "live_xg_b": 0.0,
                 "danger_attacks_a": 0, "danger_attacks_b": 0
             }
 
-            # 3. Асинхронный вызов инференса YOLOv10
+            # 5. Асинхронный вызов инференса YOLOv10
             if yolo_model:
                 results = await loop.run_in_executor(executor, run_yolo_inference, yolo_model, frame)
                 
                 if results and len(results) > 0:
-                    boxes = results[0].boxes
-                    # Парсинг детекций: извлекаем координаты игроков и мяча/шайбы
-                    # Классы зависят от разметки модели (например: 0 - мяч, 1 - игрок TeamA, 2 - игрок TeamB)
+                    boxes = results.boxes
                     for box in boxes:
-                        cls_id = int(box.cls[0])
-                        xyxy = box.xyxy[0].tolist() # [x1, y1, x2, y2] в пикселях
+                        cls_id = int(box.cls)
+                        xyxy = box.xyxy.tolist()
                         
-                        if cls_id == 0: # Снаряд (мяч/шайба)
-                            tracking_data["ball_x"] = (xyxy[0] + xyxy[2]) / 2.0
-                            tracking_data["ball_y"] = (xyxy[1] + xyxy[3]) / 2.0
+                        if cls_id == 0:
+                            tracking_data["ball_x"] = (xyxy + xyxy) / 2.0
+                            tracking_data["ball_y"] = (xyxy + xyxy) / 2.0
                             tracking_data["puck_visible"] = True
                             tracking_data["puck_x"] = tracking_data["ball_x"]
                             tracking_data["puck_y"] = tracking_data["ball_y"]
 
-            # Передача обработанных физических координат кадра в аналитическое ядро
             await orchestrator.process_cv_frame(
                 tracking_data=tracking_data,
                 game_time_str=game_time_str,
@@ -180,7 +184,6 @@ async def main_inference_loop(sport: str, match_id: str, host: str, video_source
                 elapsed_seconds=elapsed_seconds
             )
 
-            # Синхронизация по времени, чтобы ИИ шел строго в темпе исходного вещания
             process_duration = time.time() - start_time
             await asyncio.sleep(max(0.0, frame_delay - process_duration))
 
@@ -198,14 +201,16 @@ if __name__ == "__main__":
     parser.add_argument("--match_id", type=str, default="live_match_001", help="ID матча")
     parser.add_argument("--agent_host", type=str, default="localhost:50051", help="Адрес Agent OS")
     parser.add_argument("--video_source", type=str, default="0", help="RTSP/RTMP ссылка, путь к mp4 или ID веб-камеры")
-    # Добавлен аргумент для весов нейросети (папка /data примонтирована персистентно в Amvera)
     parser.add_argument("--weights", type=str, default="/data/yolov10_sports.pt", help="Путь к файлу весов YOLOv10")
+    # Добавлен аргумент конфигурирования порта админ-панели
+    parser.add_argument("--dashboard_port", type=int, default=8080, help="Сетевой порт для Live панели управления скаута")
     
     args = parser.parse_args()
     try:
         asyncio.run(main_inference_loop(
             sport=args.sport, match_id=args.match_id, host=args.agent_host, 
-            video_source=args.video_source, weights_path=args.weights
+            video_source=args.video_source, weights_path=args.weights,
+            dashboard_port=args.dashboard_port
         ))
     except KeyboardInterrupt:
         pass
