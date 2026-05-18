@@ -1,6 +1,6 @@
 # ============================================
-# Prizolov Sports AI - Live Admin Dashboard
-# Version: 5.02 (Secure Middleware Integration)
+# Prizolov Sports AI - Live Admin Dashboard & WS Gateway
+# Version: 5.03 (Live Broadcast Server Active)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
@@ -17,27 +17,24 @@ if str(project_root) not in sys.path:
 
 import asyncio
 import logging
-from typing import Dict, Any, Optional
-from fastapi import FastAPI, HTTPException, Header, Depends
+import json
+from typing import Dict, Any, Optional, List
+from fastapi import FastAPI, HTTPException, Header, Depends, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-# Импорт модуля кибербезопасности версии 5.01
+# Импорт модулей кибербезопасности
 from core.secure_auth import SecureAuthBridge
 
 logger = logging.getLogger("PrizolovSportsAI.Dashboard")
 
-# Инициализация FastAPI приложения
 app = FastAPI(
-    title="Prizolov Sports AI - Control Panel",
-    description="Защищенная Live-панель управления маржой и мониторинга матчей",
-    version="5.02"
+    title="Prizolov Sports AI - Control Panel & WS Gateway",
+    description="Защищенная Live-панель управления и WebSocket-шлюз вещания для prizolov.ru",
+    version="5.03"
 )
 
-# Инициализация криптографического моста авторизации
 auth_bridge = SecureAuthBridge()
-
-# Глобальная ссылка на оркестратор
 orchestrator_instance: Optional[Any] = None
 
 class MarginUpdateModel(BaseModel):
@@ -46,8 +43,49 @@ class MarginUpdateModel(BaseModel):
 class LockLineModel(BaseModel):
     is_suspended: bool
 
+
+# ============================================
+# МЕНЕДЖЕР ВЕЩАНИЯ WEBSOCKET СЕССИЙ (ФРОНТЕНД-ШЛЮЗ)
+# ============================================
+class WebSocketConnectionManager:
+    """Управляет пулом активных WebSocket-клиентов (браузеров пользователей) сайта prizolov.ru"""
+    
+    def __init__(self):
+        # Список живых WebSocket соединений
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        """Регистрирует новое подключение пользователя"""
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        logger.debug(f"[WS Gateway] Новый пользователь подключился к трансляции радара. Всего клиентов: {len(self.active_connections)}")
+
+    def disconnect(self, websocket: WebSocket):
+        """Удаляет сессию при закрытии вкладки пользователем"""
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+            logger.debug(f"[WS Gateway] Клиент разорвал соединение. Осталось: {len(self.active_connections)}")
+
+    async def broadcast_live_package(self, payload: Dict[str, Any]):
+        """Рассылает пакет ИИ-аналитики, линию и SVG-код радара всем пользователям одновременно"""
+        if not self.active_connections:
+            return
+            
+        message_text = json.dumps(payload, ensure_ascii=False)
+        # Формируем асинхронные задачи отправки для каждого браузера
+        tasks = []
+        for connection in self.active_connections:
+            tasks.append(connection.send_text(message_text))
+            
+        # Запускаем параллельную рассылку. Если один клиент тормозит, это не вешает остальных
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+# Инициализируем глобальный менеджер вещания
+ws_manager = WebSocketConnectionManager()
+
+
 async def verify_scout_access(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
-    """Внутреннее middleware для обязательной JWT-верификации прав доступа скаута"""
+    """Middleware для обязательной JWT-верификации прав доступа скаута"""
     if not authorization or not authorization.startswith("Bearer "):
         logger.warning("[Security Infraction] Попытка несанкционированного доступа к API без токена!")
         raise HTTPException(status_code=401, detail="Отсутствует или некорректен токен авторизации (Bearer token required)")
@@ -99,7 +137,6 @@ async def get_dashboard_ui():
         </div>
 
         <script>
-            // Токен должен внедряться в localStorage фронтендом при авторизации на prizolov.ru
             const getAuthToken = () => localStorage.getItem('prizolov_scout_token') || '';
 
             async function setLock(isLocked) {{
@@ -130,6 +167,26 @@ async def get_dashboard_ui():
     </html>
     """
     return html_content
+
+# ============================================
+# WEBSOCKET ЭНДПОИНТ ДЛЯ ПОДКЛЮЧЕНИЯ САЙТА
+# ============================================
+@app.websocket("/api/v1/stream/{match_id}")
+async def websocket_stream_endpoint(websocket: WebSocket, match_id: str):
+    """Высокочастотный WebSocket-шлюз. Отдает коэффициенты и SVG радар напрямую в браузеры"""
+    await ws_manager.connect(websocket)
+    try:
+        # Удерживаем соединение открытым, ожидая ping/сообщения от клиента
+        while True:
+            # Читаем данные от браузера (поддерживаем keep-alive)
+            _ = await websocket.receive_text()
+    except WebSocketDisconnect:
+        # При закрытии вкладки пользователем, менеджер корректно очищает память
+        ws_manager.disconnect(websocket)
+    except Exception as e:
+        logger.error(f"Ошибка в WebSocket сессии клиента: {e}")
+        ws_manager.disconnect(websocket)
+
 
 @app.post("/api/v1/control/margin")
 async def update_live_margin(data: MarginUpdateModel, token_claims: Dict[str, Any] = Depends(verify_scout_access)):
@@ -169,4 +226,4 @@ async def start_dashboard_server(orchestrator, port: int = 8080):
     server = uvicorn.Server(config)
     
     asyncio.create_task(server.serve())
-    logger.info(f"Защищенная административная веб-панель успешно запущена на порту {port}")
+    logger.info(f"Защищенный WebSocket веб-шлюз вещания успешно активирован на порту {port}")
