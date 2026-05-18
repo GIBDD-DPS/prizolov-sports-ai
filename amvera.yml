@@ -1,21 +1,16 @@
 # ============================================
 # Prizolov Sports AI - Amvera Infrastructure Config
-# Version: 5.07 (Strict Validation Framework)
+# Version: 5.08 (Docker Headless Deployment)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
-# Target: Production Amvera Cloud Strict Flat Validation
+# Target: Production Amvera Cloud Strict Docker Validation
 # ============================================
 
 meta:
-  environment: "python"
-  toolchain: "pip"
-
-build:
-  requirements: "requirements.txt"
+  environment: "docker"
 
 run:
   persistence:
     /data: "persistent-volume"
   containerPort: "8080"
   servicePort: "8080"
-  command: "python main.py --sport football --match_id prod_match_001 --agent_host localhost:50051 --dashboard_port 8080"
