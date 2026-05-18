@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Main System Orchestrator
-# Version: 4.04 (Environment Injection Core)
+# Version: 4.05 (Spatial Homography Integration)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
@@ -23,6 +23,7 @@ from core.line_generator import BroadLineGenerator
 from core.prematch_context import PreMatchContextModule
 from core.trend_predictor import MicroTrendPredictor
 from core.risk_manager import RiskManagementEngine
+from core.homography_calibrator import HomographyCalibrator
 from agent_bridge.client import PrizolovAgentClient
 from modules.sentiment_miner import SentimentMinerModule
 from modules.football import FootballAnalyticsModule
@@ -63,11 +64,17 @@ class PrizolovSportsOrchestrator:
         self.match_id: Optional[str] = None
         self.is_initialized: bool = False
         self.match_metadata: Dict[str, Any] = {}
+        
+        # Инициализация калибратора (выделяется память под будущую матрицу)
+        self.calibrator: Optional[HomographyCalibrator] = None
 
     async def initialize_match(self, match_id: str, sport: str) -> None:
-        """Динамическая инициализация матча с подключением к Redis кластеру"""
+        """Динамическая инициализация матча с подключением к Redis кластеру и калибратору"""
         self.match_id = match_id
         self.current_sport = sport.lower()
+        
+        # Активация пространственного калибратора под конкретный вид спорта
+        self.calibrator = HomographyCalibrator(sport=self.current_sport)
         
         # Асинхронно активируем соединение с Managed Redis до старта трансляции
         await self.sentiment_miner.connect_redis()
@@ -127,6 +134,25 @@ class PrizolovSportsOrchestrator:
             return False
 
         try:
+            # Динамическая калибровка матрицы гомографии, если CV-слой обнаружил новые реперные точки на поле
+            cv_img_pts = tracking_data.get("detected_pitch_pixel_points", [])
+            if len(cv_img_pts) >= 4 and self.current_sport == "football":
+                real_anchors = self.calibrator.get_static_football_pitch_anchors()
+                self.calibrator.compute_matrix(cv_img_pts, real_anchors)
+
+            # Трансформация пикселей мяча/шайбы в реальные метры поля через калибратор
+            raw_bx = tracking_data.get("ball_x", 0.0)
+            raw_by = tracking_data.get("ball_y", 0.0)
+            
+            if self.calibrator and self.calibrator.h_matrix is not None:
+                real_bx, real_by = self.calibrator.transform_point(raw_bx, raw_by)
+                # Перезаписываем входные координаты для спортивных процессоров на метрические
+                tracking_data["ball_x"] = real_bx
+                tracking_data["ball_y"] = real_by
+                if "puck_x" in tracking_data:
+                    tracking_data["puck_x"] = real_bx
+                    tracking_data["puck_y"] = real_by
+
             current_frame_metrics = {
                 "possession_a": tracking_data.get("recent_dominance_ratio", 0.5) * 100.0,
                 "xg_a": tracking_data.get("live_xg_a", 0.0),
