@@ -44,10 +44,6 @@ def compile_proto_on_the_fly():
                     with open(grpc_file, "r", encoding="utf-8") as f:
                         content = f.read()
                     
-                    # Делаем импорт абсолютно прямым локальным для Amvera Cloud
-                    broken_import = "import prizolov_agent_pb2 as prizolov__agent__pb2"
-                    fixed_import = "import prizolov_agent_pb2 as prizolov__agent__pb2"
-                    
                     # Если утилита protoc сгенерировала относительный импорт, убираем точку
                     content = content.replace("from . import prizolov_agent_pb2", "import prizolov_agent_pb2")
                     
