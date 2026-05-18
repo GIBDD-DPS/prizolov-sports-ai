@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ============================================
 # Prizolov Sports AI - Main Execution Engine
-# Version: 5.06 (Zero-Exception Headless Engine)
+# Version: 5.07 (Absolute Zero-Import Protection)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
@@ -17,17 +17,17 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-# ТОТАЛЬНОЕ КУПИРОВАНИЕ ОШИБОК ИМПОРТА ОПТИКИ
+# Жесткое отключение графических подсистем Linux во избежание конфликтов GUI
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
 
-# Настройка путей поиска модулей в контейнере Amvera Cloud
+# Перестроение путей поиска модулей для Amvera Cloud
 current_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(current_dir))
 sys.path.insert(0, str(current_dir / "agent_bridge"))
 sys.path.insert(0, str(current_dir / "prizolov_sports_ai"))
 
-# Автоматическая компиляция .proto контрактов в рантайме
+# Автоматическая компиляция .proto контрактов на лету
 def compile_proto_on_the_fly():
     try:
         from grpc_tools import protoc
@@ -57,21 +57,14 @@ def compile_proto_on_the_fly():
 
 compile_proto_on_the_fly()
 
-# ИЗОЛИРОВАННЫЙ СЕРВЕРНЫЙ ИМПОРТ КОМПЬЮТЕРНОГО ЗРЕНИЯ
-# Убираем жесткий импорт из строки 58, защищая пайплайн от падения libGL.so.1
-cv2 = None
-try:
-    import cv2
-except Exception as e:
-    print(f"[CV-Headless System] Модуль cv2 недоступен: {e}. Переключение на ИИ-генерацию данных.")
-
+# Ультрабезопасный динамический импорт YOLO
 YOLO = None
 try:
     from ultralytics import YOLO
 except Exception:
     pass
 
-# Безопасный импорт локальных бизнес-компонентов
+# Безопасный импорт внутренних модулей архитектуры
 try:
     from core.orchestrator import PrizolovSportsOrchestrator
     from core.admin_dashboard import start_dashboard_server
@@ -98,7 +91,7 @@ signal.signal(signal.SIGINT, handle_exit_signal)
 signal.signal(signal.SIGTERM, handle_exit_signal)
 
 def run_yolo_inference(model, frame) -> list:
-    if model is None:
+    if model is None or frame is None:
         return []
     try:
         return model.track(frame, persist=True, verbose=False)
@@ -107,12 +100,13 @@ def run_yolo_inference(model, frame) -> list:
 
 async def main_inference_loop(sport: str, match_id: str, host: str, video_source: str, weights_path: str, dashboard_port: int):
     global keep_running
-    logger.info("=== Старт мультиканального ИИ-движка Prizolov Sports ===")
+    logger.info("=== Запуск мультиканального ИИ-движка Prizolov Sports ===")
     
     orchestrator = PrizolovSportsOrchestrator(target_agent_host=host)
     await orchestrator.initialize_match(match_id=match_id, sport=sport)
     
-    # Запуск FastAPI веб-сервера и WebSocket-шлюза для Elementor на WordPress
+    # 1. Мгновенный запуск FastAPI и WebSocket шлюза вещания для Elementor на WordPress
+    # Запускается до любых проверок оптики, гарантируя доступность порта 8080
     await start_dashboard_server(orchestrator, port=dashboard_port)
     
     s3_hub = S3CloudBackupHub()
@@ -122,6 +116,7 @@ async def main_inference_loop(sport: str, match_id: str, host: str, video_source
     initial_protocol = {"score_a": 0, "score_b": 0}
     orchestrator.update_official_protocol(match_id, initial_protocol)
     
+    # 2. Попытка ленивой загрузки YOLO весов
     yolo_model = None
     if YOLO and weights_path and os.path.exists(weights_path):
         try:
@@ -130,16 +125,25 @@ async def main_inference_loop(sport: str, match_id: str, host: str, video_source
         except Exception as e:
             logger.warning(f"Не удалось инициализировать веса YOLO: {e}")
 
-    # ВЫБОР РЕЖИМА: Инференс видеопотока или математический live-генератор
+    # 3. Изолированная ленивая проверка работоспособности OpenCV бинарников
+    cv2_module = None
+    try:
+        import cv2
+        cv2_module = cv2
+    except Exception as e:
+        logger.warning(f"[CV-Headless Bypass] Системный сбой линковки OpenGL (libGL.so.1): {e}.")
+
     cap = None
-    if cv2 is not None:
+    if cv2_module is not None:
         try:
-            cap = cv2.VideoCapture(video_source if not video_source.isdigit() else int(video_source))
+            cap = cv2_module.VideoCapture(video_source if not video_source.isdigit() else int(video_source))
             if cap and not cap.isOpened():
                 cap = None
         except Exception:
             cap = None
     
+    # 4. ОТКАЗОУСТОЙЧИВЫЙ ФОЛБЭК: Если видеосигнал или OpenCV недоступны, 
+    # запускаем математический симуляционный генератор для снабжения веб-сайта данными
     if cap is None:
         logger.warning("[Mode Sync] Физический OpenCV плеер отключен. Активирован отказоустойчивый математический Live-генератор матча.")
         frame_count = 0
@@ -155,7 +159,7 @@ async def main_inference_loop(sport: str, match_id: str, host: str, video_source
                 time_left_ratio = max(0.0, 1.0 - (elapsed_seconds / total_match_seconds))
                 game_time_str = f"{elapsed_seconds // 60:02d}:{elapsed_seconds % 60:02d}"
 
-                # Генерация кинематических live-координат для 2D-радара WordPress виджета
+                # Генерация live-координат для плавного движения 2D-радара на WordPress
                 tracking_data = {
                     "ball_x": 52.5 + (frame_count % 30) * 0.1, 
                     "ball_y": 34.0 + (frame_count % 15) * 0.05, 
@@ -185,8 +189,8 @@ async def main_inference_loop(sport: str, match_id: str, host: str, video_source
             logger.info("=== Математический live-генератор успешно завершил сессию ===")
         return
 
-    # Классический цикл обработки кадров при наличии OpenGL библиотек в системе
-    fps = cap.get(cv2.CAP_PROP_FPS) if cap else 25.0
+    # Классический цикл инференса (выполняется только при наличии нативных графических библиотек ОС)
+    fps = cap.get(cv2_module.CAP_PROP_FPS) if cap else 25.0
     if fps <= 0: fps = 25.0
     frame_delay = 1.0 / fps
     
