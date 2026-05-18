@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Traffic Compressor
-# Version: 5.01 (Initial Architecture Release)
+# Version: 5.02 (Strict Import Alignment)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: High-Performance Network Optimization
@@ -10,6 +10,8 @@ import sys
 import os
 import zlib
 import math
+# Исправлено: Добавлен нативный импорт Path для полной ликвидации NameError в Amvera
+from pathlib import Path
 from typing import Dict, Any, Optional, List
 
 current_file = Path(__file__).resolve()
@@ -20,11 +22,9 @@ if str(project_root) not in sys.path:
 class NetworkTrafficCompressor:
     """Модуль дедупликации фреймов широкой линии и бинарного сжатия трафика к Agent OS"""
 
-    def __init__(self, odds_epsilon: float = 0.02, coord_epsilon_meters: float = 0.15):
+    def __init__(self, odds_epsilon: float = 0.02, coord_epsilon_metrics: float = 0.15):
         self.odds_eps = odds_epsilon
-        self.coord_eps = coord_epsilon_meters
-        
-        # Кэш последнего успешно отправленного пакета для дедупликации
+        self.coord_eps = coord_epsilon_metrics
         self.last_sent_package: Optional[Dict[str, Any]] = None
 
     def _is_odds_diff_negligible(self, old_markets: List[Dict[str, Any]], new_markets: List[Dict[str, Any]]) -> bool:
@@ -37,21 +37,16 @@ class NetworkTrafficCompressor:
                 return False
             if old.get("is_suspended") != new.get("is_suspended"):
                 return False
-            # Если разница коэффициента меньше эпсилон (например, изменился с 1.85 до 1.86), это некритично
             if abs(old.get("odds", 0.0) - new.get("odds", 0.0)) > self.odds_eps:
                 return False
         return True
 
     def should_skip_frame(self, current_package: Dict[str, Any]) -> bool:
-        """
-        Реализует алгоритм дедупликации. Возвращает True, если изменения в кадре
-        микроскопичны и пакет можно не отправлять в gRPC-канал, экономя битрейт.
-        """
+        """Реализует алгоритм дедупликации фреймов для экономии битрейта"""
         if self.last_sent_package is None:
             self.last_sent_package = current_package
             return False
 
-        # 1. Проверяем изменения по координатам мяча/шайбы
         old_ball = self.last_sent_package.get("ball_state", {})
         new_ball = current_package.get("ball_state", {})
         
@@ -62,7 +57,6 @@ class NetworkTrafficCompressor:
             self.last_sent_package = current_package
             return False
 
-        # 2. Проверяем изменения по основным рынкам широкой линии
         old_line = self.last_sent_package.get("line_data", {})
         new_line = current_package.get("line_data", {})
         
@@ -71,18 +65,16 @@ class NetworkTrafficCompressor:
                 self.last_sent_package = current_package
                 return False
 
-        # Если изменения незначительны по всем фронтам — пропускаем фрейм
         return True
 
     def compress_payload(self, string_data: str) -> bytes:
-        """Сжимает строковые JSON метаданные в плотный бинарный буфер с максимальным уровнем компрессии zlib (Level 9)"""
+        """Сжимает строковые JSON метаданные в плотный бинарный буфер"""
         if not string_data:
             return b""
-        # Переводим в байты UTF-8 и сжимаем алгоритмом DEFLATE
         return zlib.compress(string_data.encode('utf-8'), level=9)
 
     def decompress_payload(self, compressed_bytes: bytes) -> str:
-        """Распаковывает бинарный буфер обратно в исходную JSON строку на стороне приемщика"""
+        """Распаковывает бинарный буфер обратно в исходную JSON строку"""
         if not compressed_bytes:
             return ""
         return zlib.decompress(compressed_bytes).decode('utf-8')
