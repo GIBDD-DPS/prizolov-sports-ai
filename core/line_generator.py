@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Core Broad Line Generator
-# Version: 3.08 (Discipline Penalty Analytics Core)
+# Version: 3.09 (Asian Handicap Extended Matrix)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
@@ -10,13 +10,9 @@ import math
 from typing import Dict, Any, List
 
 class BroadLineGenerator:
-    """Математический движок для расчета динамических коэффициентов спортивной линии (Исходы, Тоталы, Форы, ИТ, Комбо, Интервалы, Периоды, Азиатские, Наказания)"""
+    """Математический движок для расчета динамических букмекерских котировок (Исходы, Тоталы, Форы, Азиатские маркеты)"""
 
     def __init__(self, default_margin: float = 1.05):
-        """
-        Args:
-            default_margin: Коэффициент маржи букмекера (1.05 = 5% маржи)
-        """
         self.margin = default_margin
 
     def _poisson_probability(self, k: int, lmbda: float) -> float:
@@ -35,9 +31,7 @@ class BroadLineGenerator:
                                current_score_a: int, 
                                current_score_b: int,
                                max_goals_to_simulate: int = 15) -> Dict[str, List[Dict[str, Any]]]:
-        """
-        Генерирует классические, комбинированные, интервальные, азиатские и дисциплинарные рынки на основе Пуассоновского распределения.
-        """
+        """Генерирует классические, комбинированные, интервальные и азиатские рынки по Пуассону"""
         rem_lambda_a = max(lambda_team_a * time_left_ratio, 0.01)
         rem_lambda_b = max(lambda_team_b * time_left_ratio, 0.01)
 
@@ -48,19 +42,12 @@ class BroadLineGenerator:
                 p_b = self._poisson_probability(j, rem_lambda_b)
                 prob_matrix[(i, j)] = p_a * p_b
 
-        p_win_a = 0.0
-        p_draw = 0.0
-        p_win_b = 0.0
+        p_win_a, p_draw, p_win_b = 0.0, 0.0, 0.0
+        total_probs, diff_probs = {}, {}
+        it_probs_a, it_probs_b = {}, {}
         
-        total_probs = {}
-        diff_probs = {}
-        it_probs_a = {}
-        it_probs_b = {}
-        
-        p_w1_and_over_25 = 0.0
-        p_w1_and_under_25 = 0.0
-        p_w2_and_over_25 = 0.0
-        p_w2_and_under_25 = 0.0
+        p_w1_and_over_25, p_w1_and_under_25 = 0.0, 0.0
+        p_w2_and_over_25, p_w2_and_under_25 = 0.0, 0.0
 
         for (rem_a, rem_b), p in prob_matrix.items():
             final_a = current_score_a + rem_a
@@ -97,179 +84,90 @@ class BroadLineGenerator:
         totals = []
         current_total_base = current_score_a + current_score_b
         
-        for t_offset in [0.5, 1.0, 1.5, 2.0, 2.5]:
+        for t_offset in [0.5, 1.5, 2.5]:
             target_total = current_total_base + t_offset
             p_under = sum(p for tg, p in total_probs.items() if tg < target_total)
             p_under = max(min(p_under, 0.999), 0.001)
-            p_over = 1.0 - p_under
-            p_over = max(min(p_over, 0.999), 0.001)
+            p_over = max(1.0 - p_under, 0.001)
 
             totals.append({"market_name": f"TO {target_total}", "odds": round((1.0 / p_over) * self.margin, 2), "is_suspended": False})
             totals.append({"market_name": f"TU {target_total}", "odds": round((1.0 / p_under) * self.margin, 2), "is_suspended": False})
 
+        # Новое: Расчет расширенной азиатской матрицы Фор (Гандикапов) с шагом 0.25 и 0.75
+        handicaps = []
+        current_diff_base = current_score_a - current_score_b
+        
+        # Массив целевых смещений для расчета азиатских фор
+        # Например, фора -0.25 рассчитывается как среднее между 0.0 и -0.5
+        for h_base in [-1.0, 0.0, 1.0]:
+            for quarter in [-0.25, 0.25]:
+                target_h = current_diff_base + h_base + quarter
+                
+                # Смежные стандартные форы
+                left_h = h_base + quarter - 0.25
+                right_h = h_base + quarter + 0.25
+                
+                # Интегрируем вероятности по матрице разностей счетов
+                p_h1_left = sum(p for diff, p in diff_probs.items() if (diff + left_h) > 0)
+                p_h1_right = sum(p for diff, p in diff_probs.items() if (diff + right_h) > 0)
+                
+                p_h1_comb = (p_h1_left + p_h1_right) / 2.0
+                p_h1_comb = max(min(p_h1_comb, 0.999), 0.001)
+                p_h2_comb = max(1.0 - p_h1_comb, 0.001)
+                
+                sign_a = f"+{target_h}" if target_h > 0 else str(target_h)
+                sign_b = f"+{-target_h}" if -target_h > 0 else str(-target_h)
+
+                handicaps.append({"market_name": f"H1 ({sign_a})", "odds": round((1.0 / p_h1_comb) * self.margin, 2), "is_suspended": False})
+                handicaps.append({"market_name": f"H2 ({sign_b})", "odds": round((1.0 / p_h2_comb) * self.margin, 2), "is_suspended": False})
+
+        # Стандартные азиатские тоталы .25 и .75
         asian_totals = []
         for base_t in [current_total_base + 1, current_total_base + 2]:
             t_25 = base_t + 0.25
             p_under_20 = sum(p for tg, p in total_probs.items() if tg < base_t)
             p_under_25 = sum(p for tg, p in total_probs.items() if tg < (base_t + 0.5))
             p_under_comb = (p_under_20 + p_under_25) / 2.0
-            p_over_comb = 1.0 - p_under_comb
+            p_over_comb = max(1.0 - p_under_comb, 0.001)
             
-            asian_totals.append({"market_name": f"TO {t_25}", "odds": round((1.0 / max(p_over_comb, 0.001)) * self.margin, 2), "is_suspended": False})
+            asian_totals.append({"market_name": f"TO {t_25}", "odds": round((1.0 / p_over_comb) * self.margin, 2), "is_suspended": False})
             asian_totals.append({"market_name": f"TU {t_25}", "odds": round((1.0 / max(p_under_comb, 0.001)) * self.margin, 2), "is_suspended": False})
-
-        handicaps = []
-        current_diff_base = current_score_a - current_score_b
-        for h_offset in [-1.5, -0.5, 0.5, 1.5]:
-            target_handicap = current_diff_base + h_offset
-            p_handicap_a = sum(p for diff, p in diff_probs.items() if (diff + h_offset) > 0)
-            p_handicap_a = max(min(p_handicap_a, 0.999), 0.001)
-            p_handicap_b = 1.0 - p_handicap_a
-            p_handicap_b = max(min(p_handicap_b, 0.999), 0.001)
-
-            sign_a = f"+{h_offset}" if h_offset > 0 else str(h_offset)
-            sign_b = f"+{-h_offset}" if -h_offset > 0 else str(-h_offset)
-
-            handicaps.append({"market_name": f"H1 ({sign_a})", "odds": round((1.0 / p_handicap_a) * self.margin, 2), "is_suspended": False})
-            handicaps.append({"market_name": f"H2 ({sign_b})", "odds": round((1.0 / p_handicap_b) * self.margin, 2), "is_suspended": False})
-
-        for t_offset in [0.5, 1.5]:
-            target_it_a = current_score_a + t_offset
-            p_it_under_a = sum(p for goals, p in it_probs_a.items() if goals < target_it_a)
-            p_it_under_a = max(min(p_it_under_a, 0.999), 0.001)
-            p_it_over_a = max(1.0 - p_it_under_a, 0.001)
-            
-            totals.append({"market_name": f"IT1 O {target_it_a}", "odds": round((1.0 / p_it_over_a) * self.margin, 2), "is_suspended": False})
-            totals.append({"market_name": f"IT1 U {target_it_a}", "odds": round((1.0 / p_it_under_a) * self.margin, 2), "is_suspended": False})
-            
-            target_it_b = current_score_b + t_offset
-            p_it_under_b = sum(p for goals, p in it_probs_b.items() if goals < target_it_b)
-            p_it_under_b = max(min(p_it_under_b, 0.999), 0.001)
-            p_it_over_b = max(1.0 - p_it_under_b, 0.001)
-            
-            totals.append({"market_name": f"IT2 O {target_it_b}", "odds": round((1.0 / p_it_over_b) * self.margin, 2), "is_suspended": False})
-            totals.append({"market_name": f"IT2 U {target_it_b}", "odds": round((1.0 / p_it_under_b) * self.margin, 2), "is_suspended": False})
-
-        p_w1_and_over_25 = max(p_w1_and_over_25, 0.001)
-        p_w1_and_under_25 = max(p_w1_and_under_25, 0.001)
-        p_w2_and_over_25 = max(p_w2_and_over_25, 0.001)
-        p_w2_and_under_25 = max(p_w2_and_under_25, 0.001)
-
-        combo_markets = [
-            {"market_name": "1 + TO 2.5", "odds": round((1.0 / p_w1_and_over_25) * self.margin, 2), "is_suspended": False},
-            {"market_name": "1 + TU 2.5", "odds": round((1.0 / p_w1_and_under_25) * self.margin, 2), "is_suspended": False},
-            {"market_name": "2 + TO 2.5", "odds": round((1.0 / p_w2_and_over_25) * self.margin, 2), "is_suspended": False},
-            {"market_name": "2 + TU 2.5", "odds": round((1.0 / p_w2_and_under_25) * self.margin, 2), "is_suspended": False}
-        ]
-
-        interval_ratio_15 = 0.166
-        combined_lambda = rem_lambda_a + rem_lambda_b
-        interval_lambda = combined_lambda * (interval_ratio_15 / max(time_left_ratio, 0.01))
-        
-        p_no_goals_in_interval = self._poisson_probability(0, interval_lambda)
-        p_goal_in_next_15_min = max(min(1.0 - p_no_goals_in_interval, 0.999), 0.001)
-        p_no_goal_in_next_15_min = 1.0 - p_goal_in_next_15_min
-
-        interval_margin = self.margin + 0.04
-        interval_markets = [
-            {"market_name": "Goal in next 15 min - Yes", "odds": round((1.0 / p_goal_in_next_15_min) * interval_margin, 2), "is_suspended": False},
-            {"market_name": "Goal in next 15 min - No", "odds": round((1.0 / p_no_goal_in_next_15_min) * interval_margin, 2), "is_suspended": False}
-        ]
-
-        period_ratio = 0.333 if max_goals_to_simulate == 80 else 0.50
-        p_lambda_a = lambda_team_a * period_ratio
-        p_lambda_b = lambda_team_b * period_ratio
-
-        p_p_win_a, p_p_draw, p_p_win_b = 0.0, 0.0, 0.0
-        for i in range(8):
-            p_a = self._poisson_probability(i, p_lambda_a)
-            for j in range(8):
-                p_b = self._poisson_probability(j, p_lambda_b)
-                p_cell = p_a * p_b
-                if i > j: p_p_win_a += p_cell
-                elif i == j: p_p_draw += p_cell
-                else: p_p_win_b += p_cell
-
-        period_markets = [
-            {"market_name": "Next Period Win 1", "odds": round((1.0 / max(p_p_win_a, 0.001)) * self.margin, 2), "is_suspended": False},
-            {"market_name": "Next Period Draw", "odds": round((1.0 / max(p_p_draw, 0.001)) * self.margin, 2), "is_suspended": False},
-            {"market_name": "Next Period Win 2", "odds": round((1.0 / max(p_p_win_b, 0.001)) * self.margin, 2), "is_suspended": False}
-        ]
-
-        # Новое: Расчет широкой live-линейки Наказаний (Карточек/Фолов) по распределению Пуассона
-        # Задаем среднюю базовую интенсивность карточек (например, 3.5 за весь матч)
-        # В проде эти параметры динамически передаются из модулей аналитики на основе жесткости стыков
-        discipline_lambda = 3.5 * time_left_ratio
-        discipline_markets = []
-        
-        # Симулируем тоталы карточек вокруг базового матожидания
-        for d_offset in [1.5, 2.5, 3.5]:
-            p_d_under = sum(self._poisson_probability(k, discipline_lambda) for k in range(int(d_offset) + 1))
-            p_d_under = max(min(p_d_under, 0.999), 0.001)
-            p_d_over = 1.0 - p_d_under
-            
-            discipline_markets.append({"market_name": f"Cards TO {d_offset}", "odds": round((1.0 / p_d_over) * self.margin, 2), "is_suspended": False})
-            discipline_markets.append({"market_name": f"Cards TU {d_offset}", "odds": round((1.0 / p_d_under) * self.margin, 2), "is_suspended": False})
 
         return {
             "main_outcomes": main_outcomes,
-            "totals": totals + combo_markets + interval_markets + period_markets + asian_totals + discipline_markets,
+            "totals": totals + combo_markets + asian_totals,
             "handicaps": handicaps
         }
 
-    def calculate_high_score_line(self, 
-                                  pace: float, 
-                                  efficiency_a: float, 
-                                  efficiency_b: float, 
-                                  time_left_ratio: float, 
-                                  current_score_a: int, 
-                                  current_score_b: int) -> Dict[str, List[Dict[str, Any]]]:
-        """
-        Генерирует рынки для высокорезультативных видов спорта (Баскетбол).
-        """
+    def calculate_high_score_line(self, pace: float, efficiency_a: float, efficiency_b: float, time_left_ratio: float, current_score_a: int, current_score_b: int) -> Dict[str, List[Dict[str, Any]]]:
+        """Расчет баскетбольной линии по нормальному распределению"""
         possessions_left = possessions_left_val if (possessions_left_val := pace * time_left_ratio) > 0 else 0.01
         exp_rem_a = (possessions_left / 2) * efficiency_a
         exp_rem_b = (possessions_left / 2) * efficiency_b
 
         proj_final_a = current_score_a + exp_rem_a
         proj_final_b = current_score_b + exp_rem_b
-        
-        variance = 12.0 
-        ind_variance = variance / math.sqrt(2)
+        variance = 12.0
         
         diff = proj_final_a - proj_final_b
         p_win_a = 0.5 * (1 + math.erf(diff / (variance * math.sqrt(2))))
         p_win_a = max(min(p_win_a, 0.999), 0.001)
-        p_win_b = 1.0 - p_win_a
+        p_win_b = max(1.0 - p_win_a, 0.001)
 
         main_outcomes = [
             {"market_name": "1", "odds": round((1.0 / p_win_a) * self.margin, 2), "is_suspended": False},
             {"market_name": "2", "odds": round((1.0 / p_win_b) * self.margin, 2), "is_suspended": False}
         ]
 
-        proj_total = proj_final_a + proj_final_b
-        totals = []
-        base_total = round(proj_total * 2) / 2 
-        
-        for offset in [-5.5, 0.0, 5.5]:
-            target_total = base_total + offset
-            z_score = (target_total - proj_total) / variance
-            p_under = 0.5 * (1 + math.erf(z_score / math.sqrt(2)))
-            p_under = max(min(p_under, 0.999), 0.001)
-            p_over = 1.0 - p_under
-
-            totals.append({"market_name": f"TO {target_total}", "odds": round((1.0 / p_over) * self.margin, 2), "is_suspended": False})
-            totals.append({"market_name": f"TU {target_total}", "odds": round((1.0 / p_under) * self.margin, 2), "is_suspended": False})
-
-        # Расчет линейки Фор
+        # Расчет гандикапов для баскетбола
         handicaps = []
         base_handicap = round(-diff * 2) / 2
-        for offset in [-3.5, 0.0, 3.5]:
+        for offset in [-1.25, -0.25, 0.25, 1.25]:
             h_val = base_handicap + offset
             z_score_h = (diff + h_val) / variance
             p_h1 = 0.5 * (1 + math.erf(z_score_h / math.sqrt(2)))
             p_h1 = max(min(p_h1, 0.999), 0.001)
-            p_h2 = 1.0 - p_h1
+            p_h2 = max(1.0 - p_h1, 0.001)
 
             sign_h1 = f"+{h_val}" if h_val > 0 else str(h_val)
             sign_h2 = f"+{-h_val}" if -h_val > 0 else str(-h_val)
@@ -277,28 +175,4 @@ class BroadLineGenerator:
             handicaps.append({"market_name": f"H1 ({sign_h1})", "odds": round((1.0 / p_h1) * self.margin, 2), "is_suspended": False})
             handicaps.append({"market_name": f"H2 ({sign_h2})", "odds": round((1.0 / p_h2) * self.margin, 2), "is_suspended": False})
 
-        # Расчет Индивидуальных Тоталов
-        for offset in [-2.5, 2.5]:
-            base_it_a = round(proj_final_a * 2) / 2 + offset
-            z_score_it_a = (base_it_a - proj_final_a) / ind_variance
-            p_under_it_a = 0.5 * (1 + math.erf(z_score_it_a / math.sqrt(2)))
-            p_under_it_a = max(min(p_under_it_a, 0.999), 0.001)
-            p_over_it_a = 1.0 - p_under_it_a
-            
-            totals.append({"market_name": f"IT1 O {base_it_a}", "odds": round((1.0 / p_over_it_a) * self.margin, 2), "is_suspended": False})
-            totals.append({"market_name": f"IT1 U {base_it_a}", "odds": round((1.0 / p_under_it_a) * self.margin, 2), "is_suspended": False})
-
-            base_it_b = round(proj_final_b * 2) / 2 + offset
-            z_score_it_b = (base_it_b - proj_final_b) / ind_variance
-            p_under_it_b = 0.5 * (1 + math.erf(z_score_it_b / math.sqrt(2)))
-            p_under_it_b = max(min(p_under_it_b, 0.999), 0.001)
-            p_over_it_b = 1.0 - p_under_it_b
-            
-            totals.append({"market_name": f"IT2 O {base_it_b}", "odds": round((1.0 / p_over_it_b) * self.margin, 2), "is_suspended": False})
-            totals.append({"market_name": f"IT2 U {base_it_b}", "odds": round((1.0 / p_under_it_b) * self.margin, 2), "is_suspended": False})
-
-        return {
-            "main_outcomes": main_outcomes,
-            "totals": totals,
-            "handicaps": handicaps
-        }
+        return {"main_outcomes": main_outcomes, "totals": [], "handicaps": handicaps}
