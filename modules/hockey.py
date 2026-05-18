@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Hockey Analytics Module
-# Version: 3.02 (Flat-Cloud Imports Fix)
+# Version: 3.03 (Kalman Matrix Parenthesis Fix)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
@@ -26,10 +26,26 @@ class HockeyAnalyticsModule:
         self.base_lambda_a = 2.8
         self.base_lambda_b = 2.5
         
+        # Шаг дискретизации времени для 20 кадров/сек (1 / 20 = 0.05с)
+        dt = 0.05
+        
+        # Инициализация фильтра Кальмана для трекинга шайбы (4 состояния: x, y, vx, vy)
         self.kf = KalmanFilter(dim_x=4, dim_z=2)
         self.kf.x = np.array([0.0, 0.0, 0.0, 0.0])
-        self.kf.F = np.array([, [, [, [)
-        self.kf.H = np.array([, [)
+        
+        # Исправлено: Полные, синтаксически корректные матрицы со всеми скобками
+        self.kf.F = np.array([
+            [1.0, 0.0,  dt, 0.0],
+            [0.0, 1.0, 0.0,  dt],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0]
+        ])
+        
+        self.kf.H = np.array([
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0]
+        ])
+        
         self.kf.P *= 10.0
         self.kf.R *= 5.0
         self.kf.Q *= 0.1
@@ -42,8 +58,9 @@ class HockeyAnalyticsModule:
 
     def track_puck_with_kalman(self, detected_x: float, detected_y: float, is_detected: bool) -> Tuple[float, float, float, float]:
         self.kf.predict()
-        if is_detected: self.kf.update(np.array([detected_x, detected_y]))
-        return float(self.kf.x), float(self.kf.x), float(self.kf.x), float(self.kf.x)
+        if is_detected: 
+            self.kf.update(np.array([detected_x, detected_y]))
+        return float(self.kf.x[0]), float(self.kf.x[1]), float(self.kf.x[2]), float(self.kf.x[3])
 
     def process_frame_data(self, tracking_data: Dict[str, Any], game_time_str: str, time_left_ratio: float) -> Dict[str, Any]:
         puck_detected = tracking_data.get("puck_visible", False)
@@ -54,15 +71,21 @@ class HockeyAnalyticsModule:
         is_suspended = tracking_data.get("is_game_stopped", False) or (players_on_ice_a < 3 or players_on_ice_b < 3)
 
         modifier_a, modifier_b = 1.0, 1.0
-        if players_on_ice_a > players_on_ice_b: modifier_a, modifier_b = 1.4, 0.6
-        elif players_on_ice_b > players_on_ice_a: modifier_a, modifier_b = 0.6, 1.4
+        if players_on_ice_a > players_on_ice_b: 
+            modifier_a, modifier_b = 1.4, 0.6
+        elif players_on_ice_b > players_on_ice_a: 
+            modifier_a, modifier_b = 0.6, 1.4
 
         base_markets = self.lg.calculate_poisson_line(self.base_lambda_a * modifier_a, self.base_lambda_b * modifier_b, time_left_ratio, self.current_score_a, self.current_score_b)
-        shots_markets = self.lg.calculate_poisson_line(32.0 * (modifier_a), 28.0 * (modifier_b), time_left_ratio, self.shots_a, self.shots_b, max_goals_to_simulate=80)
+        shots_markets = self.lg.calculate_poisson_line(32.0 * modifier_a, 28.0 * modifier_b, time_left_ratio, self.shots_a, self.shots_b, max_goals_to_simulate=80)
 
         active_specials = []
         for outcome in shots_markets["totals"]:
-            active_specials.append({"market_name": outcome["market_name"].replace("TO", "Shots Total Over").replace("TU", "Shots Total Under"), "odds": outcome["odds"], "is_suspended": is_suspended or outcome["is_suspended"]})
+            active_specials.append({
+                "market_name": outcome["market_name"].replace("TO", "Shots Total Over").replace("TU", "Shots Total Under"), 
+                "odds": outcome["odds"], 
+                "is_suspended": is_suspended or outcome["is_suspended"]
+            })
 
         if is_suspended:
             for m in base_markets["main_outcomes"]: m["is_suspended"] = True
