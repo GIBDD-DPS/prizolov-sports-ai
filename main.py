@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ============================================
 # Prizolov Sports AI - Main Execution Engine
-# Version: 5.02 (Live Dashboard Activation Core)
+# Version: 5.03 (Disaster Recovery Active Core)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
@@ -65,9 +65,12 @@ except ImportError:
 try:
     from core.orchestrator import PrizolovSportsOrchestrator
     from core.admin_dashboard import start_dashboard_server
+    # Новое: Импорт S3-бэкап модуля версии 5.01
+    from core.s3_backup import S3CloudBackupHub
 except ModuleNotFoundError:
     from prizolov_sports_ai.core.orchestrator import PrizolovSportsOrchestrator
     from prizolov_sports_ai.core.admin_dashboard import start_dashboard_server
+    from prizolov_sports_ai.core.s3_backup import S3CloudBackupHub
 
 logging.basicConfig(
     level=logging.INFO,
@@ -101,14 +104,20 @@ async def main_inference_loop(sport: str, match_id: str, host: str, video_source
     # 1. Запуск оркестратора под выбранный матч
     await orchestrator.initialize_match(match_id=match_id, sport=sport)
     
-    # 2. Исправлено: Активация Live-админ-панели управления в продакшене Amvera Cloud
+    # 2. Активация Live-админ-панели управления в продакшене Amvera Cloud
     await start_dashboard_server(orchestrator, port=dashboard_port)
+    
+    # 3. Новое: Инициализация и асинхронный запуск фонового S3-бэкап воркера
+    s3_hub = S3CloudBackupHub()
+    persistent_dir = os.getenv("PERSISTENT_DATA_DIR", "/data")
+    # Запускаем периодический бэкап раз в 10 минут (600 секунд) без блокировки основного цикла
+    asyncio.create_task(s3_hub.run_periodic_backup_loop(base_data_dir=persistent_dir, interval_seconds=600))
     
     # Инициализация стартового протокола
     initial_protocol = {"score_a": 0, "score_b": 0}
     orchestrator.update_official_protocol(initial_protocol)
     
-    # 3. Загрузка весов YOLOv10 (из папки постоянных данных /data)
+    # 4. Загрузка весов YOLOv10
     yolo_model = None
     if YOLO and weights_path and os.path.exists(weights_path):
         logger.info(f"Загрузка весов YOLOv10 для {sport} из: {weights_path}")
@@ -116,7 +125,7 @@ async def main_inference_loop(sport: str, match_id: str, host: str, video_source
     else:
         logger.warning("Модель YOLOv10 не загружена (отсутствуют веса или библиотека). Включен фолбэк-анализатор.")
 
-    # 4. Подключение к источнику трансляции (RTSP / RTMP / MP4)
+    # 5. Подключение к источнику трансляции (RTSP / RTMP / MP4)
     logger.info(f"Открытие live-трансляции: {video_source}")
     cap = cv2.VideoCapture(video_source if not video_source.isdigit() else int(video_source))
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
@@ -157,25 +166,37 @@ async def main_inference_loop(sport: str, match_id: str, host: str, video_source
             tracking_data = {
                 "ball_x": 0.0, "ball_y": 0.0, "ball_owner_team": None,
                 "recent_dominance_ratio": 0.5, "live_xg_a": 0.0, "live_xg_b": 0.0,
-                "danger_attacks_a": 0, "danger_attacks_b": 0
+                "danger_attacks_a": 0, "danger_attacks_b": 0,
+                "raw_video_frame": frame  # Передаем ссылку на кадр для судейского фильтра и детектора фризов
             }
 
-            # 5. Асинхронный вызов инференса YOLOv10
+            # 6. Асинхронный вызов инференса YOLOv10
             if yolo_model:
                 results = await loop.run_in_executor(executor, run_yolo_inference, yolo_model, frame)
                 
                 if results and len(results) > 0:
                     boxes = results.boxes
+                    # Подготавливаем массив сырых детекций игроков для фильтра окклюзий
+                    raw_player_detections = []
+                    
                     for box in boxes:
                         cls_id = int(box.cls)
-                        xyxy = box.xyxy.tolist()
+                        xyxy = box.xyxy.tolist()[0]
                         
-                        if cls_id == 0:
-                            tracking_data["ball_x"] = (xyxy + xyxy) / 2.0
-                            tracking_data["ball_y"] = (xyxy + xyxy) / 2.0
+                        if cls_id == 0:  # Игровой снаряд
+                            tracking_data["ball_x"] = (xyxy[0] + xyxy[2]) / 2.0
+                            tracking_data["ball_y"] = (xyxy[1] + xyxy[3]) / 2.0
                             tracking_data["puck_visible"] = True
                             tracking_data["puck_x"] = tracking_data["ball_x"]
                             tracking_data["puck_y"] = tracking_data["ball_y"]
+                        else:  # Силуэты спортсменов / персонала
+                            raw_player_detections.append({
+                                "track_id": int(box.id[0]) if box.is_track else -1,
+                                "box": xyxy,
+                                "cls_id": cls_id
+                            })
+                            
+                    tracking_data["raw_player_detections"] = raw_player_detections
 
             await orchestrator.process_cv_frame(
                 tracking_data=tracking_data,
@@ -202,7 +223,6 @@ if __name__ == "__main__":
     parser.add_argument("--agent_host", type=str, default="localhost:50051", help="Адрес Agent OS")
     parser.add_argument("--video_source", type=str, default="0", help="RTSP/RTMP ссылка, путь к mp4 или ID веб-камеры")
     parser.add_argument("--weights", type=str, default="/data/yolov10_sports.pt", help="Путь к файлу весов YOLOv10")
-    # Добавлен аргумент конфигурирования порта админ-панели
     parser.add_argument("--dashboard_port", type=int, default=8080, help="Сетевой порт для Live панели управления скаута")
     
     args = parser.parse_args()
