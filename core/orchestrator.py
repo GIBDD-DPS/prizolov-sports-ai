@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Main System Orchestrator
-# Version: 4.09 (Production Scaled Runtime)
+# Version: 4.10 (Fail-Safe Production Core)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
@@ -31,6 +31,8 @@ from core.fallback_db import LocalFallbackDB
 from core.lens_calibrator import LensDistortionCalibrator
 from core.occlusion_filter import TrackingOcclusionFilter
 from core.memory_balancer import ProductionMemoryBalancer
+from core.staff_filter import RefereeStaffFilter
+from core.stream_validator import StreamQualityValidator
 from agent_bridge.client import PrizolovAgentClient
 from agent_bridge.web_proxy import gRPCWebProxyConnector
 from modules.sentiment_miner import SentimentMinerModule
@@ -43,7 +45,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("PrizolovSportsAI.Orchestrator")
 
 class PrizolovSportsOrchestrator:
-    """Главный координатор системы нового поколения: интегрирован с фильтрацией окклюзий и защитой RAM"""
+    """Главный координатор системы: снабжен судейской фильтрацией и защитой от зависаний трансляции"""
 
     def __init__(self, target_agent_host: Optional[str] = None):
         self.line_generator = BroadLineGenerator(default_margin=1.05)
@@ -60,10 +62,12 @@ class PrizolovSportsOrchestrator:
         self.risk_manager = RiskManagementEngine(base_margin=1.05)
         self.traffic_compressor = NetworkTrafficCompressor(odds_epsilon=0.02, coord_epsilon_meters=0.15)
         self.fallback_db = LocalFallbackDB(base_data_dir=os.getenv("PERSISTENT_DATA_DIR", "/data"))
-        
-        # Новое: Активация 3D-фильтра окклюзий и системного балансировщика оперативной памяти (версии 5.01)
         self.occlusion_filter = TrackingOcclusionFilter(overlap_threshold=0.55)
         self.memory_balancer = ProductionMemoryBalancer(max_allowed_ram_mb=1540.0, force_gc_interval_frames=1200)
+        
+        # Новое: Активация ИИ-фильтра судей и валидатора качества потока (версии 5.01)
+        self.staff_filter = RefereeStaffFilter()
+        self.stream_validator = StreamQualityValidator(freeze_threshold_mse=0.5, max_freeze_frames=40)
         
         redis_connection_string = os.getenv("REDIS_URL", None)
         self.sentiment_miner = SentimentMinerModule(
@@ -149,6 +153,14 @@ class PrizolovSportsOrchestrator:
             return False
 
         try:
+            # Новое: Защищенный попиксельный анализ целостности входного видеопотока
+            # Если передан сырой кадр трансляции, проверяем его на предмет зависания (фриза)
+            if "raw_video_frame" in tracking_data:
+                is_valid_stream = self.stream_validator.check_stream_integrity(tracking_data["raw_video_frame"])
+                if not is_valid_stream or self.stream_validator.is_stream_broken:
+                    # При фризе или черном экране принудительно переключаем линию в статус экстренной заморозки
+                    tracking_data["is_game_stopped"] = True
+
             raw_bx = tracking_data.get("ball_x", 0.0)
             raw_by = tracking_data.get("ball_y", 0.0)
             
@@ -157,7 +169,7 @@ class PrizolovSportsOrchestrator:
                 raw_bx, raw_by = self.lens_calibrator.undistort_points(raw_bx, raw_by)
                 if "detected_pitch_pixel_points" in tracking_data:
                     tracking_data["detected_pitch_pixel_points"] = [
-                        self.lens_calibrator.undistort_points(pt[0], pt[1]) for pt in tracking_data["detected_pitch_pixel_points"]
+                        self.lens_calibrator.undistort_points(pt, pt) for pt in tracking_data["detected_pitch_pixel_points"]
                     ]
 
             # Динамическая калибровка матрицы гомографии
@@ -172,7 +184,13 @@ class PrizolovSportsOrchestrator:
                 tracking_data["ball_x"] = raw_bx
                 tracking_data["ball_y"] = raw_by
 
-            # Новое: Продвинутая 3D-фильтрация окклюзий и взаимных перекрытий силуэтов игроков в кадре
+            # Новое: Глубокая очистка детекций от ложных силуэтов судейского персонала
+            if "raw_player_detections" in tracking_data and "raw_video_frame" in tracking_data:
+                tracking_data["raw_player_detections"] = self.staff_filter.filter_active_players(
+                    tracking_data["raw_player_detections"], tracking_data["raw_video_frame"]
+                )
+
+            # Продвинутая 3D-фильтрация окклюзий и взаимных перекрытий игроков в кадре
             if "raw_player_detections" in tracking_data:
                 tracking_data["raw_player_detections"] = self.occlusion_filter.filter_occlusions(
                     tracking_data["raw_player_detections"]
@@ -235,6 +253,13 @@ class PrizolovSportsOrchestrator:
                 market_feed_odds=competitor_mock_feed
             )
 
+            # При зависании трансляции принудительно переключаем итоговый статус флагов отправки в Suspended
+            if self.stream_validator.is_broken_stream:
+                for group in ["main_outcomes", "totals", "handicaps"]:
+                    if group in analytics_package["line_data"]:
+                        for outcome in analytics_package["line_data"][group]:
+                            outcome["is_suspended"] = True
+
             if self.traffic_compressor.should_skip_frame(analytics_package):
                 return True
 
@@ -252,11 +277,9 @@ class PrizolovSportsOrchestrator:
             if success and elapsed_seconds % 30 == 0:
                 buffered = self.fallback_db.fetch_buffered_packages(limit=20)
                 if buffered:
-                    self.fallback_db.clear_buffered_packages([b[0] for b in buffered])
+                    self.fallback_db.clear_buffered_packages([b for b in buffered])
 
-            # Новое: Вызов менеджера контроля оперативной памяти в конце каждого кадра
             self.memory_balancer.balance_resources()
-
             return success
 
         except Exception as e:
