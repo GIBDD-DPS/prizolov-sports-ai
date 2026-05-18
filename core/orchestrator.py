@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Main System Orchestrator
-# Version: 4.05 (Spatial Homography Integration)
+# Version: 4.06 (Production Engine Optimization)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
@@ -24,6 +24,8 @@ from core.prematch_context import PreMatchContextModule
 from core.trend_predictor import MicroTrendPredictor
 from core.risk_manager import RiskManagementEngine
 from core.homography_calibrator import HomographyCalibrator
+from core.event_detector import SportsEventDetector
+from core.traffic_compressor import NetworkTrafficCompressor
 from agent_bridge.client import PrizolovAgentClient
 from modules.sentiment_miner import SentimentMinerModule
 from modules.football import FootballAnalyticsModule
@@ -35,12 +37,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("PrizolovSportsAI.Orchestrator")
 
 class PrizolovSportsOrchestrator:
-    """Главный координатор системы: автоматически адаптируется под переменные среды Amvera Cloud"""
+    """Главный координатор системы нового поколения: интегрирован с событийными и сетевыми оптимизаторами"""
 
     def __init__(self, target_agent_host: Optional[str] = None):
         self.line_generator = BroadLineGenerator(default_margin=1.05)
         
-        # Инжекция gRPC хоста: берем из переменной среды Amvera, если target_agent_host не передан
+        # Инжекция gRPC хоста: берем из переменной среды Amvera
         env_agent_host = os.getenv("AGENT_HOST", "localhost:50051")
         final_agent_host = target_agent_host if target_agent_host else env_agent_host
         
@@ -50,6 +52,9 @@ class PrizolovSportsOrchestrator:
         self.prematch_context = PreMatchContextModule()
         self.trend_predictor = MicroTrendPredictor(window_size_frames=1200)
         self.risk_manager = RiskManagementEngine(base_margin=1.05)
+        
+        # Оптимизированный сетевой компрессор трафика (версия 5.01)
+        self.traffic_compressor = NetworkTrafficCompressor(odds_epsilon=0.02, coord_epsilon_meters=0.15)
         
         # Инжекция Redis хоста из переменных окружения Amvera Cloud
         redis_connection_string = os.getenv("REDIS_URL", None)
@@ -65,16 +70,17 @@ class PrizolovSportsOrchestrator:
         self.is_initialized: bool = False
         self.match_metadata: Dict[str, Any] = {}
         
-        # Инициализация калибратора (выделяется память под будущую матрицу)
         self.calibrator: Optional[HomographyCalibrator] = None
+        self.event_detector: Optional[SportsEventDetector] = None
 
     async def initialize_match(self, match_id: str, sport: str) -> None:
-        """Динамическая инициализация матча с подключением к Redis кластеру и калибратору"""
+        """Динамическая инициализация матча с подключением к Redis кластеру и калибраторам"""
         self.match_id = match_id
         self.current_sport = sport.lower()
         
-        # Активация пространственного калибратора под конкретный вид спорта
+        # Активация пространственного калибратора и триггера событий
         self.calibrator = HomographyCalibrator(sport=self.current_sport)
+        self.event_detector = SportsEventDetector(sport=self.current_sport)
         
         # Асинхронно активируем соединение с Managed Redis до старта трансляции
         await self.sentiment_miner.connect_redis()
@@ -134,7 +140,7 @@ class PrizolovSportsOrchestrator:
             return False
 
         try:
-            # Динамическая калибровка матрицы гомографии, если CV-слой обнаружил новые реперные точки на поле
+            # Динамическая калибровка матрицы гомографии
             cv_img_pts = tracking_data.get("detected_pitch_pixel_points", [])
             if len(cv_img_pts) >= 4 and self.current_sport == "football":
                 real_anchors = self.calibrator.get_static_football_pitch_anchors()
@@ -145,13 +151,19 @@ class PrizolovSportsOrchestrator:
             raw_by = tracking_data.get("ball_y", 0.0)
             
             if self.calibrator and self.calibrator.h_matrix is not None:
-                real_bx, real_by = self.calibrator.transform_point(raw_bx, raw_by)
-                # Перезаписываем входные координаты для спортивных процессоров на метрические
-                tracking_data["ball_x"] = real_bx
-                tracking_data["ball_y"] = real_by
+                raw_bx, raw_by = self.calibrator.transform_point(raw_bx, raw_by)
+                tracking_data["ball_x"] = raw_bx
+                tracking_data["ball_y"] = raw_by
                 if "puck_x" in tracking_data:
-                    tracking_data["puck_x"] = real_bx
-                    tracking_data["puck_y"] = real_by
+                    tracking_data["puck_x"] = raw_bx
+                    tracking_data["puck_y"] = raw_by
+
+            # Новое: Анализ траектории на предмет голов/аутов с помощью EventDetector
+            if self.event_detector:
+                live_event = self.event_detector.analyze_ball_movement(raw_bx, raw_by)
+                if live_event:
+                    # При голе или ауте принудительно выставляем флаг заморозки игры для защиты от послеголов
+                    tracking_data["is_game_stopped"] = True
 
             current_frame_metrics = {
                 "possession_a": tracking_data.get("recent_dominance_ratio", 0.5) * 100.0,
@@ -196,6 +208,11 @@ class PrizolovSportsOrchestrator:
                 our_line=analytics_package["line_data"],
                 market_feed_odds=competitor_mock_feed
             )
+
+            # Новое: Дедупликация и фильтрация лишнего трафика перед физической gRPC отправкой
+            if self.traffic_compressor.should_skip_frame(analytics_package):
+                # Если изменения незначительны — экономим битрейт Amvera Cloud и не шлем дубликат
+                return True
 
             success = await self.agent_client.push_match_data(analytics_package)
             return success
