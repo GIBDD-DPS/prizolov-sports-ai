@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Core Broad Line Generator
-# Version: 3.06 (Period & Half Analytics Core)
+# Version: 3.07 (Asian Quarter-Line Core)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
@@ -10,7 +10,7 @@ import math
 from typing import Dict, Any, List
 
 class BroadLineGenerator:
-    """Математический движок для расчета динамических коэффициентов спортивной линии (Исходы, Тоталы, Форы, ИТ, Комбо, Интервалы, Периоды)"""
+    """Математический движок для расчета динамических коэффициентов спортивной линии (Исходы, Тоталы, Форы, ИТ, Комбо, Интервалы, Периоды, Азиатские)"""
 
     def __init__(self, default_margin: float = 1.05):
         """
@@ -36,7 +36,7 @@ class BroadLineGenerator:
                                current_score_b: int,
                                max_goals_to_simulate: int = 15) -> Dict[str, List[Dict[str, Any]]]:
         """
-        Генерирует базовые, комбинированные, интервальные и попериодные рынки на основе Пуассоновского распределения.
+        Генерирует классические, комбинированные, интервальные и азиатские рынки на основе Пуассоновского распределения.
         """
         rem_lambda_a = max(lambda_team_a * time_left_ratio, 0.01)
         rem_lambda_b = max(lambda_team_b * time_left_ratio, 0.01)
@@ -96,7 +96,10 @@ class BroadLineGenerator:
 
         totals = []
         current_total_base = current_score_a + current_score_b
-        for t_offset in [0.5, 1.5, 2.5]:
+        
+        # Интеграция Азиатских Четвертных Тоталов (например: 2.25, 2.75)
+        # Они делят ставку на два соседних тотала (например, 2.25 делит на 2.0 и 2.5)
+        for t_offset in [0.5, 1.0, 1.5, 2.0, 2.5]:
             target_total = current_total_base + t_offset
             p_under = sum(p for tg, p in total_probs.items() if tg < target_total)
             p_under = max(min(p_under, 0.999), 0.001)
@@ -105,6 +108,19 @@ class BroadLineGenerator:
 
             totals.append({"market_name": f"TO {target_total}", "odds": round((1.0 / p_over) * self.margin, 2), "is_suspended": False})
             totals.append({"market_name": f"TU {target_total}", "odds": round((1.0 / p_under) * self.margin, 2), "is_suspended": False})
+
+        # Новое: Динамический расчет Азиатской Четвертной линейки тоталов (0.25 и 0.75)
+        asian_totals = []
+        for base_t in [current_total_base + 1, current_total_base + 2]:
+            # Тотал Меньше/Больше X.25 (смесь половинчатого X.5 и целого X.0)
+            t_25 = base_t + 0.25
+            p_under_20 = sum(p for tg, p in total_probs.items() if tg < base_t)
+            p_under_25 = sum(p for tg, p in total_probs.items() if tg < (base_t + 0.5))
+            p_under_comb = (p_under_20 + p_under_25) / 2.0
+            p_over_comb = 1.0 - p_under_comb
+            
+            asian_totals.append({"market_name": f"TO {t_25}", "odds": round((1.0 / max(p_over_comb, 0.001)) * self.margin, 2), "is_suspended": False})
+            asian_totals.append({"market_name": f"TU {t_25}", "odds": round((1.0 / max(p_under_comb, 0.001)) * self.margin, 2), "is_suspended": False})
 
         handicaps = []
         current_diff_base = current_score_a - current_score_b
@@ -164,9 +180,7 @@ class BroadLineGenerator:
             {"market_name": "Goal in next 15 min - No", "odds": round((1.0 / p_no_goal_in_next_15_min) * interval_margin, 2), "is_suspended": False}
         ]
 
-        # Новое: Расчет автономной линии на Следующий Период / Тайм (Чистый исход отрезка 0:0)
-        # Интенсивность периода (например, 20 минут в хоккее — это 1/3 от 60 минут базовой силы)
-        period_ratio = 0.333 if max_goals_to_simulate == 80 else 0.50  # Хоккей (период) или Футбол (тайм)
+        period_ratio = 0.333 if max_goals_to_simulate == 80 else 0.50
         p_lambda_a = lambda_team_a * period_ratio
         p_lambda_b = lambda_team_b * period_ratio
 
@@ -188,7 +202,7 @@ class BroadLineGenerator:
 
         return {
             "main_outcomes": main_outcomes,
-            "totals": totals + combo_markets + interval_markets + period_markets,
+            "totals": totals + combo_markets + interval_markets + period_markets + asian_totals,
             "handicaps": handicaps
         }
 
@@ -200,10 +214,10 @@ class BroadLineGenerator:
                                   current_score_a: int, 
                                   current_score_b: int) -> Dict[str, List[Dict[str, Any]]]:
         """
-        Генерирует рынки (1-2, Тоталы, Форы, ИТ) для высокорезультативных видов спорта (Баскетбол).
+        Генерирует рынки для высокорезультативных видов спорта (Баскетбол).
         Использует нормальную аппроксимацию.
         """
-        possessions_left = pace * time_left_ratio
+        possessions_left = possessions_left_val if (possessions_left_val := pace * time_left_ratio) > 0 else 0.01
         exp_rem_a = (possessions_left / 2) * efficiency_a
         exp_rem_b = (possessions_left / 2) * efficiency_b
 
