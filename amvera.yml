@@ -1,21 +1,21 @@
 # ============================================
 # Prizolov Sports AI - Amvera Infrastructure Config
-# Version: 5.04 (Strict Syntax Alignment)
+# Version: 5.06 (Strict Flat Syntax Key)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
-# Target: Production Amvera Cloud Buildpack Deployment
+# Target: Production Amvera Cloud Strict Buildpack Validation
 # ============================================
 
 meta:
-  environment: "python"
-  toolchain: "pip"
+  environment: python
+  toolchain: pip
 
 build:
-  requirements: "requirements.txt"
+  requirements: requirements.txt
 
 run:
   persistence:
-    /data: "persistent-volume"
+    /data: persistent-volume
   containerPort: "8080"
   servicePort: "8080"
   command: "python main.py --sport football --match_id prod_match_001 --agent_host localhost:50051 --dashboard_port 8080"
