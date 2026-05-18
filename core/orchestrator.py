@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Main System Orchestrator
-# Version: 4.11 (Environmental & Time Resilient Core)
+# Version: 4.12 (Total Signal Integrity Edition)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
@@ -35,6 +35,8 @@ from core.staff_filter import RefereeStaffFilter
 from core.stream_validator import StreamQualityValidator
 from core.weather_analytics import WeatherAnalyticsEngine
 from core.time_synchronizer import OpticalTimeSynchronizer
+from core.ball_validator import BallPuckValidator
+from core.video_flicker_filter import AntiFlickerVideoFilter
 from agent_bridge.client import PrizolovAgentClient
 from agent_bridge.web_proxy import gRPCWebProxyConnector
 from modules.sentiment_miner import SentimentMinerModule
@@ -47,7 +49,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("PrizolovSportsAI.Orchestrator")
 
 class PrizolovSportsOrchestrator:
-    """Главный координатор системы нового поколения: интегрирован с погодным ИИ и OCR-синхронизацией времени"""
+    """Главный координатор системы нового поколения: укомплектован траекторным валидатором и гашением мерцания ламп"""
 
     def __init__(self, target_agent_host: Optional[str] = None):
         self.line_generator = BroadLineGenerator(default_margin=1.05)
@@ -68,10 +70,12 @@ class PrizolovSportsOrchestrator:
         self.memory_balancer = ProductionMemoryBalancer(max_allowed_ram_mb=1540.0, force_gc_interval_frames=1200)
         self.staff_filter = RefereeStaffFilter()
         self.stream_validator = StreamQualityValidator(freeze_threshold_mse=0.5, max_freeze_frames=40)
-        
-        # Новое: Инициализация климатического процессора и оптического тайм-синхронизатора (версии 5.01)
         self.weather_engine = WeatherAnalyticsEngine()
         self.time_synchronizer = OpticalTimeSynchronizer(scorebug_crop_coords=(20, 40, 180, 80))
+        
+        # Новое: Активация траекторного валидатора снаряда и анти-бликового видеофильтра (версии 5.01)
+        self.ball_validator = BallPuckValidator(sport="football", fps=25.0)
+        self.flicker_filter = AntiFlickerVideoFilter(rolling_window_size=15)
         
         redis_connection_string = os.getenv("REDIS_URL", None)
         self.sentiment_miner = SentimentMinerModule(
@@ -101,8 +105,9 @@ class PrizolovSportsOrchestrator:
         self.line_change_analyser = LineChangeAnalyser(sport=self.current_sport)
         self.lens_calibrator = LensDistortionCalibrator(img_width=1920, img_height=1080)
         
-        # Загружаем базовый демонстрационный климатический отчет для открытых стадионов
-        # В проде данные асинхронно обновляются через API-фиды
+        # Переинициализируем валидатор снаряда под конкретный спорт сессии
+        self.ball_validator = BallPuckValidator(sport=self.current_sport, fps=25.0)
+        
         self.weather_engine.load_match_weather_report({"condition": "RAIN", "wind_speed": 6.5, "temperature": 11.0})
         
         await self.sentiment_miner.connect_redis()
@@ -161,16 +166,21 @@ class PrizolovSportsOrchestrator:
             return False
 
         try:
+            # Новое: Оптическая стабилизация яркости и гашение мерцания прожекторов на лету
+            if "raw_video_frame" in tracking_data:
+                tracking_data["raw_video_frame"] = self.flicker_filter.process_and_stabilize_light(
+                    tracking_data["raw_video_frame"]
+                )
+
             # Попиксельный анализ целостности видеопотока
             if "raw_video_frame" in tracking_data:
                 is_valid_stream = self.stream_validator.check_stream_integrity(tracking_data["raw_video_frame"])
                 if not is_valid_stream or self.stream_validator.is_stream_broken:
                     tracking_data["is_game_stopped"] = True
 
-                # Новое: Асинхронная оптическая live-синхронизация таймера табло матча через OCR
+                # Оптическая live-синхронизация таймера табло матча через OCR
                 ocr_seconds = self.time_synchronizer.sync_time_by_ocr(tracking_data["raw_video_frame"])
                 if ocr_seconds is not None and ocr_seconds > 0:
-                    # Корректируем переменные времени рантайма на основе реального табло стадиона
                     elapsed_seconds = ocr_seconds
                     total_match_seconds = 5400 if self.current_sport == "football" else (3600 if self.current_sport == "hockey" else 2400)
                     time_left_ratio = max(0.0, 1.0 - (elapsed_seconds / total_match_seconds))
@@ -193,11 +203,20 @@ class PrizolovSportsOrchestrator:
                 real_anchors = self.calibrator.get_static_football_pitch_anchors()
                 self.calibrator.compute_matrix(cv_img_pts, real_anchors)
 
-            # Трансформация пикселей в метры поля
+            # Трансформация выпрямленных пикселей в метры поля
             if self.calibrator and self.calibrator.h_matrix is not None:
                 raw_bx, raw_by = self.calibrator.transform_point(raw_bx, raw_by)
-                tracking_data["ball_x"] = raw_bx
-                tracking_data["ball_y"] = raw_by
+
+            # Новое: Глубокая кинематическая валидация траектории и фильтрация аномалий скоростей снаряда
+            # Защищает от ложных срабатываний детектора и восстанавливает координаты при окклюзиях
+            is_ball_found_by_yolo = "ball_x" in tracking_data and "ball_y" in tracking_data
+            valid_bx, valid_by, is_active_ball = self.ball_validator.validate_and_smooth_trajectory(
+                raw_bx, raw_by, is_found_by_yolo=is_ball_found_by_yolo
+            )
+            
+            # Обновляем координаты на идеально сглаженные и проверенные физикой
+            tracking_data["ball_x"] = valid_bx
+            tracking_data["ball_y"] = valid_by
 
             # Очистка детекций от ложных силуэтов судей
             if "raw_player_detections" in tracking_data and "raw_video_frame" in tracking_data:
@@ -219,15 +238,15 @@ class PrizolovSportsOrchestrator:
                     self.active_module.base_lambda_a *= strength_idx_a
                     self.active_module.base_lambda_b *= strength_idx_b
 
-            # Новое: Тонкая климатическая калибровка интенсивностей атак в зависимости от погоды (ливень/снег)
+            # Тонкая климатическая калибровка интенсивностей атак
             if self.weather_engine and self.weather_engine.is_active:
                 w_decay_a, w_decay_b = self.weather_engine.calculate_weather_decay_modifiers()
                 if hasattr(self.active_module, "base_lambda_a"):
                     self.active_module.base_lambda_a *= w_decay_a
                     self.active_module.base_lambda_b *= w_decay_b
 
-            if self.event_detector:
-                live_event = self.event_detector.analyze_ball_movement(raw_bx, raw_by)
+            if self.event_detector and is_active_ball:
+                live_event = self.event_detector.analyze_ball_movement(valid_bx, valid_by)
                 if live_event:
                     tracking_data["is_game_stopped"] = True
 
