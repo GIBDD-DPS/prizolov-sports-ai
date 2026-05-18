@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ============================================
 # Prizolov Sports AI - Main Execution Engine
-# Version: 5.03 (Disaster Recovery Active Core)
+# Version: 5.04 (Runtime Graphics Bypass)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
@@ -10,6 +10,11 @@
 import sys
 import os
 from pathlib import Path
+
+# Новое: Ультимативный системный хак для обхода ошибки libGL.so.1 в Amvera Cloud
+# Принудительно отключаем использование графического движка X11/Wayland и OpenGL рантаймом OpenCV
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
+os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
 
 # 1. Жесткое перестроение путей поиска модулей для Amvera Cloud environment
 current_dir = Path(__file__).resolve().parent
@@ -54,8 +59,12 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-# Нативные CV-зависимости
-import cv2
+# Нативные CV-зависимости (Импортируем headless-версию)
+try:
+    import cv2
+except ImportError:
+    cv2 = None
+
 try:
     from ultralytics import YOLO
 except ImportError:
@@ -65,7 +74,6 @@ except ImportError:
 try:
     from core.orchestrator import PrizolovSportsOrchestrator
     from core.admin_dashboard import start_dashboard_server
-    # Новое: Импорт S3-бэкап модуля версии 5.01
     from core.s3_backup import S3CloudBackupHub
 except ModuleNotFoundError:
     from prizolov_sports_ai.core.orchestrator import PrizolovSportsOrchestrator
@@ -107,10 +115,9 @@ async def main_inference_loop(sport: str, match_id: str, host: str, video_source
     # 2. Активация Live-админ-панели управления в продакшене Amvera Cloud
     await start_dashboard_server(orchestrator, port=dashboard_port)
     
-    # 3. Новое: Инициализация и асинхронный запуск фонового S3-бэкап воркера
+    # 3. Инициализация и асинхронный запуск фонового S3-бэкап воркера
     s3_hub = S3CloudBackupHub()
     persistent_dir = os.getenv("PERSISTENT_DATA_DIR", "/data")
-    # Запускаем периодический бэкап раз в 10 минут (600 секунд) без блокировки основного цикла
     asyncio.create_task(s3_hub.run_periodic_backup_loop(base_data_dir=persistent_dir, interval_seconds=600))
     
     # Инициализация стартового протокола
@@ -127,10 +134,13 @@ async def main_inference_loop(sport: str, match_id: str, host: str, video_source
 
     # 5. Подключение к источнику трансляции (RTSP / RTMP / MP4)
     logger.info(f"Открытие live-трансляции: {video_source}")
-    cap = cv2.VideoCapture(video_source if not video_source.isdigit() else int(video_source))
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
+    if cv2 is not None:
+        cap = cv2.VideoCapture(video_source if not video_source.isdigit() else int(video_source))
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
+    else:
+        cap = None
     
-    if not cap.isOpened():
+    if cap is None or not cap.isOpened():
         logger.error(f"Критическая ошибка: Не удалось открыть видеопоток {video_source}")
         await orchestrator.shutdown()
         return
@@ -167,7 +177,7 @@ async def main_inference_loop(sport: str, match_id: str, host: str, video_source
                 "ball_x": 0.0, "ball_y": 0.0, "ball_owner_team": None,
                 "recent_dominance_ratio": 0.5, "live_xg_a": 0.0, "live_xg_b": 0.0,
                 "danger_attacks_a": 0, "danger_attacks_b": 0,
-                "raw_video_frame": frame  # Передаем ссылку на кадр для судейского фильтра и детектора фризов
+                "raw_video_frame": frame
             }
 
             # 6. Асинхронный вызов инференса YOLOv10
@@ -176,22 +186,21 @@ async def main_inference_loop(sport: str, match_id: str, host: str, video_source
                 
                 if results and len(results) > 0:
                     boxes = results.boxes
-                    # Подготавливаем массив сырых детекций игроков для фильтра окклюзий
                     raw_player_detections = []
                     
                     for box in boxes:
                         cls_id = int(box.cls)
-                        xyxy = box.xyxy.tolist()[0]
+                        xyxy = box.xyxy.tolist()
                         
-                        if cls_id == 0:  # Игровой снаряд
-                            tracking_data["ball_x"] = (xyxy[0] + xyxy[2]) / 2.0
-                            tracking_data["ball_y"] = (xyxy[1] + xyxy[3]) / 2.0
+                        if cls_id == 0:
+                            tracking_data["ball_x"] = (xyxy + xyxy) / 2.0
+                            tracking_data["ball_y"] = (xyxy + xyxy) / 2.0
                             tracking_data["puck_visible"] = True
                             tracking_data["puck_x"] = tracking_data["ball_x"]
                             tracking_data["puck_y"] = tracking_data["ball_y"]
-                        else:  # Силуэты спортсменов / персонала
+                        else:
                             raw_player_detections.append({
-                                "track_id": int(box.id[0]) if box.is_track else -1,
+                                "track_id": int(box.id) if box.is_track else -1,
                                 "box": xyxy,
                                 "cls_id": cls_id
                             })
@@ -199,6 +208,7 @@ async def main_inference_loop(sport: str, match_id: str, host: str, video_source
                     tracking_data["raw_player_detections"] = raw_player_detections
 
             await orchestrator.process_cv_frame(
+                match_id=match_id,
                 tracking_data=tracking_data,
                 game_time_str=game_time_str,
                 time_left_ratio=time_left_ratio,
@@ -211,7 +221,8 @@ async def main_inference_loop(sport: str, match_id: str, host: str, video_source
     except Exception as e:
         logger.critical(f"Сбой в цикле инференса видеопотока: {e}")
     finally:
-        cap.release()
+        if cap:
+            cap.release()
         executor.shutdown()
         await orchestrator.shutdown()
         logger.info("=== Модуль Prizolov Sports AI успешно выгружен из системы ===")
