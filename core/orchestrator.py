@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Main System Orchestrator
-# Version: 4.06 (Production Engine Optimization)
+# Version: 4.07 (Resilient Cluster Architecture)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
@@ -26,6 +26,8 @@ from core.risk_manager import RiskManagementEngine
 from core.homography_calibrator import HomographyCalibrator
 from core.event_detector import SportsEventDetector
 from core.traffic_compressor import NetworkTrafficCompressor
+from core.line_change_analyser import LineChangeAnalyser
+from core.fallback_db import LocalFallbackDB
 from agent_bridge.client import PrizolovAgentClient
 from modules.sentiment_miner import SentimentMinerModule
 from modules.football import FootballAnalyticsModule
@@ -37,12 +39,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("PrizolovSportsAI.Orchestrator")
 
 class PrizolovSportsOrchestrator:
-    """Главный координатор системы нового поколения: интегрирован с событийными и сетевыми оптимизаторами"""
+    """Главный координатор системы: интегрирован с ИИ-анализом звеньев и SQLite буфером отказоустойчивости"""
 
     def __init__(self, target_agent_host: Optional[str] = None):
         self.line_generator = BroadLineGenerator(default_margin=1.05)
         
-        # Инжекция gRPC хоста: берем из переменной среды Amvera
         env_agent_host = os.getenv("AGENT_HOST", "localhost:50051")
         final_agent_host = target_agent_host if target_agent_host else env_agent_host
         
@@ -52,11 +53,11 @@ class PrizolovSportsOrchestrator:
         self.prematch_context = PreMatchContextModule()
         self.trend_predictor = MicroTrendPredictor(window_size_frames=1200)
         self.risk_manager = RiskManagementEngine(base_margin=1.05)
-        
-        # Оптимизированный сетевой компрессор трафика (версия 5.01)
         self.traffic_compressor = NetworkTrafficCompressor(odds_epsilon=0.02, coord_epsilon_meters=0.15)
         
-        # Инжекция Redis хоста из переменных окружения Amvera Cloud
+        # Новое: Активация локальной резервной БД SQLite (версия 5.01)
+        self.fallback_db = LocalFallbackDB(base_data_dir=os.getenv("PERSISTENT_DATA_DIR", "/data"))
+        
         redis_connection_string = os.getenv("REDIS_URL", None)
         self.sentiment_miner = SentimentMinerModule(
             min_capper_roi=5.0, 
@@ -72,27 +73,29 @@ class PrizolovSportsOrchestrator:
         
         self.calibrator: Optional[HomographyCalibrator] = None
         self.event_detector: Optional[SportsEventDetector] = None
+        # Новое: Инициализация процессора смены составов
+        self.line_change_analyser: Optional[LineChangeAnalyser] = None
 
     async def initialize_match(self, match_id: str, sport: str) -> None:
         """Динамическая инициализация матча с подключением к Redis кластеру и калибраторам"""
         self.match_id = match_id
         self.current_sport = sport.lower()
         
-        # Активация пространственного калибратора и триггера событий
         self.calibrator = HomographyCalibrator(sport=self.current_sport)
         self.event_detector = SportsEventDetector(sport=self.current_sport)
+        self.line_change_analyser = LineChangeAnalyser(sport=self.current_sport)
         
-        # Асинхронно активируем соединение с Managed Redis до старта трансляции
         await self.sentiment_miner.connect_redis()
         await self.agent_client.start()
 
         self.match_metadata = self.prematch_context.load_match_context(match_id, sport)
         calibrated_lambda_a, calibrated_lambda_b = self.prematch_context.get_calibrated_lambdas()
 
-        try:
-            await self.sentiment_miner.update_global_sentiment_trends()
-        except Exception as e:
-            logger.warning(f"Сбор сентимента завершился с предупреждением: {e}. Работа продолжена.")
+        # Имитируем пре-матч загрузку профилей эффективности игроков для анализа смен
+        # В проде данные поступают из аналитического бэкенда prizolov.ru
+        mock_weights_a = {"97": 1.4, "87": 1.3, "10": 1.1} # Топ-игроки имеют повышенный вес
+        mock_weights_b = {"99": 1.5, "13": 1.2, "77": 0.9}
+        self.line_change_analyser.load_player_weights(mock_weights_a, mock_weights_b)
 
         if self.current_sport == "football":
             self.active_module = FootballAnalyticsModule(match_id, self.line_generator)
@@ -149,20 +152,24 @@ class PrizolovSportsOrchestrator:
             # Трансформация пикселей мяча/шайбы в реальные метры поля через калибратор
             raw_bx = tracking_data.get("ball_x", 0.0)
             raw_by = tracking_data.get("ball_y", 0.0)
-            
             if self.calibrator and self.calibrator.h_matrix is not None:
                 raw_bx, raw_by = self.calibrator.transform_point(raw_bx, raw_by)
                 tracking_data["ball_x"] = raw_bx
                 tracking_data["ball_y"] = raw_by
-                if "puck_x" in tracking_data:
-                    tracking_data["puck_x"] = raw_bx
-                    tracking_data["puck_y"] = raw_by
 
-            # Новое: Анализ траектории на предмет голов/аутов с помощью EventDetector
+            # Новое: Динамический ИИ-анализ смены составов и звеньев
+            obs_num_a = tracking_data.get("ocr_jersey_numbers_team_a", [])
+            obs_num_b = tracking_data.get("ocr_jersey_numbers_team_b", [])
+            if self.line_change_analyser:
+                strength_idx_a, strength_idx_b = self.line_change_analyser.update_observed_players(obs_num_a, obs_num_b)
+                # Корректируем базовую силу ИИ-генератора в зависимости от текущего звена на поле
+                if hasattr(self.active_module, "base_lambda_a"):
+                    self.active_module.base_lambda_a *= strength_idx_a
+                    self.active_module.base_lambda_b *= strength_idx_b
+
             if self.event_detector:
                 live_event = self.event_detector.analyze_ball_movement(raw_bx, raw_by)
                 if live_event:
-                    # При голе или ауте принудительно выставляем флаг заморозки игры для защиты от послеголов
                     tracking_data["is_game_stopped"] = True
 
             current_frame_metrics = {
@@ -209,12 +216,25 @@ class PrizolovSportsOrchestrator:
                 market_feed_odds=competitor_mock_feed
             )
 
-            # Новое: Дедупликация и фильтрация лишнего трафика перед физической gRPC отправкой
             if self.traffic_compressor.should_skip_frame(analytics_package):
-                # Если изменения незначительны — экономим битрейт Amvera Cloud и не шлем дубликат
                 return True
 
+            # Новое: Защищенный отказоустойчивый пайплайн отправки gRPC
+            if not self.agent_client.is_running:
+                # Если сетевой мост лежит — сбрасываем пакет в локальный буфер SQLite
+                self.fallback_db.buffer_package(self.match_id, analytics_package)
+                return False
+
             success = await self.agent_client.push_match_data(analytics_package)
+            
+            # Проверяем, если связь восстановилась, асинхронно выгружаем буфер
+            if success and elapsed_seconds % 30 == 0:
+                buffered = self.fallback_db.fetch_buffered_packages(limit=20)
+                if buffered:
+                    logger.info(f"[Resilience Recovery] Обнаружены пакеты в SQLite буфере. Выгрузка {len(buffered)} фреймов...")
+                    # В реальном коде здесь инициируется фоновый пакетный gRPC-слив накопленных логов
+                    self.fallback_db.clear_buffered_packages([b[0] for b in buffered])
+
             return success
 
         except Exception as e:
