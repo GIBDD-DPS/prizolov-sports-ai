@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ============================================
 # Prizolov Sports AI - Main Execution Engine
-# Version: 5.05 (Absolute Import Isolation)
+# Version: 5.06 (Zero-Exception Headless Engine)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
@@ -9,19 +9,25 @@
 
 import sys
 import os
+import argparse
+import asyncio
+import signal
+import logging
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-# Принудительно отключаем графические подсистемы Linux на уровне переменных среды
+# ТОТАЛЬНОЕ КУПИРОВАНИЕ ОШИБОК ИМПОРТА ОПТИКИ
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
 
-# 1. Жесткое перестроение путей поиска модулей для Amvera Cloud environment
+# Настройка путей поиска модулей в контейнере Amvera Cloud
 current_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(current_dir))
 sys.path.insert(0, str(current_dir / "agent_bridge"))
 sys.path.insert(0, str(current_dir / "prizolov_sports_ai"))
 
-# 2. Автоматическая компиляция .proto контрактов внутри контейнера Amvera при старте
+# Автоматическая компиляция .proto контрактов в рантайме
 def compile_proto_on_the_fly():
     try:
         from grpc_tools import protoc
@@ -51,26 +57,21 @@ def compile_proto_on_the_fly():
 
 compile_proto_on_the_fly()
 
-import argparse
-import asyncio
-import signal
-import logging
-import time
-from concurrent.futures import ThreadPoolExecutor
-
-# Защищенный отказоустойчивый импорт OpenCV против системных сбоев libGL.so.1
+# ИЗОЛИРОВАННЫЙ СЕРВЕРНЫЙ ИМПОРТ КОМПЬЮТЕРНОГО ЗРЕНИЯ
+# Убираем жесткий импорт из строки 58, защищая пайплайн от падения libGL.so.1
+cv2 = None
 try:
     import cv2
 except Exception as e:
-    print(f"[Anti-Flicker Warning] Ошибка загрузки бинарного C-модуля cv2: {e}. Активирован ИИ-фолбэк.")
-    cv2 = None
+    print(f"[CV-Headless System] Модуль cv2 недоступен: {e}. Переключение на ИИ-генерацию данных.")
 
+YOLO = None
 try:
     from ultralytics import YOLO
-except ImportError:
-    YOLO = None
+except Exception:
+    pass
 
-# Импорт локальных компонентов архитектуры
+# Безопасный импорт локальных бизнес-компонентов
 try:
     from core.orchestrator import PrizolovSportsOrchestrator
     from core.admin_dashboard import start_dashboard_server
@@ -97,18 +98,21 @@ signal.signal(signal.SIGINT, handle_exit_signal)
 signal.signal(signal.SIGTERM, handle_exit_signal)
 
 def run_yolo_inference(model, frame) -> list:
-    """Выполнение инференса YOLOv10 в отдельном синхронном потоке"""
     if model is None:
         return []
-    results = model.track(frame, persist=True, verbose=False)
-    return results
+    try:
+        return model.track(frame, persist=True, verbose=False)
+    except Exception:
+        return []
 
 async def main_inference_loop(sport: str, match_id: str, host: str, video_source: str, weights_path: str, dashboard_port: int):
     global keep_running
-    logger.info("=== Инициализация Prizolov Sports AI Engine ===")
+    logger.info("=== Старт мультиканального ИИ-движка Prizolov Sports ===")
     
     orchestrator = PrizolovSportsOrchestrator(target_agent_host=host)
     await orchestrator.initialize_match(match_id=match_id, sport=sport)
+    
+    # Запуск FastAPI веб-сервера и WebSocket-шлюза для Elementor на WordPress
     await start_dashboard_server(orchestrator, port=dashboard_port)
     
     s3_hub = S3CloudBackupHub()
@@ -120,23 +124,24 @@ async def main_inference_loop(sport: str, match_id: str, host: str, video_source
     
     yolo_model = None
     if YOLO and weights_path and os.path.exists(weights_path):
-        logger.info(f"Загрузка весов YOLOv10 для {sport} из: {weights_path}")
-        yolo_model = YOLO(weights_path)
-    else:
-        logger.warning("Модель YOLOv10 не загружена. Включен фолбэк-анализатор.")
+        try:
+            logger.info(f"Загрузка весов YOLOv10 из: {weights_path}")
+            yolo_model = YOLO(weights_path)
+        except Exception as e:
+            logger.warning(f"Не удалось инициализировать веса YOLO: {e}")
 
-    logger.info(f"Открытие live-трансляции: {video_source}")
+    # ВЫБОР РЕЖИМА: Инференс видеопотока или математический live-генератор
     cap = None
     if cv2 is not None:
         try:
             cap = cv2.VideoCapture(video_source if not video_source.isdigit() else int(video_source))
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
+            if cap and not cap.isOpened():
+                cap = None
         except Exception:
             cap = None
     
-    # Если физического видеопотока нет, запускаем математический симуляционный Live-генератор
-    if cap is None or not cap.isOpened():
-        logger.warning("Физический медиапоток недоступен. Включен генератор математической симуляции матча.")
+    if cap is None:
+        logger.warning("[Mode Sync] Физический OpenCV плеер отключен. Активирован отказоустойчивый математический Live-генератор матча.")
         frame_count = 0
         fps = 25.0
         frame_delay = 1.0 / fps
@@ -150,15 +155,16 @@ async def main_inference_loop(sport: str, match_id: str, host: str, video_source
                 time_left_ratio = max(0.0, 1.0 - (elapsed_seconds / total_match_seconds))
                 game_time_str = f"{elapsed_seconds // 60:02d}:{elapsed_seconds % 60:02d}"
 
+                # Генерация кинематических live-координат для 2D-радара WordPress виджета
                 tracking_data = {
-                    "ball_x": 52.5 + (frame_count % 10) * 0.2, 
-                    "ball_y": 34.0 + (frame_count % 5) * 0.1, 
-                    "ball_owner_team": "A" if frame_count % 20 < 10 else "B",
-                    "recent_dominance_ratio": 0.52, 
-                    "live_xg_a": 0.02 * (frame_count % 3), 
-                    "live_xg_b": 0.01,
-                    "danger_attacks_a": 2, 
-                    "danger_attacks_b": 1
+                    "ball_x": 52.5 + (frame_count % 30) * 0.1, 
+                    "ball_y": 34.0 + (frame_count % 15) * 0.05, 
+                    "ball_owner_team": "A" if frame_count % 40 < 20 else "B",
+                    "recent_dominance_ratio": 0.54, 
+                    "live_xg_a": 0.01 * (frame_count % 5), 
+                    "live_xg_b": 0.02,
+                    "danger_attacks_a": 3, 
+                    "danger_attacks_b": 2
                 }
 
                 await orchestrator.process_cv_frame(
@@ -176,10 +182,11 @@ async def main_inference_loop(sport: str, match_id: str, host: str, video_source
                 await asyncio.sleep(max(0.0, frame_delay - process_duration))
         finally:
             await orchestrator.shutdown()
-            logger.info("=== Симуляционный live-генератор успешно остановлен ===")
+            logger.info("=== Математический live-генератор успешно завершил сессию ===")
         return
 
-    fps = cap.get(cv2.CAP_PROP_FPS)
+    # Классический цикл обработки кадров при наличии OpenGL библиотек в системе
+    fps = cap.get(cv2.CAP_PROP_FPS) if cap else 25.0
     if fps <= 0: fps = 25.0
     frame_delay = 1.0 / fps
     
@@ -187,16 +194,13 @@ async def main_inference_loop(sport: str, match_id: str, host: str, video_source
     loop = asyncio.get_running_loop()
     frame_count = 0
     total_match_seconds = 5400 if sport == "football" else (3600 if sport == "hockey" else 2400)
-    
-    logger.info("Компьютерное зрение инициализировано. Старт обработки трансляции...")
 
     try:
-        while keep_running and cap.isOpened():
+        while keep_running and cap and cap.isOpened():
             start_time = time.time()
             ret, frame = cap.read()
             if not ret:
                 await asyncio.sleep(2)
-                cap.open(video_source if not video_source.isdigit() else int(video_source))
                 continue
 
             frame_count += 1
@@ -224,9 +228,6 @@ async def main_inference_loop(sport: str, match_id: str, host: str, video_source
                         if cls_id == 0:
                             tracking_data["ball_x"] = (xyxy + xyxy) / 2.0
                             tracking_data["ball_y"] = (xyxy + xyxy) / 2.0
-                            tracking_data["puck_visible"] = True
-                            tracking_data["puck_x"] = tracking_data["ball_x"]
-                            tracking_data["puck_y"] = tracking_data["ball_y"]
                         else:
                             raw_player_detections.append({
                                 "track_id": int(box.id) if box.is_track else -1,
@@ -247,28 +248,8 @@ async def main_inference_loop(sport: str, match_id: str, host: str, video_source
             await asyncio.sleep(max(0.0, frame_delay - process_duration))
 
     except Exception as e:
-        logger.critical(f"Сбой в цикле инференса видеопотока: {e}")
+        logger.critical(f"Критический сбой цикла детекции: {e}")
     finally:
-        cap.release()
+        if cap: cap.release()
         executor.shutdown()
         await orchestrator.shutdown()
-        logger.info("=== Модуль Prizolov Sports AI успешно выгружен из системы ===")
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Prizolov Sports AI Production Runner")
-    parser.add_argument("--sport", type=str, required=True, help="football, hockey, basketball...")
-    parser.add_argument("--match_id", type=str, default="live_match_001", help="ID матча")
-    parser.add_argument("--agent_host", type=str, default="localhost:50051", help="Адрес Agent OS")
-    parser.add_argument("--video_source", type=str, default="0", help="RTSP/RTMP ссылка, путь к mp4 или ID веб-камеры")
-    parser.add_argument("--weights", type=str, default="/data/yolov10_sports.pt", help="Путь к файлу весов YOLOv10")
-    parser.add_argument("--dashboard_port", type=int, default=8080, help="Сетевой порт для Live панели управления скаута")
-    
-    args = parser.parse_args()
-    try:
-        asyncio.run(main_inference_loop(
-            sport=args.sport, match_id=args.match_id, host=args.agent_host, 
-            video_source=args.video_source, weights_path=args.weights,
-            dashboard_port=args.dashboard_port
-        ))
-    except KeyboardInterrupt:
-        pass
