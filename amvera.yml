@@ -1,24 +1,21 @@
 # ============================================
-# Prizolov Sports AI - Amvera Cloud Config
-# Version: 4.07 (Force Cache Wipe Spec)
+# Prizolov Sports AI - Amvera Infrastructure Config
+# Version: 5.03 (Amvera Native Graphics Fix)
 # Author: Dm.Andreyanov
-# Target: Production deployment at cloud.amvera.ru
+# Organization: Prizolov Market / Prizolov Lab
+# Target: Production Amvera Cloud Buildpack Deployment
 # ============================================
 
 meta:
-  environment: python
-  toolchain:
-    name: pip
-    version: "3.10"
+  environment: "python"
+  toolchain: "pip"
 
 build:
-  requirementsPath: requirements.txt
-  # Полностью отключаем кэш для принудительного обновления всех измененных файлов модулей
-  useCache: false
+  requirements: "requirements.txt"
 
 run:
-  scriptName: null
-  command: python main.py --sport football --match_id live_mcl_football_01 --agent_host localhost:50051
-  persistenceMount: /data
-  containerPort: "80"
-  servicePort: "80"
+  persistence:
+    /data: "persistent-volume"
+  containerPort: "8080"
+  servicePort: "8080"
+  command: "python main.py --sport football --match_id prod_match_001 --agent_host localhost:50051 --dashboard_port 8080"
