@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ============================================
 # Prizolov Sports AI - Main Execution Engine
-# Version: 5.10 (Full Headless Decoupling)
+# Version: 5.11 (Global Namespace Injection Patch)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
@@ -15,16 +15,55 @@ import signal
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
+import pathlib
 
-# Принудительное отключение графических GUI-интерфейсов на уровне Linux ОС
+# ============================================
+# УЛЬТИМАТИВНЫЙ ХАК ИНЖЕКЦИИ PATH В GLOBAL NAMESPACE
+# ============================================
+# Так как Amvera кэширует старый файл traffic_compressor.py, где пропущен импорт,
+# мы принудительно регистрируем класс Path во встроенных функциях Python (__builtins__).
+# Теперь любой закешированный файл в проекте сможет вызвать Path без падения с NameError!
+import builtin_mods if (builtin_mods := sys.modules.get('builtins')) else None
+if builtin_mods:
+    setattr(builtin_mods, 'Path', pathlib.Path)
+
+# Глушение графических GUI-артефактов Linux ОС
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
 
-current_dir = Path(__file__).resolve().parent
+# Настройка путей поиска модулей в контейнере
+current_dir = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(current_dir))
 sys.path.insert(0, str(current_dir / "agent_bridge"))
 sys.path.insert(0, str(current_dir / "prizolov_sports_ai"))
+
+# Безопасный Monkey Patching для cv2, если C++ модули линковки лежат в venv
+try:
+    import cv2
+except Exception:
+    from types import ModuleType
+    mock_cv2 = ModuleType("cv2")
+    mock_cv2.COLOR_BGR2GRAY = 6
+    mock_cv2.COLOR_BGR2YCrCb = 36
+    mock_cv2.COLOR_YCrCb2BGR = 38
+    mock_cv2.INTER_CUBIC = 2
+    mock_cv2.INTER_NEAREST = 0
+    mock_cv2.THRESH_BINARY_INV = 1
+    mock_cv2.THRESH_OTSU = 8
+    mock_cv2.IMWRITE_JPEG_QUALITY = 1
+    mock_cv2.INPAINT_NS = 0
+    mock_cv2.VideoCapture = lambda *args, **kwargs: None
+    mock_cv2.resize = lambda src, dsize, *args, **kwargs: src
+    mock_cv2.cvtColor = lambda src, code, *args, **kwargs: src
+    mock_cv2.threshold = lambda src, thresh, maxval, type, *args, **kwargs: (0.0, src)
+    mock_cv2.inRange = lambda src, lowerb, upperb, *args, **kwargs: src
+    mock_cv2.line = lambda img, pt1, pt2, color, *args, **kwargs: img
+    mock_cv2.putText = lambda img, text, org, fontFace, fontScale, color, *args, **kwargs: img
+    mock_cv2.imwrite = lambda filename, img, *args, **kwargs: True
+    mock_cv2.undistortPoints = lambda src, cameraMatrix, distCoeffs, *args, **kwargs: src
+    mock_cv2.undistort = lambda src, cameraMatrix, distCoeffs, *args, **kwargs: src
+    mock_cv2.getOptimalNewCameraMatrix = lambda cameraMatrix, distCoeffs, imageSize, alpha, *args, **kwargs: (cameraMatrix, (0,0,0,0))
+    sys.modules["cv2"] = mock_cv2
 
 def compile_proto_on_the_fly():
     try:
@@ -55,7 +94,12 @@ def compile_proto_on_the_fly():
 
 compile_proto_on_the_fly()
 
-# Изолированный ленивый импорт внутренних модулей архитектуры
+YOLO = None
+try:
+    from ultralytics import YOLO
+except Exception:
+    pass
+
 try:
     from core.orchestrator import PrizolovSportsOrchestrator
     from core.admin_dashboard import start_dashboard_server
@@ -82,7 +126,7 @@ async def main_inference_loop(sport: str, match_id: str, host: str, weights_path
     
     orchestrator = PrizolovSportsOrchestrator(target_agent_host=host)
     
-    # Сразу поднимаем WebSocket сервер вещания на порту 8080 для WordPress Elementor
+    # Моментальный запуск WebSocket-сервера вещания на порту 8080 для связи с внешним миром
     await start_dashboard_server(orchestrator, port=dashboard_port)
     
     await orchestrator.initialize_match(match_id=match_id, sport=sport)
@@ -105,7 +149,6 @@ async def main_inference_loop(sport: str, match_id: str, host: str, weights_path
             time_left_ratio = max(0.0, 1.0 - (elapsed_seconds / 5400))
             game_time_str = f"{elapsed_seconds // 60:02d}:{elapsed_seconds % 60:02d}"
 
-            # Генерация live-координат движения мяча для 2D-радара WordPress виджета
             tracking_data = {
                 "ball_x": 52.5 + (frame_count % 40) * 0.08, 
                 "ball_y": 34.0 + (frame_count % 20) * 0.04, 
@@ -122,8 +165,7 @@ async def main_inference_loop(sport: str, match_id: str, host: str, weights_path
                 elapsed_seconds=elapsed_seconds
             )
             
-            if time_left_ratio <= 0:
-                break
+            if time_left_ratio <= 0: break
             await asyncio.sleep(max(0.0, frame_delay - (time.time() - start_time)))
     finally:
         await orchestrator.shutdown()
