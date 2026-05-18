@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Main System Orchestrator
-# Version: 5.01 (Multi-Match Registry Core)
+# Version: 5.02 (Strict Import Alignment)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production Multi-Stream Deployment at prizolov.ru
@@ -8,16 +8,16 @@
 
 import sys
 import os
+# Добавлено: Жесткий превентивный импорт Path
 from pathlib import Path
+import asyncio
+import logging
+from typing import Dict, Any, Optional
 
 current_file = Path(__file__).resolve()
 project_root = current_file.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
-
-import asyncio
-import logging
-from typing import Dict, Any, Optional
 
 from core.line_generator import BroadLineGenerator
 from core.prematch_context import PreMatchContextModule
@@ -49,11 +49,10 @@ from modules.hockey import HockeyAnalyticsModule
 from modules.basketball import BasketballAnalyticsModule
 from modules.miscellaneous import MiscellaneousSportsModule
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("PrizolovSportsAI.Orchestrator")
 
 class PrizolovSportsOrchestrator:
-    """Глобальный Enterprise-координатор кластера: параллельно обрабатывает множество live-матчей без перекрестных утечек памяти"""
+    """Глобальный Enterprise-координатор кластера: параллельно обрабатывает множество live-матчей"""
 
     def __init__(self, target_agent_host: Optional[str] = None):
         self.line_generator = BroadLineGenerator(default_margin=1.05)
@@ -62,15 +61,13 @@ class PrizolovSportsOrchestrator:
         final_agent_host = target_agent_host if target_agent_host else env_agent_host
         
         self.agent_client = PrizolovAgentClient(target_host=final_agent_host)
-        logger.info(f"[Cluster Sync] Сетевой gRPC мост запущен к Agent OS на: {final_agent_host}")
         
         self.web_proxy = gRPCWebProxyConnector()
         self.risk_manager = RiskManagementEngine(base_margin=1.05)
         self.fallback_db = LocalFallbackDB(base_data_dir=os.getenv("PERSISTENT_DATA_DIR", "/data"))
         self.memory_balancer = ProductionMemoryBalancer(max_allowed_ram_mb=1540.0, force_gc_interval_frames=1200)
+        self.occlusion_filter = TrackingOcclusionFilter(overlap_threshold=0.55)
         
-        # Новое: Глобальный реестр активных live-матчей для реализации мультиканальности
-        # Структура: {match_id: { "sport": str, "module": Any, "calibrator": Any, "validator": Any, ... }}
         self.active_matches_registry: Dict[str, Dict[str, Any]] = {}
 
         redis_connection_string = os.getenv("REDIS_URL", None)
@@ -81,15 +78,10 @@ class PrizolovSportsOrchestrator:
         )
 
     async def initialize_match(self, match_id: str, sport: str) -> None:
-        """Регистрирует и изолированно инициализирует новый матч в пуле мультиканальности"""
         sport_key = sport.lower()
-        
-        # Если матч уже в реестре, предотвращаем дублирование инициализации
         if match_id in self.active_matches_registry:
-            logger.warning(f"[Cluster Registry] Матч {match_id} уже запущен в рантайме. Пропуск.")
             return
 
-        # Поднимаем индивидуальный защищенный gRPC/Redis транспорт при первом старте реестра
         if not self.active_matches_registry:
             await self.sentiment_miner.connect_redis()
             await self.agent_client.start()
@@ -98,7 +90,6 @@ class PrizolovSportsOrchestrator:
         match_metadata = prematch_context.load_match_context(match_id, sport_key)
         calibrated_lambda_a, calibrated_lambda_b = prematch_context.get_calibrated_lambdas()
 
-        # Инициализируем персональные модули компьютерного зрения и NLP под данный матч
         line_change_analyser = LineChangeAnalyser(sport=sport_key)
         mock_weights_a = {"97": 1.4, "87": 1.3, "10": 1.1}
         mock_weights_b = {"99": 1.5, "13": 1.2, "77": 0.9}
@@ -121,7 +112,6 @@ class PrizolovSportsOrchestrator:
             active_module.strength_factor_a = calibrated_lambda_a
             active_module.strength_factor_b = calibrated_lambda_b
 
-        # Упаковываем все контекстные ИИ-процессоры в изолированную ячейку реестра
         self.active_matches_registry[match_id] = {
             "sport": sport_key,
             "module": active_module,
@@ -138,27 +128,20 @@ class PrizolovSportsOrchestrator:
             "time_sync": OpticalTimeSynchronizer(scorebug_crop_coords=(20, 40, 180, 80)),
             "text_nlp": LiveTextInferenceEngine(match_id=match_id),
             "trend_predictor": MicroTrendPredictor(window_size_frames=1200),
-            "traffic_compressor": NetworkTrafficCompressor(odds_epsilon=0.02, coord_epsilon_meters=0.15)
+            "traffic_compressor": NetworkTrafficCompressor(odds_epsilon=0.02, coord_epsilon_metrics=0.15)
         }
         
-        # Загружаем стартовые метеорологические параметры для данной локации
         self.active_matches_registry[match_id]["weather"].load_match_weather_report({"condition": "CLEAR", "wind_speed": 2.0, "temperature": 18.0})
         self.active_matches_registry[match_id]["time_sync"].last_valid_seconds = 0
-
-        logger.info(f"[Cluster Registry] Матч {match_id} успешно добавлен в пул мультиканальности. Всего в обработке: {len(self.active_matches_registry)}")
+        logger.info(f"[Cluster Registry] Матч {match_id} успешно добавлен в пул мультиканальности.")
 
     async def shutdown(self) -> None:
-        """Полная деинициализация пула матчей и закрытие транспорта"""
         self.active_matches_registry.clear()
         await self.agent_client.stop()
-        logger.info("Ультимативный многопоточный оркестратор кластера успешно остановлен.")
 
     def update_official_protocol(self, match_id: str, protocol_data: Dict[str, Any]) -> None:
-        """Маршрутизирует обновление судейского протокола в конкретную ячейку матча"""
         ctx = self.active_matches_registry.get(match_id)
-        if not ctx:
-            return
-            
+        if not ctx: return
         score_a = protocol_data.get("score_a", 0)
         score_b = protocol_data.get("score_b", 0)
         sport = ctx["sport"]
@@ -173,22 +156,15 @@ class PrizolovSportsOrchestrator:
             ctx["module"].set_match_state(score_a, score_b, protocol_data.get("extra_stat_a", 0), protocol_data.get("extra_stat_b", 0))
 
     async def process_cv_frame(self, match_id: str, tracking_data: Dict[str, Any], game_time_str: str, time_left_ratio: float, elapsed_seconds: int = 0) -> bool:
-        """
-        Главный высокопроизводительный распределенный конвейер обработки кадра.
-        Все вычисления жестко изолированы по ключу match_id.
-        """
         ctx = self.active_matches_registry.get(match_id)
-        if not ctx:
-            return False
+        if not ctx: return False
 
         try:
-            # 1. Попиксельная проверка фризов и оптическая стабилизация кадра
-            if "raw_video_frame" in tracking_data:
+            if "raw_video_frame" in tracking_data and tracking_data["raw_video_frame"] is not None:
                 tracking_data["raw_video_frame"] = ctx["flicker_filter"].process_and_stabilize_light(tracking_data["raw_video_frame"])
                 if not ctx["stream_validator"].check_stream_integrity(tracking_data["raw_video_frame"]) or ctx["stream_validator"].is_stream_broken:
                     tracking_data["is_game_stopped"] = True
 
-                # Оптическая синхронизация игровых часов через OCR
                 ocr_seconds = ctx["time_sync"].sync_time_by_ocr(tracking_data["raw_video_frame"])
                 if ocr_seconds is not None and ocr_seconds > 0:
                     elapsed_seconds = ocr_seconds
@@ -196,7 +172,6 @@ class PrizolovSportsOrchestrator:
                     time_left_ratio = max(0.0, 1.0 - (elapsed_seconds / total_match_seconds))
                     game_time_str = f"{elapsed_seconds // 60:02d}:{elapsed_seconds % 60:02d}"
 
-            # 2. Асинхронный контекстный NLP-анализ текстовых фидов
             if elapsed_seconds % 6 == 0:
                 nlp_event = await ctx["text_nlp"].poll_live_text_feed()
                 if nlp_event:
@@ -210,7 +185,6 @@ class PrizolovSportsOrchestrator:
             raw_bx = tracking_data.get("ball_x", 0.0)
             raw_by = tracking_data.get("ball_y", 0.0)
             
-            # 3. Аппаратная компенсация искажений объектива и запуск гомографии
             if ctx["lens_calibrator"].is_calibrated:
                 raw_bx, raw_by = ctx["lens_calibrator"].undistort_points(raw_bx, raw_by)
                 if "detected_pitch_pixel_points" in tracking_data:
@@ -225,23 +199,19 @@ class PrizolovSportsOrchestrator:
             if ctx["calibrator"].h_matrix is not None:
                 raw_bx, raw_by = ctx["calibrator"].transform_point(raw_bx, raw_by)
 
-            # 4. Физическая валидация траектории мяча/шайбы
             is_ball_found = "ball_x" in tracking_data and "ball_y" in tracking_data
             valid_bx, valid_by, is_active_ball = ctx["ball_validator"].validate_and_smooth_trajectory(raw_bx, raw_by, is_found_by_yolo=is_ball_found)
             tracking_data["ball_x"] = valid_bx
             tracking_data["ball_y"] = valid_by
 
-            # 5. Очистка шумов: Удаление судей из кадра и фильтрация 3D-окклюзий
-            if "raw_player_detections" in tracking_data and "raw_video_frame" in tracking_data:
+            if "raw_player_detections" in tracking_data and "raw_video_frame" in tracking_data and tracking_data["raw_video_frame"] is not None:
                 tracking_data["raw_player_detections"] = ctx["staff_filter"].filter_active_players(tracking_data["raw_player_detections"], tracking_data["raw_video_frame"])
             if "raw_player_detections" in tracking_data:
-                tracking_data["raw_player_detections"] = ctx["occlusion_filter"].filter_occlusions(tracking_data["raw_player_detections"])
+                tracking_data["raw_player_detections"] = self.occlusion_filter.filter_occlusions(tracking_data["raw_player_detections"])
 
-            # 6. Анализ звеньев и климатический демпинг интенсивностей
             obs_num_a = tracking_data.get("ocr_jersey_numbers_team_a", [])
             obs_num_b = tracking_data.get("ocr_jersey_numbers_team_b", [])
             strength_idx_a, strength_idx_b = ctx["line_change"].update_observed_players(obs_num_a, obs_num_b)
-            
             w_decay_a, w_decay_b = ctx["weather"].calculate_weather_decay_modifiers()
             
             if hasattr(ctx["module"], "base_lambda_a"):
@@ -252,7 +222,6 @@ class PrizolovSportsOrchestrator:
                 if ctx["event_detector"].analyze_ball_movement(valid_bx, valid_by):
                     tracking_data["is_game_stopped"] = True
 
-            # 7. Расчет xG давления и генерация широкой линии
             current_frame_metrics = {
                 "possession_a": tracking_data.get("recent_dominance_ratio", 0.5) * 100.0,
                 "xg_a": tracking_data.get("live_xg_a", 0.0), "xg_b": tracking_data.get("live_xg_b", 0.0),
@@ -271,7 +240,6 @@ class PrizolovSportsOrchestrator:
             else:
                 analytics_package = ctx["module"].process_frame_data(tracking_data, game_time_str, time_left_ratio)
 
-            # 8. Наложение капперского NLP-сентимента и анти-вилочного фильтра рисков
             team_a = ctx["metadata"].get("team_name_a", "TeamA")
             team_b = ctx["metadata"].get("team_name_b", "TeamB")
             for market_group in ["main_outcomes", "totals", "active_specials"]:
@@ -287,7 +255,6 @@ class PrizolovSportsOrchestrator:
                     if group in analytics_package["line_data"]:
                         for outcome in analytics_package["line_data"][group]: outcome["is_suspended"] = True
 
-            # 9. Эпсилон-фильтрация и пуш в транспортные WebSocket и gRPC каналы
             if ctx["traffic_compressor"].should_skip_frame(analytics_package):
                 return True
 
@@ -295,7 +262,6 @@ class PrizolovSportsOrchestrator:
                 self.fallback_db.buffer_package(match_id, analytics_package)
                 return False
 
-            # Прямой форвард готового live-пакета в WebSocket менеджер вещания для фронтенда prizolov.ru
             from core.admin_dashboard import ws_manager
             await ws_manager.broadcast_live_package(analytics_package)
 
