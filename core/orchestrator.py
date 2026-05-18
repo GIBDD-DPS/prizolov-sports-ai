@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Main System Orchestrator
-# Version: 4.10 (Fail-Safe Production Core)
+# Version: 4.11 (Environmental & Time Resilient Core)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
@@ -33,6 +33,8 @@ from core.occlusion_filter import TrackingOcclusionFilter
 from core.memory_balancer import ProductionMemoryBalancer
 from core.staff_filter import RefereeStaffFilter
 from core.stream_validator import StreamQualityValidator
+from core.weather_analytics import WeatherAnalyticsEngine
+from core.time_synchronizer import OpticalTimeSynchronizer
 from agent_bridge.client import PrizolovAgentClient
 from agent_bridge.web_proxy import gRPCWebProxyConnector
 from modules.sentiment_miner import SentimentMinerModule
@@ -45,7 +47,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("PrizolovSportsAI.Orchestrator")
 
 class PrizolovSportsOrchestrator:
-    """Главный координатор системы: снабжен судейской фильтрацией и защитой от зависаний трансляции"""
+    """Главный координатор системы нового поколения: интегрирован с погодным ИИ и OCR-синхронизацией времени"""
 
     def __init__(self, target_agent_host: Optional[str] = None):
         self.line_generator = BroadLineGenerator(default_margin=1.05)
@@ -64,10 +66,12 @@ class PrizolovSportsOrchestrator:
         self.fallback_db = LocalFallbackDB(base_data_dir=os.getenv("PERSISTENT_DATA_DIR", "/data"))
         self.occlusion_filter = TrackingOcclusionFilter(overlap_threshold=0.55)
         self.memory_balancer = ProductionMemoryBalancer(max_allowed_ram_mb=1540.0, force_gc_interval_frames=1200)
-        
-        # Новое: Активация ИИ-фильтра судей и валидатора качества потока (версии 5.01)
         self.staff_filter = RefereeStaffFilter()
         self.stream_validator = StreamQualityValidator(freeze_threshold_mse=0.5, max_freeze_frames=40)
+        
+        # Новое: Инициализация климатического процессора и оптического тайм-синхронизатора (версии 5.01)
+        self.weather_engine = WeatherAnalyticsEngine()
+        self.time_synchronizer = OpticalTimeSynchronizer(scorebug_crop_coords=(20, 40, 180, 80))
         
         redis_connection_string = os.getenv("REDIS_URL", None)
         self.sentiment_miner = SentimentMinerModule(
@@ -96,6 +100,10 @@ class PrizolovSportsOrchestrator:
         self.event_detector = SportsEventDetector(sport=self.current_sport)
         self.line_change_analyser = LineChangeAnalyser(sport=self.current_sport)
         self.lens_calibrator = LensDistortionCalibrator(img_width=1920, img_height=1080)
+        
+        # Загружаем базовый демонстрационный климатический отчет для открытых стадионов
+        # В проде данные асинхронно обновляются через API-фиды
+        self.weather_engine.load_match_weather_report({"condition": "RAIN", "wind_speed": 6.5, "temperature": 11.0})
         
         await self.sentiment_miner.connect_redis()
         await self.agent_client.start()
@@ -153,13 +161,20 @@ class PrizolovSportsOrchestrator:
             return False
 
         try:
-            # Новое: Защищенный попиксельный анализ целостности входного видеопотока
-            # Если передан сырой кадр трансляции, проверяем его на предмет зависания (фриза)
+            # Попиксельный анализ целостности видеопотока
             if "raw_video_frame" in tracking_data:
                 is_valid_stream = self.stream_validator.check_stream_integrity(tracking_data["raw_video_frame"])
                 if not is_valid_stream or self.stream_validator.is_stream_broken:
-                    # При фризе или черном экране принудительно переключаем линию в статус экстренной заморозки
                     tracking_data["is_game_stopped"] = True
+
+                # Новое: Асинхронная оптическая live-синхронизация таймера табло матча через OCR
+                ocr_seconds = self.time_synchronizer.sync_time_by_ocr(tracking_data["raw_video_frame"])
+                if ocr_seconds is not None and ocr_seconds > 0:
+                    # Корректируем переменные времени рантайма на основе реального табло стадиона
+                    elapsed_seconds = ocr_seconds
+                    total_match_seconds = 5400 if self.current_sport == "football" else (3600 if self.current_sport == "hockey" else 2400)
+                    time_left_ratio = max(0.0, 1.0 - (elapsed_seconds / total_match_seconds))
+                    game_time_str = f"{elapsed_seconds // 60:02d}:{elapsed_seconds % 60:02d}"
 
             raw_bx = tracking_data.get("ball_x", 0.0)
             raw_by = tracking_data.get("ball_y", 0.0)
@@ -178,19 +193,19 @@ class PrizolovSportsOrchestrator:
                 real_anchors = self.calibrator.get_static_football_pitch_anchors()
                 self.calibrator.compute_matrix(cv_img_pts, real_anchors)
 
-            # Трансформация выпрямленных пикселей в метры поля
+            # Трансформация пикселей в метры поля
             if self.calibrator and self.calibrator.h_matrix is not None:
                 raw_bx, raw_by = self.calibrator.transform_point(raw_bx, raw_by)
                 tracking_data["ball_x"] = raw_bx
                 tracking_data["ball_y"] = raw_by
 
-            # Новое: Глубокая очистка детекций от ложных силуэтов судейского персонала
+            # Очистка детекций от ложных силуэтов судей
             if "raw_player_detections" in tracking_data and "raw_video_frame" in tracking_data:
                 tracking_data["raw_player_detections"] = self.staff_filter.filter_active_players(
                     tracking_data["raw_player_detections"], tracking_data["raw_video_frame"]
                 )
 
-            # Продвинутая 3D-фильтрация окклюзий и взаимных перекрытий игроков в кадре
+            # Продвинутая 3D-фильтрация окклюзий игроков
             if "raw_player_detections" in tracking_data:
                 tracking_data["raw_player_detections"] = self.occlusion_filter.filter_occlusions(
                     tracking_data["raw_player_detections"]
@@ -203,6 +218,13 @@ class PrizolovSportsOrchestrator:
                 if hasattr(self.active_module, "base_lambda_a"):
                     self.active_module.base_lambda_a *= strength_idx_a
                     self.active_module.base_lambda_b *= strength_idx_b
+
+            # Новое: Тонкая климатическая калибровка интенсивностей атак в зависимости от погоды (ливень/снег)
+            if self.weather_engine and self.weather_engine.is_active:
+                w_decay_a, w_decay_b = self.weather_engine.calculate_weather_decay_modifiers()
+                if hasattr(self.active_module, "base_lambda_a"):
+                    self.active_module.base_lambda_a *= w_decay_a
+                    self.active_module.base_lambda_b *= w_decay_b
 
             if self.event_detector:
                 live_event = self.event_detector.analyze_ball_movement(raw_bx, raw_by)
@@ -253,8 +275,7 @@ class PrizolovSportsOrchestrator:
                 market_feed_odds=competitor_mock_feed
             )
 
-            # При зависании трансляции принудительно переключаем итоговый статус флагов отправки в Suspended
-            if self.stream_validator.is_broken_stream:
+            if self.stream_validator.is_stream_broken:
                 for group in ["main_outcomes", "totals", "handicaps"]:
                     if group in analytics_package["line_data"]:
                         for outcome in analytics_package["line_data"][group]:
