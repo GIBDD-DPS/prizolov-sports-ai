@@ -1,49 +1,35 @@
 # ============================================
-# Prizolov Sports AI - Production Dockerfile
-# Version: 5.02 (Headless OS Patch)
+# Prizolov Sports AI - Headless OS Container
+# Version: 5.03 (Strict Core OS Patch)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
-# Target: Optimized Multi-Stage Container Build with OpenCV Fix
+# Target: Production Headless Multi-Object Tracking Environment
 # ============================================
 
-# Шаг 1: Сборка и подготовка зависимостей
-FROM python:3.10-slim AS builder
+FROM python:3.10-slim
 
 WORKDIR /app
 
+# Принудительное обновление менеджера пакетов Debian и установка системных 
+# графических драйверов OpenGL/Mesa для ультимативного устранения падения cv2
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libgl1 \
     gcc \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 
-# Устанавливаем зависимости в изолированную директорию пользователя
-RUN pip install --no-cache-dir --user -r requirements.txt
+# Установка Python зависимостей без использования старого кэша Amvera
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Шаг 2: Финальный легковесный образ для исполнения
-FROM python:3.10-slim AS runner
-
-WORKDIR /app
-
-# Исправлено: Добавлен принудительный апдейт и установка графических библиотек OpenGL/Mesa 
-# для полной ликвидации ошибки ImportError: libGL.so.1 в Amvera Cloud
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libglib2.0-0 \
-    libgl1-mesa-glx \
-    libgl1 \
-    && rm -rf /var/lib/apt/lists/*
-
-# Копируем установленные пакеты из предыдущего шага сборщика
-COPY --from=builder /root/.local /root/.local
 COPY . .
 
-ENV PATH=/root/.local/bin:$PATH
 ENV PYTHONUNBUFFERED=1
-
-# Создаем папку постоянных данных для кэша и логов аудита
-RUN mkdir -p /data
+ENV QT_QPA_PLATFORM=offscreen
 
 EXPOSE 8080
 
-CMD ["python", "main.py", "--sport", "football", "--match_id", "prod_match_001", "--agent_host", "agent-os:50051"]
+CMD ["python", "main.py", "--sport", "football", "--match_id", "prod_match_001", "--agent_host", "localhost:50051", "--dashboard_port", "8080"]
