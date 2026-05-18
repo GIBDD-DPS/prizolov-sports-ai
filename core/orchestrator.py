@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Main System Orchestrator
-# Version: 4.08 (Multimodal Web-Scale Architecture)
+# Version: 4.09 (Production Scaled Runtime)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
@@ -29,6 +29,8 @@ from core.traffic_compressor import NetworkTrafficCompressor
 from core.line_change_analyser import LineChangeAnalyser
 from core.fallback_db import LocalFallbackDB
 from core.lens_calibrator import LensDistortionCalibrator
+from core.occlusion_filter import TrackingOcclusionFilter
+from core.memory_balancer import ProductionMemoryBalancer
 from agent_bridge.client import PrizolovAgentClient
 from agent_bridge.web_proxy import gRPCWebProxyConnector
 from modules.sentiment_miner import SentimentMinerModule
@@ -41,7 +43,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("PrizolovSportsAI.Orchestrator")
 
 class PrizolovSportsOrchestrator:
-    """Главный координатор системы нового поколения: интегрирован с компенсацией дисторсии и gRPC-Web шлюзом"""
+    """Главный координатор системы нового поколения: интегрирован с фильтрацией окклюзий и защитой RAM"""
 
     def __init__(self, target_agent_host: Optional[str] = None):
         self.line_generator = BroadLineGenerator(default_margin=1.05)
@@ -52,14 +54,16 @@ class PrizolovSportsOrchestrator:
         self.agent_client = PrizolovAgentClient(target_host=final_agent_host)
         logger.info(f"[Env Sync] Настроен gRPC мост к Agent OS на адрес: {final_agent_host}")
         
-        # Новое: Активация браузерного gRPC-Web коннектора (версия 5.01)
         self.web_proxy = gRPCWebProxyConnector()
-        
         self.prematch_context = PreMatchContextModule()
         self.trend_predictor = MicroTrendPredictor(window_size_frames=1200)
         self.risk_manager = RiskManagementEngine(base_margin=1.05)
         self.traffic_compressor = NetworkTrafficCompressor(odds_epsilon=0.02, coord_epsilon_meters=0.15)
         self.fallback_db = LocalFallbackDB(base_data_dir=os.getenv("PERSISTENT_DATA_DIR", "/data"))
+        
+        # Новое: Активация 3D-фильтра окклюзий и системного балансировщика оперативной памяти (версии 5.01)
+        self.occlusion_filter = TrackingOcclusionFilter(overlap_threshold=0.55)
+        self.memory_balancer = ProductionMemoryBalancer(max_allowed_ram_mb=1540.0, force_gc_interval_frames=1200)
         
         redis_connection_string = os.getenv("REDIS_URL", None)
         self.sentiment_miner = SentimentMinerModule(
@@ -77,7 +81,6 @@ class PrizolovSportsOrchestrator:
         self.calibrator: Optional[HomographyCalibrator] = None
         self.event_detector: Optional[SportsEventDetector] = None
         self.line_change_analyser: Optional[LineChangeAnalyser] = None
-        # Новое: Оптическая калибровка линз
         self.lens_calibrator: Optional[LensDistortionCalibrator] = None
 
     async def initialize_match(self, match_id: str, sport: str) -> None:
@@ -85,12 +88,9 @@ class PrizolovSportsOrchestrator:
         self.match_id = match_id
         self.current_sport = sport.lower()
         
-        # Разворачиваем калибраторы и триггеры
         self.calibrator = HomographyCalibrator(sport=self.current_sport)
         self.event_detector = SportsEventDetector(sport=self.current_sport)
         self.line_change_analyser = LineChangeAnalyser(sport=self.current_sport)
-        
-        # Новое: Инициализация калибратора линз под стандартное Full HD разрешение вещания
         self.lens_calibrator = LensDistortionCalibrator(img_width=1920, img_height=1080)
         
         await self.sentiment_miner.connect_redis()
@@ -152,16 +152,15 @@ class PrizolovSportsOrchestrator:
             raw_bx = tracking_data.get("ball_x", 0.0)
             raw_by = tracking_data.get("ball_y", 0.0)
             
-            # Новое: Аппаратная компенсация оптической дисторсии «рыбьего глаза» до расчета гомографии
+            # Аппаратная компенсация оптической дисторсии «рыбьего глаза»
             if self.lens_calibrator and self.lens_calibrator.is_calibrated:
                 raw_bx, raw_by = self.lens_calibrator.undistort_points(raw_bx, raw_by)
-                # Корректируем точки детекций разметки, если они переданы от YOLO
                 if "detected_pitch_pixel_points" in tracking_data:
                     tracking_data["detected_pitch_pixel_points"] = [
-                        self.lens_calibrator.undistort_points(pt, pt) for pt in tracking_data["detected_pitch_pixel_points"]
+                        self.lens_calibrator.undistort_points(pt[0], pt[1]) for pt in tracking_data["detected_pitch_pixel_points"]
                     ]
 
-            # Динамическая калибровка матрицы гомографии по выпрямленным точкам
+            # Динамическая калибровка матрицы гомографии
             cv_img_pts = tracking_data.get("detected_pitch_pixel_points", [])
             if len(cv_img_pts) >= 4 and self.current_sport == "football":
                 real_anchors = self.calibrator.get_static_football_pitch_anchors()
@@ -172,6 +171,12 @@ class PrizolovSportsOrchestrator:
                 raw_bx, raw_by = self.calibrator.transform_point(raw_bx, raw_by)
                 tracking_data["ball_x"] = raw_bx
                 tracking_data["ball_y"] = raw_by
+
+            # Новое: Продвинутая 3D-фильтрация окклюзий и взаимных перекрытий силуэтов игроков в кадре
+            if "raw_player_detections" in tracking_data:
+                tracking_data["raw_player_detections"] = self.occlusion_filter.filter_occlusions(
+                    tracking_data["raw_player_detections"]
+                )
 
             if self.line_change_analyser:
                 obs_num_a = tracking_data.get("ocr_jersey_numbers_team_a", [])
@@ -237,11 +242,8 @@ class PrizolovSportsOrchestrator:
                 self.fallback_db.buffer_package(self.match_id, analytics_package)
                 return False
 
-            # Отправка основного бинарного Protobuf-пакета в Agent OS
             success = await self.agent_client.push_match_data(analytics_package)
             
-            # Новое: Дублирование и кодирование фрейма в формат gRPC-Web для прямой трансляции JavaScript-клиентам сайта
-            # Это позволяет фронтенду prizolov.ru забирать поток без посредников напрямую с хоста
             try:
                 _ = self.web_proxy.encode_grpc_web_frame(self.agent_client.stub.StreamMatchAnalytics)
             except Exception:
@@ -250,7 +252,10 @@ class PrizolovSportsOrchestrator:
             if success and elapsed_seconds % 30 == 0:
                 buffered = self.fallback_db.fetch_buffered_packages(limit=20)
                 if buffered:
-                    self.fallback_db.clear_buffered_packages([b for b in buffered])
+                    self.fallback_db.clear_buffered_packages([b[0] for b in buffered])
+
+            # Новое: Вызов менеджера контроля оперативной памяти в конце каждого кадра
+            self.memory_balancer.balance_resources()
 
             return success
 
