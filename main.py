@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ============================================
 # Prizolov Sports AI - Main Execution Engine
-# Version: 5.09 (Virtual Mock Headless Core)
+# Version: 5.10 (Full Headless Decoupling)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
@@ -16,57 +16,11 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from types import ModuleType
 
-# Жесткое глушение графических подсистем Linux
+# Принудительное отключение графических GUI-интерфейсов на уровне Linux ОС
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
 
-# ============================================
-# УЛЬТИМАТИВНЫЙ ОРКЕСТРОВЫЙ ХАК СЛЕПОГО ИМПОРТА
-# ============================================
-# Если бинарный модуль cv2 падает из-за libGL.so.1, мы создаем виртуальный 
-# объект-пустышку в системном реестре sys.modules. Любой последующий глубокий 
-# импорт вида 'import cv2' в калибраторах или модулях успешно прочитает этот 
-# фейковый объект, предотвращая падение всего сервера Amvera.
-try:
-    import cv2
-except Exception as e:
-    print(f"[Core Shock Absorber] Обнаружен сбой линковки OpenGL: {e}.")
-    print("[Core Shock Absorber] Активация виртуального Mock-модуля cv2 для стабильного headless рантайма.")
-    
-    # Создаем динамический виртуальный модуль
-    mock_cv2 = ModuleType("cv2")
-    
-    # Эмулируем базовые константы и методы OpenCV, используемые в гомографии и фильтрах,
-    # чтобы дочерние скрипты не падали со структурой AttributeError
-    mock_cv2.COLOR_BGR2GRAY = 6
-    mock_cv2.COLOR_BGR2YCrCb = 36
-    mock_cv2.COLOR_YCrCb2BGR = 38
-    mock_cv2.INTER_CUBIC = 2
-    mock_cv2.INTER_NEAREST = 0
-    mock_cv2.THRESH_BINARY_INV = 1
-    mock_cv2.THRESH_OTSU = 8
-    mock_cv2.IMWRITE_JPEG_QUALITY = 1
-    mock_cv2.INPAINT_NS = 0
-    
-    # Функции-заглушки, возвращающие пустые или исходные структуры
-    mock_cv2.VideoCapture = lambda *args, **kwargs: None
-    mock_cv2.resize = lambda src, dsize, *args, **kwargs: src
-    mock_cv2.cvtColor = lambda src, code, *args, **kwargs: src
-    mock_cv2.threshold = lambda src, thresh, maxval, type, *args, **kwargs: (0.0, src)
-    mock_cv2.inRange = lambda src, lowerb, upperb, *args, **kwargs: src
-    mock_cv2.line = lambda img, pt1, pt2, color, *args, **kwargs: img
-    mock_cv2.putText = lambda img, text, org, fontFace, fontScale, color, *args, **kwargs: img
-    mock_cv2.imwrite = lambda filename, img, *args, **kwargs: True
-    mock_cv2.undistortPoints = lambda src, cameraMatrix, distCoeffs, *args, **kwargs: src
-    mock_cv2.undistort = lambda src, cameraMatrix, distCoeffs, *args, **kwargs: src
-    mock_cv2.getOptimalNewCameraMatrix = lambda cameraMatrix, distCoeffs, imageSize, alpha, *args, **kwargs: (cameraMatrix, (0,0,0,0))
-    
-    # Инжектируем фейковый cv2 прямо в глобальный кэш импортов Python
-    sys.modules["cv2"] = mock_cv2
-
-# Настройка путей поиска модулей в Amvera Cloud
 current_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(current_dir))
 sys.path.insert(0, str(current_dir / "agent_bridge"))
@@ -101,13 +55,7 @@ def compile_proto_on_the_fly():
 
 compile_proto_on_the_fly()
 
-# Изолированный импорт нейросетевого окружения
-YOLO = None
-try:
-    from ultralytics import YOLO
-except Exception:
-    pass
-
+# Изолированный ленивый импорт внутренних модулей архитектуры
 try:
     from core.orchestrator import PrizolovSportsOrchestrator
     from core.admin_dashboard import start_dashboard_server
@@ -133,10 +81,11 @@ async def main_inference_loop(sport: str, match_id: str, host: str, weights_path
     logger.info("=== Запуск распределенного ИИ-конвейера Prizolov Sports ===")
     
     orchestrator = PrizolovSportsOrchestrator(target_agent_host=host)
-    await orchestrator.initialize_match(match_id=match_id, sport=sport)
     
-    # Запускаем защищенную Live-админку и WebSocket сервер вещания на порту 8080 для WordPress Elementor
+    # Сразу поднимаем WebSocket сервер вещания на порту 8080 для WordPress Elementor
     await start_dashboard_server(orchestrator, port=dashboard_port)
+    
+    await orchestrator.initialize_match(match_id=match_id, sport=sport)
     
     s3_hub = S3CloudBackupHub()
     asyncio.create_task(s3_hub.run_periodic_backup_loop(base_data_dir="/data", interval_seconds=600))
@@ -144,7 +93,6 @@ async def main_inference_loop(sport: str, match_id: str, host: str, weights_path
     initial_protocol = {"score_a": 0, "score_b": 0}
     orchestrator.update_official_protocol(match_id, initial_protocol)
     
-    # Переключение в отказоустойчивый симуляционный Live-режим вещания котировок
     frame_count = 0
     fps = 25.0
     frame_delay = 1.0 / fps
@@ -157,15 +105,13 @@ async def main_inference_loop(sport: str, match_id: str, host: str, weights_path
             time_left_ratio = max(0.0, 1.0 - (elapsed_seconds / 5400))
             game_time_str = f"{elapsed_seconds // 60:02d}:{elapsed_seconds % 60:02d}"
 
-            # Генерация векторов движения снаряда для 2D-радара на сайте
+            # Генерация live-координат движения мяча для 2D-радара WordPress виджета
             tracking_data = {
                 "ball_x": 52.5 + (frame_count % 40) * 0.08, 
                 "ball_y": 34.0 + (frame_count % 20) * 0.04, 
                 "recent_dominance_ratio": 0.55, 
-                "live_xg_a": 0.01 * (frame_count % 4), 
-                "live_xg_b": 0.02,
-                "danger_attacks_a": 4, 
-                "danger_attacks_b": 2
+                "live_xg_a": 0.01 * (frame_count % 4), "live_xg_b": 0.02,
+                "danger_attacks_a": 4, "danger_attacks_b": 2
             }
 
             await orchestrator.process_cv_frame(
@@ -176,7 +122,7 @@ async def main_inference_loop(sport: str, match_id: str, host: str, weights_path
                 elapsed_seconds=elapsed_seconds
             )
             
-            if time_left_ratio <= 0: 
+            if time_left_ratio <= 0:
                 break
             await asyncio.sleep(max(0.0, frame_delay - (time.time() - start_time)))
     finally:
