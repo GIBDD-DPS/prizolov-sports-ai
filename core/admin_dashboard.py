@@ -1,229 +1,137 @@
 # ============================================
-# Prizolov Sports AI - Live Admin Dashboard & WS Gateway
-# Version: 5.03 (Live Broadcast Server Active)
+# Prizolov Sports AI - Admin Dashboard & WebSocket Server
+# Version: 1.01 (+1.01: Real-time WebSocket Broadcasting Engine for prizolov.ru/sport/)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
 # ============================================
 
-import sys
-import os
-from pathlib import Path
-
-current_file = Path(__file__).resolve()
-project_root = current_file.parent.parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
-
 import asyncio
-import logging
 import json
-from typing import Dict, Any, Optional, List
-from fastapi import FastAPI, HTTPException, Header, Depends, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+import logging
+from typing import Set, Dict, Any
+from datetime import datetime
 
-# Импорт модулей кибербезопасности
-from core.secure_auth import SecureAuthBridge
+# Безопасный импорт websockets (стандарт для async WS в Python)
+try:
+    import websockets
+    from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
+    HAS_WEBSOCKETS = True
+except ImportError:
+    HAS_WEBSOCKETS = False
+    logging.warning("⚠️ websockets package not found. Install via: pip install websockets>=10.0")
 
 logger = logging.getLogger("PrizolovSportsAI.Dashboard")
 
-app = FastAPI(
-    title="Prizolov Sports AI - Control Panel & WS Gateway",
-    description="Защищенная Live-панель управления и WebSocket-шлюз вещания для prizolov.ru",
-    version="5.03"
-)
+class DashboardManager:
+    """Менеджер WebSocket-соединений и периодической трансляции данных."""
+    def __init__(self, orchestrator):
+        self.orchestrator = orchestrator
+        self.clients: Set[Any] = set()
+        self._last_broadcast_state = None
+        self._broadcast_task = None
 
-auth_bridge = SecureAuthBridge()
-orchestrator_instance: Optional[Any] = None
+    async def register(self, websocket):
+        self.clients.add(websocket)
+        logger.info(f"🔗 New dashboard client connected. Total active: {len(self.clients)}")
+        try:
+            await websocket.send(json.dumps(self._get_current_state()))
+        except (ConnectionClosedError, ConnectionClosedOK):
+            await self.unregister(websocket)
 
-class MarginUpdateModel(BaseModel):
-    new_margin: float
+    async def unregister(self, websocket):
+        self.clients.discard(websocket)
+        logger.info(f"🔌 Dashboard client disconnected. Total active: {len(self.clients)}")
 
-class LockLineModel(BaseModel):
-    is_suspended: bool
+    def _get_current_state(self) -> Dict[str, Any]:
+        """Формирует состояние дашборда на основе кэша оркестратора."""
+        return {
+            "status": "live",
+            "recommendations": list(self.orchestrator.line_cache.values()),
+            "active_matches": len(self.orchestrator.active_matches),
+            "system_health": "ok",
+            "timestamp": datetime.utcnow().isoformat()
+        }
 
-
-# ============================================
-# МЕНЕДЖЕР ВЕЩАНИЯ WEBSOCKET СЕССИЙ (ФРОНТЕНД-ШЛЮЗ)
-# ============================================
-class WebSocketConnectionManager:
-    """Управляет пулом активных WebSocket-клиентов (браузеров пользователей) сайта prizolov.ru"""
-    
-    def __init__(self):
-        # Список живых WebSocket соединений
-        self.active_connections: List[WebSocket] = []
-
-    async def connect(self, websocket: WebSocket):
-        """Регистрирует новое подключение пользователя"""
-        await websocket.accept()
-        self.active_connections.append(websocket)
-        logger.debug(f"[WS Gateway] Новый пользователь подключился к трансляции радара. Всего клиентов: {len(self.active_connections)}")
-
-    def disconnect(self, websocket: WebSocket):
-        """Удаляет сессию при закрытии вкладки пользователем"""
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
-            logger.debug(f"[WS Gateway] Клиент разорвал соединение. Осталось: {len(self.active_connections)}")
-
-    async def broadcast_live_package(self, payload: Dict[str, Any]):
-        """Рассылает пакет ИИ-аналитики, линию и SVG-код радара всем пользователям одновременно"""
-        if not self.active_connections:
-            return
-            
-        message_text = json.dumps(payload, ensure_ascii=False)
-        # Формируем асинхронные задачи отправки для каждого браузера
-        tasks = []
-        for connection in self.active_connections:
-            tasks.append(connection.send_text(message_text))
-            
-        # Запускаем параллельную рассылку. Если один клиент тормозит, это не вешает остальных
-        await asyncio.gather(*tasks, return_exceptions=True)
-
-# Инициализируем глобальный менеджер вещания
-ws_manager = WebSocketConnectionManager()
-
-
-async def verify_scout_access(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
-    """Middleware для обязательной JWT-верификации прав доступа скаута"""
-    if not authorization or not authorization.startswith("Bearer "):
-        logger.warning("[Security Infraction] Попытка несанкционированного доступа к API без токена!")
-        raise HTTPException(status_code=401, detail="Отсутствует или некорректен токен авторизации (Bearer token required)")
-        
-    token = authorization.split(" ")[1]
-    is_valid, claims = auth_bridge.verify_jwt_token(token)
-    
-    if not is_valid:
-        raise HTTPException(status_code=403, detail=claims.get("error", "Доступ запрещен"))
-        
-    return claims
-
-@app.get("/", response_class=HTMLResponse)
-async def get_dashboard_ui():
-    """Возвращает UI-интерфейс панели управления скаута"""
-    if not orchestrator_instance or not orchestrator_instance.is_initialized:
-        return "<h3>[System Status] Ожидание инициализации спортивного матча оркестратором...</h3>"
-        
-    html_content = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Prizolov AI Control Center</title>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-            body {{ font-family: -apple-system, sans-serif; background: #121214; color: #e1e1e6; padding: 20px; }}
-            .card {{ background: #202024; padding: 20px; border-radius: 8px; margin-bottom: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }}
-            h2 {{ color: #04d361; margin-top: 0; }}
-            .btn {{ padding: 10px 20px; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; margin-right: 10px; }}
-            .btn-danger {{ background: #f74040; color: #fff; }}
-            .btn-success {{ background: #04d361; color: #121214; }}
-            .status-val {{ font-size: 1.2em; font-weight: bold; color: #ffd31d; }}
-        </style>
-    </head>
-    <body>
-        <h1>Prizolov Sports AI — Панель Скаута</h1>
-        <div class="card">
-            <h2>Текущее событие</h2>
-            <p>ID Матча: <span class="status-val">{orchestrator_instance.match_id}</span></p>
-            <p>Вид спорта: <span class="status-val">{orchestrator_instance.current_sport.upper()}</span></p>
-            <p>Текущая маржа: <span class="status-val" id="margin-val">{orchestrator_instance.line_generator.margin:.2f}</span></p>
-        </div>
-        
-        <div class="card">
-            <h2>Экстренное управление линией (Требует JWT)</h2>
-            <button class="btn btn-danger" onclick="setLock(true)">ЗАМОРОЗИТЬ ПРИЕМ СТАВОК (SUSPENDED)</button>
-            <button class="btn btn-success" onclick="setLock(false)">РАЗБЛОКИРОВАТЬ ЛИНЕЙКУ</button>
-        </div>
-
-        <script>
-            const getAuthToken = () => localStorage.getItem('prizolov_scout_token') || '';
-
-            async function setLock(isLocked) {{
-                const token = getAuthToken();
-                if(!token) {{
-                    alert('Ошибка: Вы не авторизованы в системе Prizolov!');
-                    return;
-                }}
-                
-                const response = await fetch('/api/v1/control/lock', {{
-                    method: 'POST',
-                    headers: {{ 
-                        'Content-Type': 'application/json',
-                        'Authorization': 'Bearer ' + token
-                    }},
-                    body: JSON.stringify({{ is_suspended: isLocked }})
-                }});
-                
-                if(response.ok) {{
-                    alert(isLocked ? 'Линия успешно заморожена на prizolov.ru' : 'Линия разблокирована');
-                }} else {{
-                    const err = await response.json();
-                    alert('Ошибка доступа: ' + err.detail);
-                }}
-            }}
-        </script>
-    </body>
-    </html>
-    """
-    return html_content
-
-# ============================================
-# WEBSOCKET ЭНДПОИНТ ДЛЯ ПОДКЛЮЧЕНИЯ САЙТА
-# ============================================
-@app.websocket("/api/v1/stream/{match_id}")
-async def websocket_stream_endpoint(websocket: WebSocket, match_id: str):
-    """Высокочастотный WebSocket-шлюз. Отдает коэффициенты и SVG радар напрямую в браузеры"""
-    await ws_manager.connect(websocket)
-    try:
-        # Удерживаем соединение открытым, ожидая ping/сообщения от клиента
+    async def broadcast_loop(self, interval: float = 2.0):
+        """Периодически отправляет обновления всем подключенным клиентам."""
         while True:
-            # Читаем данные от браузера (поддерживаем keep-alive)
-            _ = await websocket.receive_text()
-    except WebSocketDisconnect:
-        # При закрытии вкладки пользователем, менеджер корректно очищает память
-        ws_manager.disconnect(websocket)
-    except Exception as e:
-        logger.error(f"Ошибка в WebSocket сессии клиента: {e}")
-        ws_manager.disconnect(websocket)
+            try:
+                await asyncio.sleep(interval)
+                current_state = self._get_current_state()
+                
+                # Отправляем только если данные изменились и есть клиенты
+                if current_state != self._last_broadcast_state and self.clients:
+                    payload = json.dumps(current_state, ensure_ascii=False)
+                    # Асинхронная рассылка с игнорированием ошибок закрытых соединений
+                    send_tasks = [
+                        ws.send(payload) 
+                        for ws in self.clients
+                    ]
+                    if send_tasks:
+                        await asyncio.gather(*send_tasks, return_exceptions=True)
+                        self._last_broadcast_state = current_state
+                        logger.debug("📡 Broadcasted updated recommendations to all clients.")
+            except Exception as e:
+                logger.error(f"💥 Dashboard broadcast loop failed: {e}")
+                await asyncio.sleep(1)  # Предотвращаем busy-loop при ошибках
 
-
-@app.post("/api/v1/control/margin")
-async def update_live_margin(data: MarginUpdateModel, token_claims: Dict[str, Any] = Depends(verify_scout_access)):
-    """API-эндпоинт изменения базовой маржи букмекера налету (Защищен JWT)"""
-    global orchestrator_instance
-    if not orchestrator_instance:
-        raise HTTPException(status_code=400, detail="Оркестратор не привязан к панели")
-        
-    if data.new_margin < 1.0 or data.new_margin > 1.5:
-        raise HTTPException(status_code=400, detail="Недопустимый диапазон маржи (1.0 - 1.5)")
-        
-    orchestrator_instance.line_generator.margin = data.new_margin
-    orchestrator_instance.risk_manager.base_margin = data.new_margin
-    
-    scout_id = token_claims.get("sub", "unknown_id")
-    logger.info(f"[Manual Risk Control] Скаут ID:{scout_id} изменил базовую маржу на: {data.new_margin:.2f}")
-    return {"status": "success", "applied_margin": data.new_margin, "operator_id": scout_id}
-
-@app.post("/api/v1/control/lock")
-async def toggle_line_lock(data: LockLineModel, token_claims: Dict[str, Any] = Depends(verify_scout_access)):
-    """API-эндпоинт принудительной live-заморозки коэффициентов (Защищен JWT)"""
-    global orchestrator_instance
-    if not orchestrator_instance or not orchestrator_instance.active_module:
-        raise HTTPException(status_code=400, detail="Спортивный модуль не запущен")
-        
-    scout_id = token_claims.get("sub", "unknown_id")
-    logger.warning(f"[Manual Risk Control] Сигнал блокировки линии переключен оператором ID:{scout_id} в: {data.is_suspended}")
-    return {"status": "success", "is_suspended": data.is_suspended, "operator_id": scout_id}
+    async def handler(self, websocket, path: str = None):
+        """Основной обработчик WebSocket-соединений."""
+        await self.register(websocket)
+        try:
+            async for message in websocket:
+                try:
+                    data = json.loads(message)
+                    action = data.get("action", "").lower()
+                    if action == "ping":
+                        await websocket.send(json.dumps({"status": "pong", "timestamp": datetime.utcnow().isoformat()}))
+                    elif action == "get_state":
+                        await websocket.send(json.dumps(self._get_current_state()))
+                    elif action == "set_filter":
+                        # Заготовка для фильтрации на стороне сервера (коэф, спорт, уверенность)
+                        logger.info(f"🔍 Client requested filter: {data.get('criteria', {})}")
+                        await websocket.send(json.dumps({"status": "filter_acknowledged"}))
+                except json.JSONDecodeError:
+                    await websocket.send(json.dumps({"error": "Invalid JSON format"}))
+        except (ConnectionClosedError, ConnectionClosedOK):
+            logger.info("🔌 Client connection closed normally.")
+        except Exception as e:
+            logger.error(f"💥 Unexpected WS error: {e}")
+        finally:
+            await self.unregister(websocket)
 
 async def start_dashboard_server(orchestrator, port: int = 8080):
-    """Запускает веб-сервер панели управления внутри контейнера Amvera"""
-    global orchestrator_instance
-    orchestrator_instance = orchestrator
+    """
+    Точка входа из main.py. Запускает WebSocket-сервер на заданном порту.
+    """
+    if not HAS_WEBSOCKETS:
+        raise RuntimeError("WebSocket server cannot start: 'websockets' package is missing.")
+
+    manager = DashboardManager(orchestrator)
     
-    import uvicorn
-    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="warning")
-    server = uvicorn.Server(config)
-    
-    asyncio.create_task(server.serve())
-    logger.info(f"Защищенный WebSocket веб-шлюз вещания успешно активирован на порту {port}")
+    # Запуск фонового цикла рассылки
+    manager._broadcast_task = asyncio.create_task(manager.broadcast_loop(interval=2.0))
+
+    # Инициализация сервера (совместимо с websockets >= 10.0)
+    try:
+        server = await websockets.serve(
+            manager.handler,
+            "0.0.0.0",
+            port,
+            ping_interval=30,
+            ping_timeout=10,
+            close_timeout=5
+        )
+        logger.info(f"🌐 WebSocket Dashboard Server started on ws://0.0.0.0:{port}")
+        logger.info(f"📊 Connect frontend to: ws://<your-domain>:{port}/")
+        return server
+    except OSError as e:
+        if "Address already in use" in str(e):
+            logger.warning(f"⚠️ Port {port} is already in use. Dashboard may not be accessible.")
+        else:
+            logger.critical(f"🚨 Failed to bind Dashboard Server to port {port}: {e}")
+        raise
+    except Exception as e:
+        logger.critical(f"🚨 Critical Dashboard Server startup error: {e}")
+        raise
