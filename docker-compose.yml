@@ -1,52 +1,16 @@
-# ============================================
-# Prizolov Sports AI - Multi-Container Orchestration
-# Version: 5.01 (Initial Infrastructure Release)
-# Author: Dm.Andreyanov
-# Organization: Prizolov Market / Prizolov Lab
-# Target: Complete Local & Production Dev Stack
-# ============================================
-
-version: '3.8'
-
+version: "3.8"
 services:
-  # Основной сервис ИИ-аналитики и компьютерного зрения
-  sports-ai:
+  prizolov-sports-ai:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: prizolov_sports_ai_prod
-    restart: always
-    ports:
-      - "8080:8080" # Внешний порт для Административной Live-панели скаута
+    container_name: prizolov_ai_core
+    restart: unless-stopped
     environment:
-      - AGENT_HOST=agent-os:50051
-      - REDIS_URL=redis://redis-cache:6379/0
-    volumes:
-      - prizolov_data:/data # Монтирование постоянного диска для хранения весов моделей и логов аудита
-    depends_on:
-      - redis-cache
-    networks:
-      - prizolov_network
-
-  # Высокоскоростной In-Memory кэш для профилей капперов и ИИ-сентимента
-  redis-cache:
-    image: redis:7.2-alpine
-    container_name: prizolov_redis_cache
-    restart: always
-    command: redis-server --appendonly yes --requirepass prizolov_secure_pass_2026
+      - MOCK_MODE=true
+      - DISCOVERY_INTERVAL=45
     ports:
-      - "6379:6379"
+      - "8080:8080"
     volumes:
-      - redis_data:/data
-    networks:
-      - prizolov_network
-
-volumes:
-  prizolov_data:
-    driver: local
-  redis_data:
-    driver: local
-
-networks:
-  prizolov_network:
-    driver: bridge
+      - ./data:/app/data
+    command: ["--mock-mode"]
