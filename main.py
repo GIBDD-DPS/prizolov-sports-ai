@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ============================================
 # Prizolov Sports AI - Main Execution Engine
-# Version: 5.12 (Global Namespace Injection Fix)
+# Version: 5.13 (Global Type System Injection)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
@@ -16,14 +16,21 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 import pathlib
+import typing
 
 # ============================================
-# ИСПРАВЛЕННЫЙ ХАК ИНЖЕКЦИИ PATH В GLOBAL NAMESPACE
+# УЛЬТИМАТИВНЫЙ ХАК ИНЖЕКЦИИ СИСТЕМЫ ТИПОВ В BUILTINS
 # ============================================
-# Нативно внедряем класс Path во встроенные функции Python (builtins)
-# Теперь закешированный компрессор прочитает Path из глобальной памяти без ошибок!
+# Нативно внедряем класс Path и типы аннотаций typing прямо во встроенные функции 
+# языка Python. Это полностью ликвидирует любые скрытые NameError во всех 
+# закешированных модулях ядра (line_change_analyser, traffic_compressor и др.)!
 import builtins
 setattr(builtins, 'Path', pathlib.Path)
+setattr(builtins, 'Tuple', typing.Tuple)
+setattr(builtins, 'List', typing.List)
+setattr(builtins, 'Dict', typing.Dict)
+setattr(builtins, 'Any', typing.Any)
+setattr(builtins, 'Optional', typing.Optional)
 
 # Глушение графических GUI-артефактов Linux ОС
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -124,7 +131,7 @@ async def main_inference_loop(sport: str, match_id: str, host: str, weights_path
     
     orchestrator = PrizolovSportsOrchestrator(target_agent_host=host)
     
-    # Моментальный запуск WebSocket-сервера вещания на порту 8080
+    # Моментальный запуск WebSocket-сервера вещания на порту 8080 для связи с Elementor шорткодом
     await start_dashboard_server(orchestrator, port=dashboard_port)
     
     await orchestrator.initialize_match(match_id=match_id, sport=sport)
