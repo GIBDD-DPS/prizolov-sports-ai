@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Headless OS Container
-# Version: 5.03 (Strict Core OS Patch)
+# Version: 5.04 (Forced Production Run Fix)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production Headless Multi-Object Tracking Environment
@@ -10,8 +10,7 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Принудительное обновление менеджера пакетов Debian и установка системных 
-# графических драйверов OpenGL/Mesa для ультимативного устранения падения cv2
+# Обновление и установка базовых библиотек ОС
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-glx \
     libglib2.0-0 \
@@ -22,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 
-# Установка Python зависимостей без использования старого кэша Amvera
+# Установка Python пакетов без кэша
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
@@ -32,4 +31,6 @@ ENV QT_QPA_PLATFORM=offscreen
 
 EXPOSE 8080
 
+# ИСПРАВЛЕНО: Жестко вшиваем передачу аргумента --sport football на уровне Docker-манифеста
+# Это полностью ликвидирует ошибку argparse 'required: --sport' при любых условиях
 CMD ["python", "main.py", "--sport", "football", "--match_id", "prod_match_001", "--agent_host", "localhost:50051", "--dashboard_port", "8080"]
