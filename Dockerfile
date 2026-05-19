@@ -26,6 +26,5 @@ ENV PYTHONUNBUFFERED=1 \
 
 EXPOSE 8080
 
-# ENTRYPOINT гарантирует, что любые CMD-аргументы добавятся после python main.py
 ENTRYPOINT ["python", "main.py"]
 CMD ["--mock-mode"]
