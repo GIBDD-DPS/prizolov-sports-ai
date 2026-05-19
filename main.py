@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ============================================
 # Prizolov Sports AI - Main Execution Engine
-# Version: 5.13 (Global Type System Injection)
+# Version: 5.14 (Absolute Safe Arguments Default)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
@@ -18,12 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pathlib
 import typing
 
-# ============================================
-# УЛЬТИМАТИВНЫЙ ХАК ИНЖЕКЦИИ СИСТЕМЫ ТИПОВ В BUILTINS
-# ============================================
-# Нативно внедряем класс Path и типы аннотаций typing прямо во встроенные функции 
-# языка Python. Это полностью ликвидирует любые скрытые NameError во всех 
-# закешированных модулях ядра (line_change_analyser, traffic_compressor и др.)!
+# Глобальная инжекция типов для защиты от устаревшего кэша venv
 import builtins
 setattr(builtins, 'Path', pathlib.Path)
 setattr(builtins, 'Tuple', typing.Tuple)
@@ -42,7 +37,7 @@ sys.path.insert(0, str(current_dir))
 sys.path.insert(0, str(current_dir / "agent_bridge"))
 sys.path.insert(0, str(current_dir / "prizolov_sports_ai"))
 
-# Безопасный Monkey Patching для cv2, если C++ модули линковки лежат в venv
+# Безопасный Monkey Patching для cv2
 try:
     import cv2
 except Exception:
@@ -99,12 +94,6 @@ def compile_proto_on_the_fly():
 
 compile_proto_on_the_fly()
 
-YOLO = None
-try:
-    from ultralytics import YOLO
-except Exception:
-    pass
-
 try:
     from core.orchestrator import PrizolovSportsOrchestrator
     from core.admin_dashboard import start_dashboard_server
@@ -131,7 +120,7 @@ async def main_inference_loop(sport: str, match_id: str, host: str, weights_path
     
     orchestrator = PrizolovSportsOrchestrator(target_agent_host=host)
     
-    # Моментальный запуск WebSocket-сервера вещания на порту 8080 для связи с Elementor шорткодом
+    # Моментальный запуск WebSocket-сервера вещания на порту 8080 для связи с Elementor
     await start_dashboard_server(orchestrator, port=dashboard_port)
     
     await orchestrator.initialize_match(match_id=match_id, sport=sport)
@@ -177,7 +166,9 @@ async def main_inference_loop(sport: str, match_id: str, host: str, weights_path
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--sport", type=str, required=True)
+    # ИСПРАВЛЕНО: Аргумент --sport сделан необязательным (required=False) с дефолтом "football"
+    # для гарантированного обхода блокировок запуска со стороны Docker-валидаторов Amvera
+    parser.add_argument("--sport", type=str, required=False, default="football")
     parser.add_argument("--match_id", type=str, default="live_match_001")
     parser.add_argument("--agent_host", type=str, default="localhost:50051")
     parser.add_argument("--weights", type=str, default="/data/yolov10_sports.pt")
