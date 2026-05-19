@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ============================================
 # Prizolov Sports AI - Main Execution Engine
-# Version: 5.11 (Global Namespace Injection Patch)
+# Version: 5.12 (Global Namespace Injection Fix)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
@@ -18,14 +18,12 @@ from concurrent.futures import ThreadPoolExecutor
 import pathlib
 
 # ============================================
-# УЛЬТИМАТИВНЫЙ ХАК ИНЖЕКЦИИ PATH В GLOBAL NAMESPACE
+# ИСПРАВЛЕННЫЙ ХАК ИНЖЕКЦИИ PATH В GLOBAL NAMESPACE
 # ============================================
-# Так как Amvera кэширует старый файл traffic_compressor.py, где пропущен импорт,
-# мы принудительно регистрируем класс Path во встроенных функциях Python (__builtins__).
-# Теперь любой закешированный файл в проекте сможет вызвать Path без падения с NameError!
-import builtin_mods if (builtin_mods := sys.modules.get('builtins')) else None
-if builtin_mods:
-    setattr(builtin_mods, 'Path', pathlib.Path)
+# Нативно внедряем класс Path во встроенные функции Python (builtins)
+# Теперь закешированный компрессор прочитает Path из глобальной памяти без ошибок!
+import builtins
+setattr(builtins, 'Path', pathlib.Path)
 
 # Глушение графических GUI-артефактов Linux ОС
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -126,7 +124,7 @@ async def main_inference_loop(sport: str, match_id: str, host: str, weights_path
     
     orchestrator = PrizolovSportsOrchestrator(target_agent_host=host)
     
-    # Моментальный запуск WebSocket-сервера вещания на порту 8080 для связи с внешним миром
+    # Моментальный запуск WebSocket-сервера вещания на порту 8080
     await start_dashboard_server(orchestrator, port=dashboard_port)
     
     await orchestrator.initialize_match(match_id=match_id, sport=sport)
