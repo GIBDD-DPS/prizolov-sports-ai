@@ -1,22 +1,31 @@
-# Core Machine Learning & CV (Headless-Server edition)
-opencv-python-headless==4.9.0.80
-ultralytics==8.1.0
-onnxruntime==1.17.1
-numpy==1.26.4
-scipy==1.12.0
+# ============================================
+# Prizolov Sports AI - Python Dependencies
+# Version: 1.00 (Initial Production Requirements & Dependency Stabilization)
+# Author: Dm.Andreyanov
+# Organization: Prizolov Market / Prizolov Lab
+# Target: Production deployment at cloud.amvera.ru
+# ============================================
 
-# Network & Async Transport Layer
-grpcio==1.62.0
-grpcio-tools==1.62.0
-httpx==0.27.0
-protobuf==4.25.3
-zlib-state==0.1.3
+# Core & Async Runtime
+asyncio
+aiohttp>=3.8.4
 
-# Web Server & Live API Gateway for Elementor
-fastapi==0.110.0
-uvicorn[standard]==0.28.0
-pydantic==2.6.4
+# gRPC Communication (Agent OS Bridge & Proto Compilation)
+grpcio>=1.54.2
+grpcio-tools>=1.54.2
+protobuf>=4.23.4
 
-# Data Layer & NLP Caching
-redis==5.0.3
-beautifulsoup4==4.12.3
+# WebSocket Dashboard Server (prizolov.ru/sport/ live feed)
+websockets>=11.0.3
+
+# Computer Vision & Data Processing (Headless for Docker/Cloud)
+opencv-python-headless>=4.8.0.76
+numpy>=1.24.3
+
+# Caching, Storage & Cloud Integrations
+redis>=4.5.5
+boto3>=1.26.137
+
+# Utilities & Configuration
+python-dotenv>=1.0.0
+pydantic>=2.1.0
