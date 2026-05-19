@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Admin Dashboard & WebSocket Server
-# Version: 1.02 (+0.01: Auto Match Context Injection & Live Metadata Broadcasting)
+# Version: 1.03 (+1.01: Dynamic Cache Flattening & Live Multi-Match Broadcast)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
@@ -22,39 +22,8 @@ except ImportError:
 
 logger = logging.getLogger("PrizolovSportsAI.Dashboard")
 
-# === АВТО-ОПРЕДЕЛЕНИЕ МЕТАДАННЫХ МАТЧА ===
-# В продакшене этот словарь должен заполняться из внешней спортивной API (API-Football, SportRadar)
-# Для демо — заглушка, которая автоматически подставляется по match_id
-MATCH_METADATA_DB = {
-    "prod_match_001": {
-        "league": "РПЛ",
-        "home": "Спартак",
-        "away": "Зенит",
-        "kickoff": "20:00",
-        "country": "RU"
-    },
-    "live_match_001": {
-        "league": "Brasileirão Série A",
-        "home": "Vasco da Gama",
-        "away": "Corinthians",
-        "kickoff": "22:30",
-        "country": "BR"
-    },
-    "default": {
-        "league": "Международный турнир",
-        "home": "Команда А",
-        "away": "Команда Б",
-        "kickoff": "--:--",
-        "country": "INT"
-    }
-}
-
-def get_match_metadata(match_id: str) -> Dict[str, str]:
-    """Автоматически возвращает метаданные матча по его ID."""
-    return MATCH_METADATA_DB.get(match_id, MATCH_METADATA_DB["default"])
-
 class DashboardManager:
-    """Менеджер WebSocket-соединений с авто-инжекцией контекста матча."""
+    """Менеджер WebSocket-соединений с динамической отдачей мульти-спортивного кэша."""
     def __init__(self, orchestrator):
         self.orchestrator = orchestrator
         self.clients: Set[Any] = set()
@@ -65,8 +34,7 @@ class DashboardManager:
         self.clients.add(websocket)
         logger.info(f"🔗 New dashboard client connected. Total active: {len(self.clients)}")
         try:
-            # При подключении сразу отправляем полный контекст
-            await websocket.send(json.dumps(self._get_current_state(match_id)))
+            await websocket.send(json.dumps(self._get_current_state(match_id), ensure_ascii=False))
         except (ConnectionClosedError, ConnectionClosedOK):
             await self.unregister(websocket)
 
@@ -75,64 +43,93 @@ class DashboardManager:
         logger.info(f"🔌 Dashboard client disconnected. Total active: {len(self.clients)}")
 
     def _get_current_state(self, match_id: Optional[str] = None) -> Dict[str, Any]:
-        """Формирует полное состояние дашборда с авто-контекстом матча."""
-        # Авто-определение match_id из активных матчей оркестратора
-        active_id = match_id or (list(self.orchestrator.active_matches.keys())[0] if self.orchestrator.active_matches else "default")
-        
-        # Инжекция метаданных матча
-        match_info = get_match_metadata(active_id)
-        
-        # Добавляем live-время, если матч активен
-        if active_id in self.orchestrator.active_matches:
-            match_data = self.orchestrator.active_matches[active_id]
-            start_time = match_data.get("start_time")
-            if start_time:
-                try:
-                    elapsed = int((datetime.utcnow() - datetime.fromisoformat(start_time)).total_seconds())
-                    match_info["elapsed_seconds"] = elapsed
-                    match_info["game_time"] = f"{elapsed // 60:02d}:{elapsed % 60:02d}"
-                except:
-                    pass
-        
+        """Формирует состояние дашборда, динамически извлекая контекст из line_cache оркестратора."""
+        cache = self.orchestrator.line_cache
+        active_ids = list(cache.keys())
+
+        if not active_ids:
+            return {
+                "status": "scanning",
+                "match_info": {"league": "Поиск событий...", "home": "...", "away": "...", "status": "WAIT"},
+                "recommendations": [],
+                "total_active": 0,
+                "system_health": "ok",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+
+        # Выбираем основной матч для хедера (запрошенный или первый в кэше)
+        primary_id = match_id if match_id in active_ids else active_ids[0]
+        primary_data = cache.get(primary_id, {})
+        primary_ctx = primary_data.get("match_context", {})
+
+        match_info = {
+            "league": primary_ctx.get("league", "—"),
+            "home": primary_ctx.get("home", "—"),
+            "away": primary_ctx.get("away", "—"),
+            "status": primary_ctx.get("status", "LIVE"),
+            "sport": primary_ctx.get("sport", "football"),
+            "match_id": primary_id
+        }
+
+        # Расплющиваем кэш в единый плоский массив рекомендаций для фронтенда
+        flat_recs = []
+        for mid, data in cache.items():
+            ctx = data.get("match_context", {})
+            rec = data.get("recommendation", {})
+            if rec.get("coefficient", 0) >= 1.60:
+                flat_recs.append({
+                    "match_id": mid,
+                    "league": ctx.get("league", "—"),
+                    "home": ctx.get("home", "—"),
+                    "away": ctx.get("away", "—"),
+                    "sport": ctx.get("sport", "—"),
+                    "status": ctx.get("status", "—"),
+                    "line": rec.get("line"),
+                    "coefficient": rec.get("coefficient"),
+                    "probability": rec.get("probability"),
+                    "confidence": rec.get("confidence"),
+                    "updated_at": rec.get("timestamp")
+                })
+
+        # Сортировка: сначала высокий confidence, затем высокая вероятность
+        flat_recs.sort(key=lambda x: (
+            2 if x.get("confidence") == "high" else (1 if x.get("confidence") == "medium" else 0),
+            x.get("probability", 0)
+        ), reverse=True)
+
         return {
             "status": "live",
-            "match_id": active_id,
-            "match_info": match_info,  # <<< НОВОЕ: авто-контекст матча
-            "recommendations": list(self.orchestrator.line_cache.values()),
-            "active_matches": len(self.orchestrator.active_matches),
+            "match_info": match_info,
+            "recommendations": flat_recs[:15],  # Топ-15 для производительности фронтенда
+            "total_active": len(active_ids),
             "system_health": "ok",
             "timestamp": datetime.utcnow().isoformat()
         }
 
     async def broadcast_loop(self, interval: float = 2.0):
-        """Периодически отправляет обновления с авто-контекстом всем клиентам."""
         while True:
             try:
                 await asyncio.sleep(interval)
                 current_state = self._get_current_state()
-                
                 if current_state != self._last_broadcast_state and self.clients:
                     payload = json.dumps(current_state, ensure_ascii=False)
                     send_tasks = [ws.send(payload) for ws in self.clients]
                     if send_tasks:
                         await asyncio.gather(*send_tasks, return_exceptions=True)
                         self._last_broadcast_state = current_state
-                        logger.debug("📡 Broadcasted updated state with match context.")
+                        logger.debug(f"📡 Broadcasted {len(current_state['recommendations'])} live recommendations.")
             except Exception as e:
                 logger.error(f"💥 Dashboard broadcast loop failed: {e}")
                 await asyncio.sleep(1)
 
     async def handler(self, websocket, path: str = None):
-        """Обработчик WebSocket: извлекает match_id из query-параметров или использует дефолт."""
-        # Парсинг match_id из URL: ws://.../dashboard?match_id=prod_match_001
         match_id = None
         if path and "?" in path:
             try:
                 query = path.split("?")[1]
                 params = dict(p.split("=") for p in query.split("&") if "=" in p)
                 match_id = params.get("match_id")
-            except:
-                pass
+            except: pass
         
         await self.register(websocket, match_id)
         try:
@@ -143,49 +140,21 @@ class DashboardManager:
                     if action == "ping":
                         await websocket.send(json.dumps({"status": "pong", "timestamp": datetime.utcnow().isoformat()}))
                     elif action == "get_state":
-                        await websocket.send(json.dumps(self._get_current_state(data.get("match_id"))))
-                    elif action == "switch_match":
-                        # Позволяет фронтенду запрашивать контекст другого матча
-                        new_match_id = data.get("match_id")
-                        if new_match_id:
-                            await websocket.send(json.dumps(self._get_current_state(new_match_id)))
-                    elif action == "set_filter":
-                        logger.info(f"🔍 Client requested filter: {data.get('criteria', {})}")
-                        await websocket.send(json.dumps({"status": "filter_acknowledged"}))
+                        await websocket.send(json.dumps(self._get_current_state(data.get("match_id")), ensure_ascii=False))
                 except json.JSONDecodeError:
                     await websocket.send(json.dumps({"error": "Invalid JSON format"}))
-        except (ConnectionClosedError, ConnectionClosedOK):
-            logger.info("🔌 Client connection closed normally.")
-        except Exception as e:
-            logger.error(f"💥 Unexpected WS error: {e}")
-        finally:
-            await self.unregister(websocket)
+        except (ConnectionClosedError, ConnectionClosedOK): pass
+        except Exception as e: logger.error(f"💥 WS handler error: {e}")
+        finally: await self.unregister(websocket)
 
 async def start_dashboard_server(orchestrator, port: int = 8080):
-    if not HAS_WEBSOCKETS:
-        raise RuntimeError("WebSocket server cannot start: 'websockets' package is missing.")
-
+    if not HAS_WEBSOCKETS: raise RuntimeError("WebSocket server cannot start: 'websockets' package missing.")
     manager = DashboardManager(orchestrator)
     manager._broadcast_task = asyncio.create_task(manager.broadcast_loop(interval=2.0))
-
     try:
-        server = await websockets.serve(
-            manager.handler,
-            "0.0.0.0",
-            port,
-            ping_interval=30,
-            ping_timeout=10,
-            close_timeout=5
-        )
+        server = await websockets.serve(manager.handler, "0.0.0.0", port, ping_interval=30, ping_timeout=10, close_timeout=5)
         logger.info(f"🌐 WebSocket Dashboard Server started on ws://0.0.0.0:{port}")
-        logger.info(f"📊 Connect frontend to: ws://<domain>:{port}/dashboard?match_id=YOUR_MATCH_ID")
         return server
-    except OSError as e:
-        if "Address already in use" in str(e):
-            logger.warning(f"⚠️ Port {port} is already in use.")
-        else:
-            logger.critical(f"🚨 Failed to bind Dashboard Server to port {port}: {e}")
-        raise
     except Exception as e:
-        logger.critical(f"🚨 Critical Dashboard Server startup error: {e}")
+        logger.critical(f"🚨 Dashboard Server startup error: {e}")
         raise
