@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ============================================
 # Prizolov Sports AI - Main Execution Engine
-# Version: 8.50 (+0.50: Hard Version Banner & Explicit Flow Control)
+# Version: 8.51 (+0.01: Backward-Compatible Argument Handling for Amvera)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
@@ -18,9 +18,9 @@ import random
 import datetime
 import time
 
-# === ЖЁСТКИЙ БАННЕР ВЕРСИИ (ПЕРВАЯ СТРОКА В ЛОГАХ) ===
+# === ЖЁСТКИЙ БАННЕР ВЕРСИИ ===
 print("="*50)
-print("🚀 PRIZOLOV SPORTS AI v8.50 STARTED")
+print("🚀 PRIZOLOV SPORTS AI v8.51 STARTED")
 print("📅 UTC:", datetime.datetime.utcnow().isoformat())
 print("🔧 Mock Mode: ACTIVE | Discovery: ENABLED")
 print("="*50)
@@ -67,7 +67,7 @@ keep_running=True
 signal.signal(signal.SIGINT, lambda s,f: setattr(__import__('__main__'),'keep_running',False))
 signal.signal(signal.SIGTERM, lambda s,f: setattr(__import__('__main__'),'keep_running',False))
 
-# === ИМПОРТЫ С FALBACK ===
+# === ИМПОРТЫ С FALLBACK ===
 try:
     from core.orchestrator import PrizolovSportsOrchestrator
     from core.admin_dashboard import start_dashboard_server
@@ -101,7 +101,7 @@ class FallbackDiscovery:
 
 async def main_loop(host:str, port:int, mock:bool):
     global keep_running
-    logger.info("🔄 Инициализация пайплайна v8.50...")
+    logger.info("🔄 Инициализация пайплайна v8.51...")
     
     disc = EventDiscoveryEngine(refresh_interval=45)() if EventDiscoveryEngine else FallbackDiscovery()
     await disc.start_auto_discovery()
@@ -122,9 +122,22 @@ async def main_loop(host:str, port:int, mock:bool):
 
 if __name__ == "__main__":
     p=argparse.ArgumentParser()
+    # === ОБРАТНАЯ СОВМЕСТИМОСТЬ: принимаем старые аргументы, но игнорируем их ===
     p.add_argument("--agent_host", default="localhost:50051")
     p.add_argument("--dashboard_port", type=int, default=8080)
     p.add_argument("--mock-mode", action="store_true")
-    args=p.parse_args()
-    try: asyncio.run(main_loop(args.agent_host, args.dashboard_port, args.mock_mode))
-    except KeyboardInterrupt: logger.info("👋 Shutdown.")
+    # Deprecated args (для совместимости с Amvera/старыми конфигами)
+    p.add_argument("--sport", type=str, default=None, help="[DEPRECATED] Игнорируется. События определяются автономно.")
+    p.add_argument("--match_id", type=str, default=None, help="[DEPRECATED] Игнорируется. События определяются автономно.")
+    p.add_argument("--weights", type=str, default=None, help="[DEPRECATED] Игнорируется в mock-режиме.")
+    
+    args, unknown = p.parse_known_args()  # parse_known_args игнорирует совсем неизвестные аргументы
+    
+    # Логируем использование устаревших аргументов
+    if args.sport or args.match_id:
+        logger.warning(f"⚠️ Deprecated args ignored: sport={args.sport}, match_id={args.match_id}. Using autonomous discovery.")
+    
+    try: 
+        asyncio.run(main_loop(args.agent_host, args.dashboard_port, args.mock_mode))
+    except KeyboardInterrupt: 
+        logger.info("👋 Shutdown.")
