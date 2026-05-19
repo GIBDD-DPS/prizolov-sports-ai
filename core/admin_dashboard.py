@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Admin Dashboard & WebSocket Server
-# Version: 1.04 (+0.01: Always-Valid Payload & Graceful Warming State)
+# Version: 1.05 (+0.01: Amvera CORS Compatibility & Always-Valid Payload)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
@@ -50,7 +50,6 @@ class DashboardManager:
                 if r.get("coefficient",0) >= 1.60:
                     flat.append({**r, "league":c.get("league","—"), "home":c.get("home","—"), "away":c.get("away","—"), "sport":c.get("sport","—")})
         
-        # Сортировка и лимит
         flat.sort(key=lambda x: (1 if x.get("confidence")=="high" else 0, x.get("probability",0)), reverse=True)
         
         return {
@@ -90,7 +89,8 @@ async def start_dashboard_server(orchestrator, port: int = 8080):
     mgr = DashboardManager(orchestrator)
     mgr._task = asyncio.create_task(mgr.broadcast_loop())
     try:
-        srv = await websockets.serve(mgr.handler, "0.0.0.0", port, ping_interval=30, ping_timeout=10)
+        # Amvera CORS fix: process_request=lambda path, req: None
+        srv = await websockets.serve(mgr.handler, "0.0.0.0", port, ping_interval=30, ping_timeout=10, process_request=lambda path, req: None)
         logger.info(f"🌐 Dashboard WS started on :{port}")
         return srv
     except Exception as e: logger.critical(f"🚨 WS startup fail: {e}"); raise
