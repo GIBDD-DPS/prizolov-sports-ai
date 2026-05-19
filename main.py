@@ -1,127 +1,101 @@
-#!/usr/bin/env python3
 # ============================================
-# Prizolov Sports AI - Main Execution Engine
-# Version: 7.00 (+1.00: Legacy CV Loop Removal & Strict Discovery Pipeline)
+# Prizolov Sports AI - Core Orchestrator
+# Version: 6.00 (+1.00: Immediate Analysis, Strict Validation & Cache Sync)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
 # ============================================
 
-import sys
-import os
-import argparse
 import asyncio
-import signal
 import logging
-import pathlib
-import typing
+import time
+import datetime
+import random
+from typing import Dict, Any, Optional, List
 
-# Глобальная инжекция типов
-import builtins
-setattr(builtins, 'Path', pathlib.Path)
-setattr(builtins, 'Tuple', typing.Tuple)
-setattr(builtins, 'List', typing.List)
-setattr(builtins, 'Dict', typing.Dict)
-setattr(builtins, 'Any', typing.Any)
-setattr(builtins, 'Optional', typing.Optional)
+logger = logging.getLogger("PrizolovSportsAI.Orchestrator")
 
-# Глушение GUI-артефактов
-os.environ["QT_QPA_PLATFORM"] = "offscreen"
-os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
-
-# Настройка путей
-current_dir = pathlib.Path(__file__).resolve().parent
-sys.path.insert(0, str(current_dir))
-sys.path.insert(0, str(current_dir / "agent_bridge"))
-sys.path.insert(0, str(current_dir / "prizolov_sports_ai"))
-
-# Безопасный Monkey Patching для cv2
 try:
-    import cv2
-except Exception:
-    from types import ModuleType
-    mock_cv2 = ModuleType("cv2")
-    for attr in ['COLOR_BGR2GRAY','COLOR_BGR2YCrCb','COLOR_YCrCb2BGR','INTER_CUBIC','INTER_NEAREST',
-                 'THRESH_BINARY_INV','THRESH_OTSU','IMWRITE_JPEG_QUALITY','INPAINT_NS']:
-        setattr(mock_cv2, attr, 0)
-    for fn in ['VideoCapture','resize','cvtColor','threshold','inRange','line','putText','imwrite','undistortPoints','undistort','getOptimalNewCameraMatrix']:
-        setattr(mock_cv2, fn, lambda *a, **k: (None if fn=='getOptimalNewCameraMatrix' else (0.0, a[0] if a else None)))
-    sys.modules["cv2"] = mock_cv2
+    from agent_bridge.prizolov_agent_pb2_grpc import PrizolovAgentStub
+    from agent_bridge.prizolov_agent_pb2 import LineRequest
+    import grpc
+    HAS_GRPC = True
+except ImportError: HAS_GRPC = False
 
-def compile_proto_on_the_fly():
-    try:
-        from grpc_tools import protoc
-        proto_file = current_dir / "proto" / "prizolov_agent.proto"
-        out_bridge_dir = current_dir / "agent_bridge"
-        if proto_file.exists():
-            out_bridge_dir.mkdir(parents=True, exist_ok=True)
-            protoc.main([
-                "grpc_tools.protoc", f"--proto_path={proto_file.parent}",
-                f"--python_out={out_bridge_dir}", f"--grpc_python_out={out_bridge_dir}", str(proto_file)
-            ])
-            grpc_file = out_bridge_dir / "prizolov_agent_pb2_grpc.py"
-            if grpc_file.exists():
-                content = grpc_file.read_text(encoding="utf-8")
-                grpc_file.write_text(content.replace("from . import prizolov_agent_pb2", "import prizolov_agent_pb2"), encoding="utf-8")
-    except Exception as e:
-        logging.warning(f"⚠️ Proto compilation skipped: {e}")
-
-compile_proto_on_the_fly()
-
-# Импорт ядра
 try:
-    from core.orchestrator import PrizolovSportsOrchestrator
-    from core.admin_dashboard import start_dashboard_server
-    from core.s3_backup import S3CloudBackupHub
-    from modules.event_discovery import EventDiscoveryEngine
-except ModuleNotFoundError:
-    from prizolov_sports_ai.core.orchestrator import PrizolovSportsOrchestrator
-    from prizolov_sports_ai.core.admin_dashboard import start_dashboard_server
-    from prizolov_sports_ai.core.s3_backup import S3CloudBackupHub
-    from prizolov_sports_ai.modules.event_discovery import EventDiscoveryEngine
+    from modules.football import FootballAnalyticsModule
+    HAS_FOOTBALL = True
+except ImportError: HAS_FOOTBALL = False
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger("PrizolovSportsAI.Main")
-keep_running = True
+class PrizolovSportsOrchestrator:
+    def __init__(self, target_agent_host: str = "localhost:50051", mock_mode: bool = False, discovery_engine=None):
+        self.target_agent_host = target_agent_host
+        self.mock_mode = mock_mode or not HAS_GRPC
+        self.agent_client = None
+        self.discovery_engine = discovery_engine
+        self.line_cache: Dict[str, Dict[str, Any]] = {}
+        self.last_analysis: Dict[str, float] = {}
+        self.analyzers = {}
+        if HAS_FOOTBALL: self.analyzers["football"] = FootballAnalyticsModule()
+        
+        if not self.mock_mode:
+            try:
+                self.channel = grpc.insecure_channel(target_agent_host)
+                self.agent_client = PrizolovAgentStub(self.channel)
+            except Exception as e:
+                logger.error(f"❌ gRPC fail: {e}")
+                self.mock_mode = True
+        logger.info(f"🚀 Orchestrator init. Mock: {self.mock_mode} | Analyzers: {list(self.analyzers.keys())}")
 
-def handle_exit_signal(signum, frame):
-    global keep_running
-    keep_running = False
+    async def run_initial_analysis(self):
+        """Мгновенный анализ пула событий при старте."""
+        logger.info("🔥 Running immediate initial analysis...")
+        if not self.discovery_engine: return
+        events = self.discovery_engine.get_events_for_analysis(hours_ahead=12, min_interest=0.5, limit=10)
+        for ev in events: await self._analyze(ev, force=True)
+        logger.info(f"✅ Initial analysis complete. Cache size: {len(self.line_cache)}")
 
-signal.signal(signal.SIGINT, handle_exit_signal)
-signal.signal(signal.SIGTERM, handle_exit_signal)
+    async def run_continuous_scan(self):
+        if not self.discovery_engine: return
+        events = self.discovery_engine.get_events_for_analysis(hours_ahead=12, min_interest=0.6, limit=10)
+        for ev in events: await self._analyze(ev)
 
-async def main_inference_loop(host: str, dashboard_port: int, mock_mode: bool, discovery_interval: int):
-    global keep_running
-    logger.info("=== Запуск автономного AI-конвейера Prizolov Sports v7.00 ===")
-    
-    discovery = EventDiscoveryEngine(refresh_interval=discovery_interval)
-    asyncio.create_task(discovery.start_auto_discovery())
-    logger.info("🌍 Event Discovery Engine запущен")
+    async def _analyze(self, event: Dict[str, Any], force: bool = False):
+        mid = event["match_id"]
+        now = time.time()
+        if not force and mid in self.last_analysis and (now - self.last_analysis[mid]) < 40: return
+        self.last_analysis[mid] = now
 
-    orchestrator = PrizolovSportsOrchestrator(target_agent_host=host, mock_mode=mock_mode, discovery_engine=discovery)
-    await start_dashboard_server(orchestrator, port=dashboard_port)
+        sport = event.get("sport", "football")
+        analyzer = self.analyzers.get(sport)
+        context = {
+            "match_id": mid, "sport": sport, "league": event["league"],
+            "home": event["home_team"], "away": event["away_team"],
+            "status": event["status"], "tracking_data": {"recent_dominance_ratio": 0.55, "live_xg_a": 0.6, "live_xg_b": 0.4}
+        }
 
-    try:
-        s3_hub = S3CloudBackupHub()
-        asyncio.create_task(s3_hub.run_periodic_backup_loop(base_data_dir="/data", interval_seconds=600))
-    except Exception as e:
-        logger.warning(f"⚠️ S3 Backup skipped: {e}")
+        try:
+            rec = analyzer.analyze(context) if (analyzer and not self.mock_mode) else self._mock_rec(context)
+            if rec and rec.get("coefficient", 0) >= 1.60:
+                self.line_cache[mid] = {"match_context": context, "recommendation": rec}
+                logger.info(f"📊 [{sport.upper()}] {context['home']} vs {context['away']} | {rec['line']} @ {rec['coefficient']}")
+        except Exception as e:
+            logger.error(f"💥 Analysis fail {mid}: {e}")
 
-    try:
-        await orchestrator.run_continuous_scan(keep_running_ref=lambda: keep_running)
-    finally:
-        await orchestrator.shutdown()
+    def _mock_rec(self, ctx: Dict) -> Dict:
+        m = ["П1", "П2", "ТБ 2.5", "ОЗ Да", "Ф1(-1.5)"]
+        c = round(random.uniform(1.60, 2.40), 2)
+        p = round(random.uniform(0.55, 0.78), 2)
+        return {"match_id": ctx["match_id"], "line": random.choice(m), "coefficient": c, "probability": p, "confidence": "high" if c<1.9 else "medium", "timestamp": datetime.datetime.utcnow().isoformat()}
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--agent_host", type=str, default="localhost:50051")
-    parser.add_argument("--dashboard_port", type=int, default=8080)
-    parser.add_argument("--mock-mode", action="store_true", help="Run in mock mode")
-    parser.add_argument("--discovery-interval", type=int, default=120)
-    args = parser.parse_args()
+    def _prune(self):
+        if not self.discovery_engine: return
+        active = {e["match_id"] for e in self.discovery_engine.get_all_events()}
+        stale = [m for m in self.line_cache if m not in active]
+        for m in stale: del self.line_cache[m]
 
-    try:
-        asyncio.run(main_inference_loop(args.agent_host, args.dashboard_port, args.mock_mode, args.discovery_interval))
-    except KeyboardInterrupt:
-        logger.info("👋 Завершение работы...")
+    async def shutdown(self):
+        logger.info("🔌 Shutdown...")
+        if hasattr(self, 'channel') and self.channel: self.channel.close()
+        if self.discovery_engine: self.discovery_engine.stop()
+        self.line_cache.clear()
