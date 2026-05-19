@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ============================================
 # Prizolov Sports AI - Main Execution Engine
-# Version: 5.15 (+0.01: Critical Indentation Fix & Syntax Stabilization)
+# Version: 6.16 (+1.01: Autonomous Event Discovery Integration & Dynamic Pipeline)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
@@ -13,12 +13,10 @@ import argparse
 import asyncio
 import signal
 import logging
-import time
-from concurrent.futures import ThreadPoolExecutor
 import pathlib
 import typing
 
-# Глобальная инжекция типов для защиты от устаревшего кэша venv
+# Глобальная инжекция типов
 import builtins
 setattr(builtins, 'Path', pathlib.Path)
 setattr(builtins, 'Tuple', typing.Tuple)
@@ -27,11 +25,11 @@ setattr(builtins, 'Dict', typing.Dict)
 setattr(builtins, 'Any', typing.Any)
 setattr(builtins, 'Optional', typing.Optional)
 
-# Глушение графических GUI-артефактов Linux ОС
+# Глушение GUI-артефактов
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
 
-# Настройка путей поиска модулей в контейнере
+# Настройка путей поиска модулей
 current_dir = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(current_dir))
 sys.path.insert(0, str(current_dir / "agent_bridge"))
@@ -66,19 +64,15 @@ except Exception:
     sys.modules["cv2"] = mock_cv2
 
 def compile_proto_on_the_fly():
-    """Компиляция .proto файлов на лету при старте контейнера."""
     try:
         from grpc_tools import protoc
         proto_file = current_dir / "proto" / "prizolov_agent.proto"
         out_bridge_dir = current_dir / "agent_bridge"
-
         if proto_file.exists():
             out_bridge_dir.mkdir(parents=True, exist_ok=True)
             protoc_args = [
-                "grpc_tools.protoc",
-                f"--proto_path={proto_file.parent}",
-                f"--python_out={out_bridge_dir}",
-                f"--grpc_python_out={out_bridge_dir}",
+                "grpc_tools.protoc", f"--proto_path={proto_file.parent}",
+                f"--python_out={out_bridge_dir}", f"--grpc_python_out={out_bridge_dir}",
                 str(proto_file)
             ]
             exit_code = protoc.main(protoc_args)
@@ -93,18 +87,23 @@ def compile_proto_on_the_fly():
     except Exception as e:
         logging.warning(f"⚠️ Proto compilation skipped: {e}")
 
-# Вызов компиляции прото-файлов
 compile_proto_on_the_fly()
 
-# Безопасный импорт ядра системы
+# Безопасный импорт ядра
 try:
     from core.orchestrator import PrizolovSportsOrchestrator
     from core.admin_dashboard import start_dashboard_server
     from core.s3_backup import S3CloudBackupHub
+    from modules.event_discovery import EventDiscoveryEngine
 except ModuleNotFoundError:
-    from prizolov_sports_ai.core.orchestrator import PrizolovSportsOrchestrator
-    from prizolov_sports_ai.core.admin_dashboard import start_dashboard_server
-    from prizolov_sports_ai.core.s3_backup import S3CloudBackupHub
+    try:
+        from prizolov_sports_ai.core.orchestrator import PrizolovSportsOrchestrator
+        from prizolov_sports_ai.core.admin_dashboard import start_dashboard_server
+        from prizolov_sports_ai.core.s3_backup import S3CloudBackupHub
+        from prizolov_sports_ai.modules.event_discovery import EventDiscoveryEngine
+    except ImportError:
+        logging.critical("❌ Core modules not found. Exiting.")
+        sys.exit(1)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("PrizolovSportsAI.Main")
@@ -117,78 +116,52 @@ def handle_exit_signal(signum, frame):
 signal.signal(signal.SIGINT, handle_exit_signal)
 signal.signal(signal.SIGTERM, handle_exit_signal)
 
-async def main_inference_loop(sport: str, match_id: str, host: str, weights_path: str, dashboard_port: int, mock_mode: bool):
+async def main_inference_loop(sport: str, match_id: str, host: str, dashboard_port: int, mock_mode: bool, discovery_interval: int):
     global keep_running
-    logger.info("=== Запуск распределенного ИИ-конвейера Prizolov Sports ===")
-    if mock_mode:
-        logger.info("🎭 MOCK MODE: Agent OS connection disabled, using synthetic data")
+    logger.info("=== Запуск автономного AI-конвейера Prizolov Sports ===")
+    
+    # 1. Инициализация движка поиска событий
+    discovery = EventDiscoveryEngine(refresh_interval=discovery_interval)
+    asyncio.create_task(discovery.start_auto_discovery())
+    logger.info("🌍 Event Discovery Engine запущен в фоне")
 
-    orchestrator = PrizolovSportsOrchestrator(target_agent_host=host, mock_mode=mock_mode)
+    # 2. Инициализация оркестратора с передачей движка поиска
+    orchestrator = PrizolovSportsOrchestrator(
+        target_agent_host=host, 
+        mock_mode=mock_mode,
+        discovery_engine=discovery
+    )
 
-    # Моментальный запуск WebSocket-сервера вещания на порту 8080 для связи с Elementor
+    # 3. Запуск WebSocket-дашборда
     await start_dashboard_server(orchestrator, port=dashboard_port)
 
-    await orchestrator.initialize_match(match_id=match_id, sport=sport)
-
-    s3_hub = S3CloudBackupHub()
-    asyncio.create_task(s3_hub.run_periodic_backup_loop(base_data_dir="/data", interval_seconds=600))
-
-    initial_protocol = {"score_a": 0, "score_b": 0}
-    orchestrator.update_official_protocol(match_id, initial_protocol)
-
-    frame_count = 0
-    fps = 25.0
-    frame_delay = 1.0 / fps
-
+    # 4. Инициализация S3-бэкапов
     try:
-        while keep_running:
-            start_time = time.time()
-            frame_count += 1
-            elapsed_seconds = int(frame_count / fps)
-            time_left_ratio = max(0.0, 1.0 - (elapsed_seconds / 5400))
-            game_time_str = f"{elapsed_seconds // 60:02d}:{elapsed_seconds % 60:02d}"
+        s3_hub = S3CloudBackupHub()
+        asyncio.create_task(s3_hub.run_periodic_backup_loop(base_data_dir="/data", interval_seconds=600))
+    except Exception as e:
+        logger.warning(f"⚠️ S3 Backup initialization skipped: {e}")
 
-            tracking_data = {
-                "ball_x": 52.5 + (frame_count % 40) * 0.08,
-                "ball_y": 34.0 + (frame_count % 20) * 0.04,
-                "recent_dominance_ratio": 0.55,
-                "live_xg_a": 0.01 * (frame_count % 4), "live_xg_b": 0.02,
-                "danger_attacks_a": 4, "danger_attacks_b": 2
-            }
-
-            await orchestrator.process_cv_frame(
-                match_id=match_id,
-                tracking_data=tracking_data,
-                game_time_str=game_time_str,
-                time_left_ratio=time_left_ratio,
-                elapsed_seconds=elapsed_seconds
-            )
-
-            if time_left_ratio <= 0:
-                break
-            await asyncio.sleep(max(0.0, frame_delay - (time.time() - start_time)))
+    # 5. Запуск непрерывного цикла сканирования и анализа
+    try:
+        await orchestrator.run_continuous_scan(keep_running_ref=lambda: keep_running)
     finally:
         await orchestrator.shutdown()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--sport", type=str, required=False, default="football")
-    parser.add_argument("--match_id", type=str, default="live_match_001")
+    parser.add_argument("--sport", type=str, required=False, default="auto")
+    parser.add_argument("--match_id", type=str, default="auto_discovery")
     parser.add_argument("--agent_host", type=str, default="localhost:50051")
-    parser.add_argument("--weights", type=str, default="/data/yolov10_sports.pt")
     parser.add_argument("--dashboard_port", type=int, default=8080)
-    parser.add_argument("--mock-mode", action="store_true", 
-                       help="Run in mock mode: disable Agent OS gRPC calls, use synthetic data for testing")
+    parser.add_argument("--mock-mode", action="store_true", help="Run in mock mode")
+    parser.add_argument("--discovery-interval", type=int, default=120, help="Секунды между обновлениями списка событий")
     args = parser.parse_args()
 
     try:
         asyncio.run(main_inference_loop(
-            args.sport, 
-            args.match_id, 
-            args.agent_host, 
-            args.weights, 
-            args.dashboard_port,
-            args.mock_mode
+            args.sport, args.match_id, args.agent_host, 
+            args.dashboard_port, args.mock_mode, args.discovery_interval
         ))
     except KeyboardInterrupt:
         logger.info("👋 Получен сигнал прерывания, завершаем работу...")
