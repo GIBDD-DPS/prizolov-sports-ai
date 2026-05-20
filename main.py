@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ============================================
 # Prizolov Sports AI - Main Execution Engine
-# Version: 8.52 (+0.01: Fix EventDiscoveryEngine Instantiation)
+# Version: 8.53 (+0.01: HTTP API Server Integration)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
@@ -20,7 +20,7 @@ import time
 
 # === ЖЁСТКИЙ БАННЕР ВЕРСИИ ===
 print("="*50)
-print("🚀 PRIZOLOV SPORTS AI v8.52 STARTED")
+print("🚀 PRIZOLOV SPORTS AI v8.53 STARTED (HTTP MODE)")
 print("📅 UTC:", datetime.datetime.utcnow().isoformat())
 print("🔧 Mock Mode: ACTIVE | Discovery: ENABLED")
 print("="*50)
@@ -70,12 +70,12 @@ signal.signal(signal.SIGTERM, lambda s,f: setattr(__import__('__main__'),'keep_r
 # === ИМПОРТЫ С FALLBACK ===
 try:
     from core.orchestrator import PrizolovSportsOrchestrator
-    from core.admin_dashboard import start_dashboard_server
+    from core.admin_dashboard import start_api_server
     from modules.event_discovery import EventDiscoveryEngine
 except ImportError:
     try:
         from prizolov_sports_ai.core.orchestrator import PrizolovSportsOrchestrator
-        from prizolov_sports_ai.core.admin_dashboard import start_dashboard_server
+        from prizolov_sports_ai.core.admin_dashboard import start_api_server
         from prizolov_sports_ai.modules.event_discovery import EventDiscoveryEngine
     except ImportError:
         EventDiscoveryEngine=None
@@ -101,16 +101,15 @@ class FallbackDiscovery:
 
 async def main_loop(host:str, port:int, mock:bool):
     global keep_running
-    logger.info("🔄 Инициализация пайплайна v8.52...")
+    logger.info("🔄 Инициализация пайплайна v8.53 (HTTP Polling)...")
     
-    # === ИСПРАВЛЕНО: Убраны лишние скобки () после вызова конструктора ===
     disc = EventDiscoveryEngine(refresh_interval=45) if EventDiscoveryEngine else FallbackDiscovery()
     await disc.start_auto_discovery()
     logger.info(f"✅ Discovery ready. Events: {len(disc.get_all_events())}")
 
     orch = PrizolovSportsOrchestrator(target_agent_host=host, mock_mode=mock, discovery_engine=disc)
-    await start_dashboard_server(orch, port=port)
-    logger.info("🌐 WebSocket Dashboard active")
+    await start_api_server(orch, port=port)
+    logger.info("🌐 HTTP API Server active")
 
     await orch.run_initial_analysis()
     
@@ -126,7 +125,6 @@ if __name__ == "__main__":
     p.add_argument("--agent_host", default="localhost:50051")
     p.add_argument("--dashboard_port", type=int, default=8080)
     p.add_argument("--mock-mode", action="store_true")
-    # Deprecated args (для совместимости с Amvera/старыми конфигами)
     p.add_argument("--sport", type=str, default=None, help="[DEPRECATED]")
     p.add_argument("--match_id", type=str, default=None, help="[DEPRECATED]")
     p.add_argument("--weights", type=str, default=None, help="[DEPRECATED]")
