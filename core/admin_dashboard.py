@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Admin Dashboard & WebSocket Server
-# Version: 1.06 (+0.01: Explicit /ws Path & Aggressive Ping for PaaS Stability)
+# Version: 1.07 (+0.01: Amvera Path-Agnostic Handler & Modern WS API)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
@@ -31,15 +31,15 @@ class DashboardManager:
 
     async def register(self, websocket):
         self.clients.add(websocket)
-        logger.info(f"🔗 Client connected via /ws. Total: {len(self.clients)}")
+        logger.info(f"🔗 WS Client connected. Total active: {len(self.clients)}")
         try:
             await websocket.send(json.dumps(self._get_state(), ensure_ascii=False))
         except Exception as e:
-            logger.warning(f"Failed to send initial state: {e}")
+            logger.warning(f"⚠️ Failed to send initial state: {e}")
 
     async def unregister(self, websocket):
         self.clients.discard(websocket)
-        logger.info(f"🔌 Client disconnected. Total: {len(self.clients)}")
+        logger.info(f"🔌 WS Client disconnected. Total active: {len(self.clients)}")
 
     def _get_state(self) -> Dict[str, Any]:
         cache = self.orchestrator.line_cache
@@ -70,7 +70,6 @@ class DashboardManager:
                 state = self._get_state()
                 if state != self._last and self.clients:
                     payload = json.dumps(state, ensure_ascii=False)
-                    # Безопасная рассылка с игнорированием упавших соединений
                     tasks = [ws.send(payload) for ws in list(self.clients)]
                     if tasks:
                         await asyncio.gather(*tasks, return_exceptions=True)
@@ -80,7 +79,7 @@ class DashboardManager:
                 logger.error(f"💥 Broadcast loop error: {e}")
                 await asyncio.sleep(1)
 
-    async def handler(self, websocket, path=None):
+    async def handler(self, websocket):
         await self.register(websocket)
         try:
             async for message in websocket:
@@ -103,16 +102,17 @@ async def start_dashboard_server(orchestrator, port: int = 8080):
     mgr = DashboardManager(orchestrator)
     mgr._task = asyncio.create_task(mgr.broadcast_loop())
     try:
-        # Явный path /ws для совместимости с Amvera/Cloudflare
-        # ping_interval=15 предотвращает разрыв прокси-сервером
+        # Убран path="/ws". Принимаем все соединения на корне.
+        # ping_interval=20 предотвращает таймауты обратного прокси Amvera
         srv = await websockets.serve(
-            mgr.handler, "0.0.0.0", port, 
-            path="/ws",
-            ping_interval=15, 
-            ping_timeout=10, 
+            mgr.handler, 
+            "0.0.0.0", 
+            port,
+            ping_interval=20, 
+            ping_timeout=15, 
             close_timeout=5
         )
-        logger.info(f"🌐 Dashboard WS started on :{port}/ws")
+        logger.info(f"🌐 Dashboard WS started on :{port} (accepting all paths)")
         return srv
     except Exception as e:
         logger.critical(f"🚨 WS startup fail: {e}")
