@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ============================================
 # Prizolov Sports AI - Main Execution Engine
-# Version: 8.53 (+0.01: HTTP API Server Integration)
+# Version: 8.54 (+0.01: Explicit Port Resolution & Safe Startup Sequence)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
@@ -20,9 +20,9 @@ import time
 
 # === ЖЁСТКИЙ БАННЕР ВЕРСИИ ===
 print("="*50)
-print("🚀 PRIZOLOV SPORTS AI v8.53 STARTED (HTTP MODE)")
-print("📅 UTC:", datetime.datetime.utcnow().isoformat())
-print("🔧 Mock Mode: ACTIVE | Discovery: ENABLED")
+print("🚀 PRIZOLOV SPORTS AI v8.54 STARTED (HTTP MODE)")
+print(f"📅 UTC: {datetime.datetime.utcnow().isoformat()}")
+print(f"🔍 Port: {os.environ.get('PORT', '8080 (default)')}")
 print("="*50)
 sys.stdout.flush()
 
@@ -101,15 +101,16 @@ class FallbackDiscovery:
 
 async def main_loop(host:str, port:int, mock:bool):
     global keep_running
-    logger.info("🔄 Инициализация пайплайна v8.53 (HTTP Polling)...")
+    logger.info("🔄 Инициализация пайплайна v8.54...")
     
     disc = EventDiscoveryEngine(refresh_interval=45) if EventDiscoveryEngine else FallbackDiscovery()
     await disc.start_auto_discovery()
     logger.info(f"✅ Discovery ready. Events: {len(disc.get_all_events())}")
 
     orch = PrizolovSportsOrchestrator(target_agent_host=host, mock_mode=mock, discovery_engine=disc)
+    logger.info("🌐 Запуск HTTP API Server...")
     await start_api_server(orch, port=port)
-    logger.info("🌐 HTTP API Server active")
+    logger.info("✅ HTTP API Server active")
 
     await orch.run_initial_analysis()
     
@@ -121,9 +122,12 @@ async def main_loop(host:str, port:int, mock:bool):
         await orch.shutdown()
 
 if __name__ == "__main__":
+    # Amvera передаёт порт через ENV, либо используем дефолт 8080
+    default_port = int(os.environ.get("PORT", 8080))
+    
     p=argparse.ArgumentParser()
     p.add_argument("--agent_host", default="localhost:50051")
-    p.add_argument("--dashboard_port", type=int, default=8080)
+    p.add_argument("--dashboard_port", type=int, default=default_port)
     p.add_argument("--mock-mode", action="store_true")
     p.add_argument("--sport", type=str, default=None, help="[DEPRECATED]")
     p.add_argument("--match_id", type=str, default=None, help="[DEPRECATED]")
@@ -132,7 +136,7 @@ if __name__ == "__main__":
     args, unknown = p.parse_known_args()
     
     if args.sport or args.match_id:
-        logger.warning(f"⚠️ Deprecated args ignored: sport={args.sport}, match_id={args.match_id}. Using autonomous discovery.")
+        logger.warning(f"⚠️ Deprecated args ignored. Using autonomous discovery.")
     
     try: 
         asyncio.run(main_loop(args.agent_host, args.dashboard_port, args.mock_mode))
