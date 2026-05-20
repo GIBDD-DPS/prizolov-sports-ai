@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Admin Dashboard & HTTP API Server
-# Version: 2.01 (+0.01: Explicit CORS, OPTIONS Handler & Root Fallback)
+# Version: 2.02 (+0.01: Robust Async Startup & Explicit Port Binding)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
@@ -9,14 +9,21 @@
 import asyncio
 import json
 import logging
-from aiohttp import web
 from datetime import datetime
+
+try:
+    from aiohttp import web
+    HAS_AIOHTTP = True
+except ImportError:
+    HAS_AIOHTTP = False
+    logging.critical("❌ aiohttp is missing! Please check requirements.txt")
 
 logger = logging.getLogger("PrizolovSportsAI.Dashboard")
 
 class DashboardAPI:
     def __init__(self, orchestrator):
         self.orchestrator = orchestrator
+        self._runner = None
 
     def _get_state(self) -> dict:
         cache = self.orchestrator.line_cache
@@ -40,40 +47,44 @@ class DashboardAPI:
             "timestamp": datetime.utcnow().isoformat()
         }
 
-    def _cors_headers(self, resp):
-        resp.headers['Access-Control-Allow-Origin'] = '*'
-        resp.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-        resp.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
-        return resp
+    def _add_cors(self, response):
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        return response
 
     async def handle_state(self, request):
         resp = web.json_response(self._get_state(), dumps=lambda x: json.dumps(x, ensure_ascii=False))
-        return self._cors_headers(resp)
+        return self._add_cors(resp)
 
     async def handle_health(self, request):
-        resp = web.json_response({"status": "ok", "api_version": "2.01"})
-        return self._cors_headers(resp)
+        resp = web.json_response({"status": "ok", "api_version": "2.02"})
+        return self._add_cors(resp)
 
     async def handle_root(self, request):
         resp = web.json_response({"message": "Prizolov Sports AI API is running", "endpoints": ["/api/state", "/api/health"]})
-        return self._cors_headers(resp)
+        return self._add_cors(resp)
 
     async def handle_options(self, request):
-        resp = web.Response(status=204)
-        return self._cors_headers(resp)
+        return self._add_cors(web.Response(status=204))
 
     async def start_api_server(self, port: int = 8080):
-        app = web.Application()
-        app.router.add_get('/api/state', self.handle_state)
-        app.router.add_get('/api/health', self.handle_health)
-        app.router.add_get('/', self.handle_root)
-        app.router.add_route('OPTIONS', '/{tail:.*}', self.handle_options)
-        
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, '0.0.0.0', port)
-        await site.start()
-        logger.info(f"🌐 HTTP API started on :{port} (CORS enabled, routes: /, /api/state, /api/health)")
+        if not HAS_AIOHTTP: raise RuntimeError("aiohttp package missing")
+        try:
+            app = web.Application()
+            app.router.add_get('/api/state', self.handle_state)
+            app.router.add_get('/api/health', self.handle_health)
+            app.router.add_get('/', self.handle_root)
+            app.router.add_route('OPTIONS', '/{tail:.*}', self.handle_options)
+            
+            self._runner = web.AppRunner(app)
+            await self._runner.setup()
+            site = web.TCPSite(self._runner, '0.0.0.0', port)
+            await site.start()
+            logger.info(f"🌐 HTTP API started on 0.0.0.0:{port} (CORS enabled)")
+        except Exception as e:
+            logger.critical(f"🚨 Failed to start HTTP API server: {e}")
+            raise
 
 async def start_api_server(orchestrator, port: int = 8080):
     api = DashboardAPI(orchestrator)
