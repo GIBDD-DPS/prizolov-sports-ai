@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ============================================
 # Prizolov Sports AI - Main Execution Engine
-# Version: 8.51 (+0.01: Backward-Compatible Argument Handling for Amvera)
+# Version: 8.52 (+0.01: Fix EventDiscoveryEngine Instantiation)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
@@ -20,7 +20,7 @@ import time
 
 # === ЖЁСТКИЙ БАННЕР ВЕРСИИ ===
 print("="*50)
-print("🚀 PRIZOLOV SPORTS AI v8.51 STARTED")
+print("🚀 PRIZOLOV SPORTS AI v8.52 STARTED")
 print("📅 UTC:", datetime.datetime.utcnow().isoformat())
 print("🔧 Mock Mode: ACTIVE | Discovery: ENABLED")
 print("="*50)
@@ -101,9 +101,10 @@ class FallbackDiscovery:
 
 async def main_loop(host:str, port:int, mock:bool):
     global keep_running
-    logger.info("🔄 Инициализация пайплайна v8.51...")
+    logger.info("🔄 Инициализация пайплайна v8.52...")
     
-    disc = EventDiscoveryEngine(refresh_interval=45)() if EventDiscoveryEngine else FallbackDiscovery()
+    # === ИСПРАВЛЕНО: Убраны лишние скобки () после вызова конструктора ===
+    disc = EventDiscoveryEngine(refresh_interval=45) if EventDiscoveryEngine else FallbackDiscovery()
     await disc.start_auto_discovery()
     logger.info(f"✅ Discovery ready. Events: {len(disc.get_all_events())}")
 
@@ -122,18 +123,16 @@ async def main_loop(host:str, port:int, mock:bool):
 
 if __name__ == "__main__":
     p=argparse.ArgumentParser()
-    # === ОБРАТНАЯ СОВМЕСТИМОСТЬ: принимаем старые аргументы, но игнорируем их ===
     p.add_argument("--agent_host", default="localhost:50051")
     p.add_argument("--dashboard_port", type=int, default=8080)
     p.add_argument("--mock-mode", action="store_true")
     # Deprecated args (для совместимости с Amvera/старыми конфигами)
-    p.add_argument("--sport", type=str, default=None, help="[DEPRECATED] Игнорируется. События определяются автономно.")
-    p.add_argument("--match_id", type=str, default=None, help="[DEPRECATED] Игнорируется. События определяются автономно.")
-    p.add_argument("--weights", type=str, default=None, help="[DEPRECATED] Игнорируется в mock-режиме.")
+    p.add_argument("--sport", type=str, default=None, help="[DEPRECATED]")
+    p.add_argument("--match_id", type=str, default=None, help="[DEPRECATED]")
+    p.add_argument("--weights", type=str, default=None, help="[DEPRECATED]")
     
-    args, unknown = p.parse_known_args()  # parse_known_args игнорирует совсем неизвестные аргументы
+    args, unknown = p.parse_known_args()
     
-    # Логируем использование устаревших аргументов
     if args.sport or args.match_id:
         logger.warning(f"⚠️ Deprecated args ignored: sport={args.sport}, match_id={args.match_id}. Using autonomous discovery.")
     
