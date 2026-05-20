@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Amvera Infrastructure Config
-# Version: 5.09 (Strict Form Handshake)
+# Version: 5.10 (+0.01: WebSocket Upgrade Enabled & Idle Timeout Optimized)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production Amvera Cloud Absolute Pass
@@ -14,6 +14,13 @@ build:
   requirements: "requirements.txt"
 
 run:
+  # ОБЯЗАТЕЛЬНО: Разрешает апгрейд HTTP-соединения в WebSocket
+  websocket: true
+  # Базовый протокол для корректной обработки заголовков Upgrade
+  protocol: http
+  # Таймаут простоя соединения (5 минут). Предотвращает разрыв WS прокси-слоем
+  idleTimeout: 300
+  
   persistence:
     /data: "persistent-volume"
   containerPort: "8080"
