@@ -1,143 +1,103 @@
-#!/usr/bin/env python3
 # ============================================
-# Prizolov Sports AI - Main Execution Engine
-# Version: 8.55 (+0.01: Read PORT from Environment)
+# Prizolov Sports AI - Admin Dashboard & HTTP API Server
+# Version: 2.03 (+0.01: Manual CORS Headers & Explicit 0.0.0.0 Binding)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
 # ============================================
 
-import sys
-import os
-import argparse
 import asyncio
-import signal
+import json
 import logging
-import pathlib
-import random
-import datetime
-import time
+from aiohttp import web
+from datetime import datetime
 
-# === ЖЁСТКИЙ БАННЕР ВЕРСИИ ===
-print("="*50)
-print("🚀 PRIZOLOV SPORTS AI v8.55 STARTED (HTTP MODE)")
-print(f"📅 UTC: {datetime.datetime.utcnow().isoformat()}")
-print(f"🔍 PORT: {os.environ.get('PORT', '8080 (default)')}")
-print("="*50)
-sys.stdout.flush()
+logger = logging.getLogger("PrizolovSportsAI.Dashboard")
 
-# Инжекция типов
-import builtins, typing
-for a, v in [('Path', pathlib.Path), ('Tuple', typing.Tuple), ('List', typing.List), ('Dict', typing.Dict), ('Any', typing.Any), ('Optional', typing.Optional)]:
-    setattr(builtins, a, v)
+class DashboardAPI:
+    def __init__(self, orchestrator):
+        self.orchestrator = orchestrator
+        self.app = web.Application()
+        self._setup_routes()
 
-os.environ["QT_QPA_PLATFORM"] = "offscreen"
-os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
+    def _setup_routes(self):
+        self.app.router.add_get('/', self.handle_root)
+        self.app.router.add_get('/api/state', self.handle_state)
+        self.app.router.add_get('/api/health', self.handle_health)
+        self.app.router.add_options('/{tail:.*}', self.handle_options)
 
-current_dir = pathlib.Path(__file__).resolve().parent
-sys.path.insert(0, str(current_dir))
-sys.path.insert(0, str(current_dir / "agent_bridge"))
-sys.path.insert(0, str(current_dir / "prizolov_sports_ai"))
+    def _add_cors_headers(self, response):
+        """Добавляет CORS-заголовки вручную к любому ответу"""
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        response.headers['Cache-Control'] = 'no-store'
+        return response
 
-# CV Mock
-try: import cv2
-except:
-    from types import ModuleType
-    m=ModuleType("cv2")
-    for x in ['COLOR_BGR2GRAY','COLOR_BGR2YCrCb','COLOR_YCrCb2BGR','INTER_CUBIC','INTER_NEAREST','THRESH_BINARY_INV','THRESH_OTSU','IMWRITE_JPEG_QUALITY','INPAINT_NS']: setattr(m,x,0)
-    for f in ['VideoCapture','resize','cvtColor','threshold','inRange','line','putText','imwrite','undistortPoints','undistort','getOptimalNewCameraMatrix']: setattr(m,f,lambda *a,**k:(None if f=='getOptimalNewCameraMatrix' else (0.0,a[0] if a else None)))
-    sys.modules["cv2"]=m
+    def _get_state(self) -> dict:
+        cache = self.orchestrator.line_cache
+        flat = []
+        primary = {}
+        if cache:
+            mid = next(iter(cache))
+            ctx = cache[mid].get("match_context", {})
+            primary = {
+                "league": ctx.get("league", "—"),
+                "home": ctx.get("home", "—"),
+                "away": ctx.get("away", "—"),
+                "status": ctx.get("status", "LIVE")
+            }
+            for m, d in cache.items():
+                c = d.get("match_context", {})
+                r = d.get("recommendation", {})
+                if r.get("coefficient", 0) >= 1.60:
+                    flat.append({
+                        **r,
+                        "league": c.get("league", "—"),
+                        "home": c.get("home", "—"),
+                        "away": c.get("away", "—"),
+                        "sport": c.get("sport", "—")
+                    })
+        flat.sort(key=lambda x: (1 if x.get("confidence") == "high" else 0, x.get("probability", 0)), reverse=True)
+        return {
+            "status": "live",
+            "match_info": primary or {"league": "Анализ рынка...", "home": "—", "away": "—", "status": "LIVE"},
+            "recommendations": flat[:12],
+            "total_active": len(cache),
+            "timestamp": datetime.utcnow().isoformat()
+        }
 
-def compile_proto():
-    try:
-        from grpc_tools import protoc
-        p=current_dir/"proto"/"prizolov_agent.proto"
-        o=current_dir/"agent_bridge"
-        if p.exists():
-            o.mkdir(parents=True, exist_ok=True)
-            protoc.main(["grpc_tools.protoc", f"--proto_path={p.parent}", f"--python_out={o}", f"--grpc_python_out={o}", str(p)])
-            g=o/"prizolov_agent_pb2_grpc.py"
-            if g.exists(): g.write_text(g.read_text(encoding="utf-8").replace("from . import prizolov_agent_pb2","import prizolov_agent_pb2"), encoding="utf-8")
-    except Exception as e: logging.warning(f"⚠️ Proto skipped: {e}")
-compile_proto()
+    async def handle_root(self, request):
+        resp = web.json_response({"status": "ok", "service": "Prizolov Sports AI API", "version": "2.03"})
+        return self._add_cors_headers(resp)
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger=logging.getLogger("PrizolovSportsAI.Main")
-keep_running=True
-signal.signal(signal.SIGINT, lambda s,f: setattr(__import__('__main__'),'keep_running',False))
-signal.signal(signal.SIGTERM, lambda s,f: setattr(__import__('__main__'),'keep_running',False))
+    async def handle_state(self, request):
+        try:
+            data = self._get_state()
+            resp = web.json_response(data, dumps=lambda x: json.dumps(x, ensure_ascii=False))
+            return self._add_cors_headers(resp)
+        except Exception as e:
+            logger.error(f"💥 Error in /api/state: {e}")
+            resp = web.json_response({"status": "error", "detail": str(e)}, status=500)
+            return self._add_cors_headers(resp)
 
-# === ИМПОРТЫ С FALLBACK ===
-try:
-    from core.orchestrator import PrizolovSportsOrchestrator
-    from core.admin_dashboard import start_api_server
-    from modules.event_discovery import EventDiscoveryEngine
-except ImportError:
-    try:
-        from prizolov_sports_ai.core.orchestrator import PrizolovSportsOrchestrator
-        from prizolov_sports_ai.core.admin_dashboard import start_api_server
-        from prizolov_sports_ai.modules.event_discovery import EventDiscoveryEngine
-    except ImportError:
-        EventDiscoveryEngine=None
+    async def handle_health(self, request):
+        resp = web.json_response({"status": "ok", "timestamp": datetime.utcnow().isoformat()})
+        return self._add_cors_headers(resp)
 
-# === FALLBACK DISCOVERY ===
-class FallbackDiscovery:
-    def __init__(self): self._e=[]
-    async def start_auto_discovery(self): await self._fetch()
-    def stop(self): pass
-    async def _fetch(self):
-        now=datetime.datetime.utcnow()
-        sp=[("football",["РПЛ","АПЛ"],["Спартак","Зенит","Реал","Барса"]),
-            ("hockey",["КХЛ","НХЛ"],["ЦСКА","СКА","Тампа","Колорадо"]),
-            ("basketball",["ВТБ","НБА"],["ЦСКА","УНИКС","Лейкерс","Бостон"])]
-        self._e=[]
-        for sport,leagues,teams in sp:
-            for i in range(2):
-                self._e.append({"match_id":f"{sport}_{i}_{random.randint(100,999)}","sport":sport,"league":random.choice(leagues),
-                                "home_team":random.choice(teams),"away_team":random.choice([t for t in teams if t!=random.choice(teams)]),
-                                "start_time":now.isoformat(),"status":"live","betting_interest":0.85})
-    def get_events_for_analysis(self,**k): return self._e
-    def get_all_events(self): return self._e
+    async def handle_options(self, request):
+        resp = web.Response(status=204)
+        return self._add_cors_headers(resp)
 
-async def main_loop(host:str, port:int, mock:bool):
-    global keep_running
-    logger.info("🔄 Инициализация пайплайна v8.55...")
-    
-    disc = EventDiscoveryEngine(refresh_interval=45) if EventDiscoveryEngine else FallbackDiscovery()
-    await disc.start_auto_discovery()
-    logger.info(f"✅ Discovery ready. Events: {len(disc.get_all_events())}")
+    async def start_api_server(self, port: int = 8080):
+        runner = web.AppRunner(self.app)
+        await runner.setup()
+        # Явно указываем 0.0.0.0 для работы внутри Docker/Amvera
+        site = web.TCPSite(runner, '0.0.0.0', port)
+        await site.start()
+        # Логирование ПОСЛЕ успешного старта
+        logger.info(f"🌐 HTTP API server STARTED on 0.0.0.0:{port} (CORS enabled manually)")
 
-    orch = PrizolovSportsOrchestrator(target_agent_host=host, mock_mode=mock, discovery_engine=disc)
-    await start_api_server(orch, port=port)
-    logger.info("✅ HTTP API Server active")
-
-    await orch.run_initial_analysis()
-    
-    try:
-        while keep_running:
-            await orch.run_continuous_scan()
-            await asyncio.sleep(45)
-    finally:
-        await orch.shutdown()
-
-if __name__ == "__main__":
-    # Читаем порт из переменной окружения Amvera, если она есть
-    default_port = int(os.environ.get("PORT", 8080))
-    
-    p=argparse.ArgumentParser()
-    p.add_argument("--agent_host", default="localhost:50051")
-    p.add_argument("--dashboard_port", type=int, default=default_port)
-    p.add_argument("--mock-mode", action="store_true")
-    p.add_argument("--sport", type=str, default=None, help="[DEPRECATED]")
-    p.add_argument("--match_id", type=str, default=None, help="[DEPRECATED]")
-    p.add_argument("--weights", type=str, default=None, help="[DEPRECATED]")
-    
-    args, unknown = p.parse_known_args()
-    
-    if args.sport or args.match_id:
-        logger.warning(f"⚠️ Deprecated args ignored. Using autonomous discovery.")
-    
-    try: 
-        asyncio.run(main_loop(args.agent_host, args.dashboard_port, args.mock_mode))
-    except KeyboardInterrupt: 
-        logger.info("👋 Shutdown.")
+async def start_api_server(orchestrator, port: int = 8080):
+    api = DashboardAPI(orchestrator)
+    await api.start_api_server(port)
