@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ============================================
 # Prizolov Sports AI - Main Execution Engine
-# Version: 8.54 (+0.01: Explicit Port Resolution & Safe Startup Sequence)
+# Version: 8.55 (+0.01: Read PORT from Environment Variable)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
@@ -16,13 +16,12 @@ import logging
 import pathlib
 import random
 import datetime
-import time
 
 # === ЖЁСТКИЙ БАННЕР ВЕРСИИ ===
 print("="*50)
-print("🚀 PRIZOLOV SPORTS AI v8.54 STARTED (HTTP MODE)")
+print("🚀 PRIZOLOV SPORTS AI v8.55 STARTED (HTTP MODE)")
 print(f"📅 UTC: {datetime.datetime.utcnow().isoformat()}")
-print(f"🔍 Port: {os.environ.get('PORT', '8080 (default)')}")
+print(f"🔍 PORT: {os.environ.get('PORT', '8080 (default)')}")
 print("="*50)
 sys.stdout.flush()
 
@@ -101,14 +100,13 @@ class FallbackDiscovery:
 
 async def main_loop(host:str, port:int, mock:bool):
     global keep_running
-    logger.info("🔄 Инициализация пайплайна v8.54...")
+    logger.info("🔄 Инициализация пайплайна v8.55...")
     
     disc = EventDiscoveryEngine(refresh_interval=45) if EventDiscoveryEngine else FallbackDiscovery()
     await disc.start_auto_discovery()
     logger.info(f"✅ Discovery ready. Events: {len(disc.get_all_events())}")
 
     orch = PrizolovSportsOrchestrator(target_agent_host=host, mock_mode=mock, discovery_engine=disc)
-    logger.info("🌐 Запуск HTTP API Server...")
     await start_api_server(orch, port=port)
     logger.info("✅ HTTP API Server active")
 
@@ -122,7 +120,7 @@ async def main_loop(host:str, port:int, mock:bool):
         await orch.shutdown()
 
 if __name__ == "__main__":
-    # Amvera передаёт порт через ENV, либо используем дефолт 8080
+    # Amvera передаёт порт через переменную окружения PORT
     default_port = int(os.environ.get("PORT", 8080))
     
     p=argparse.ArgumentParser()
