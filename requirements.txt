@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Python Dependencies
-# Version: 1.01 (+0.01: Strict aiohttp Pin & Build Cache Bypass)
+# Version: 1.02 (+0.01: Strict aiohttp Pin & CORS Support)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
@@ -8,7 +8,7 @@
 
 # Core & Async Runtime
 asyncio
-aiohttp==3.9.3
+aiohttp>=3.9.3
 yarl==1.9.4
 
 # gRPC Communication
@@ -16,7 +16,7 @@ grpcio>=1.54.2
 grpcio-tools>=1.54.2
 protobuf>=4.23.4
 
-# WebSocket (оставлен для обратной совместимости, но не используется в HTTP-режиме)
+# WebSocket Dashboard Server
 websockets>=11.0.3
 
 # Computer Vision & Data Processing (Headless)
