@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Admin Dashboard & WebSocket Server
-# Version: 1.07 (+0.01: Amvera Path-Agnostic Handler & Modern WS API)
+# Version: 1.08 (+0.01: Proxy-Resistant Handshake & Compression Disabled)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
@@ -22,6 +22,10 @@ except ImportError:
 
 logger = logging.getLogger("PrizolovSportsAI.Dashboard")
 
+# Явное разрешение всех соединений, игнорирование Origin/CORS
+async def accept_all_connections(path, request_headers):
+    return None  # websockets продолжает handshake
+
 class DashboardManager:
     def __init__(self, orchestrator):
         self.orchestrator = orchestrator
@@ -31,15 +35,15 @@ class DashboardManager:
 
     async def register(self, websocket):
         self.clients.add(websocket)
-        logger.info(f"🔗 WS Client connected. Total active: {len(self.clients)}")
+        logger.info(f"🔗 WS Client accepted. Total active: {len(self.clients)}")
         try:
             await websocket.send(json.dumps(self._get_state(), ensure_ascii=False))
         except Exception as e:
-            logger.warning(f"⚠️ Failed to send initial state: {e}")
+            logger.warning(f"⚠️ Failed initial send: {e}")
 
     async def unregister(self, websocket):
         self.clients.discard(websocket)
-        logger.info(f"🔌 WS Client disconnected. Total active: {len(self.clients)}")
+        logger.info(f"🔌 WS Client dropped. Total active: {len(self.clients)}")
 
     def _get_state(self) -> Dict[str, Any]:
         cache = self.orchestrator.line_cache
@@ -102,17 +106,22 @@ async def start_dashboard_server(orchestrator, port: int = 8080):
     mgr = DashboardManager(orchestrator)
     mgr._task = asyncio.create_task(mgr.broadcast_loop())
     try:
-        # Убран path="/ws". Принимаем все соединения на корне.
-        # ping_interval=20 предотвращает таймауты обратного прокси Amvera
+        # Максимальная совместимость с обратными прокси (Nginx/Amvera/Cloudflare)
+        # - compression=None: отключает permessage-deflate (часто ломает WS на прокси)
+        # - process_request: принимает любой Origin
+        # - ping_interval=15: держит соединение живым
         srv = await websockets.serve(
             mgr.handler, 
             "0.0.0.0", 
             port,
-            ping_interval=20, 
-            ping_timeout=15, 
-            close_timeout=5
+            process_request=accept_all_connections,
+            compression=None,
+            ping_interval=15, 
+            ping_timeout=10, 
+            close_timeout=5,
+            max_size=10**7
         )
-        logger.info(f"🌐 Dashboard WS started on :{port} (accepting all paths)")
+        logger.info(f"🌐 Dashboard WS started on :{port} (proxy-optimized)")
         return srv
     except Exception as e:
         logger.critical(f"🚨 WS startup fail: {e}")
