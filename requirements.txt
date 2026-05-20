@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Python Dependencies
-# Version: 1.00 (Initial Production Requirements & Dependency Stabilization)
+# Version: 1.01 (+0.01: Strict aiohttp Pin & Build Cache Bypass)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
@@ -8,17 +8,18 @@
 
 # Core & Async Runtime
 asyncio
-aiohttp>=3.8.4
+aiohttp==3.9.3
+yarl==1.9.4
 
-# gRPC Communication (Agent OS Bridge & Proto Compilation)
+# gRPC Communication
 grpcio>=1.54.2
 grpcio-tools>=1.54.2
 protobuf>=4.23.4
 
-# WebSocket Dashboard Server (prizolov.ru/sport/ live feed)
+# WebSocket (оставлен для обратной совместимости, но не используется в HTTP-режиме)
 websockets>=11.0.3
 
-# Computer Vision & Data Processing (Headless for Docker/Cloud)
+# Computer Vision & Data Processing (Headless)
 opencv-python-headless>=4.8.0.76
 numpy>=1.24.3
 
@@ -29,3 +30,4 @@ boto3>=1.26.137
 # Utilities & Configuration
 python-dotenv>=1.0.0
 pydantic>=2.1.0
+httpx>=0.24.0
