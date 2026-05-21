@@ -1,0 +1,16 @@
+version: "3.8"
+services:
+  prizolov-sports-ai:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: prizolov_ai_core
+    restart: unless-stopped
+    environment:
+      - MOCK_MODE=true
+      - DISCOVERY_INTERVAL=45
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+    # command убран — используются дефолты из Dockerfile (ENTRYPOINT + CMD)
