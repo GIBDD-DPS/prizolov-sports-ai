@@ -8,7 +8,7 @@
 
 # Core & Async Runtime
 asyncio
-aiohttp==3.9.3
+aiohttp>=3.9.0
 
 # gRPC Communication
 grpcio>=1.54.2
