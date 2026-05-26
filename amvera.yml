@@ -7,21 +7,16 @@
 # ============================================
 
 meta:
-  environment: "docker"
-  toolchain: "pip"
-
+  environment: python
+  toolchain:
+    name: pip
+    version: "3.10"
 build:
-  requirements: "requirements.txt"
-
+  requirementsPath: requirements.txt
+  useCache: true
 run:
-  # ОБЯЗАТЕЛЬНО: Разрешает апгрейд HTTP-соединения в WebSocket
-  websocket: true
-  # Базовый протокол для корректной обработки заголовков Upgrade
-  protocol: http
-  # Таймаут простоя соединения (5 минут). Предотвращает разрыв WS прокси-слоем
-  idleTimeout: 300
-  
-  persistence:
-    /data: "persistent-volume"
-  containerPort: "8080"
-  servicePort: "8080"
+  persistenceMount: /data
+  scriptName: main.py
+  containerPort: 8080
+  servicePort: 8080
+  command: null
