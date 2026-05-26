@@ -25,9 +25,6 @@ COPY . .
 
 EXPOSE 8000
 
-# ВАЖНО: НИКАКИХ ENTRYPOINT
-# Запускаем только uvicorn
 CMD ["uvicorn", "api.server:app", "--host", "0.0.0.0", "--port", "8000"]
 
-ENTRYPOINT ["python", "main.py"]
 CMD ["--mock-mode"]
