@@ -8,23 +8,32 @@
 
 FROM python:3.10-slim
 
-WORKDIR /app
-
+# Устанавливаем системные зависимости (совместимые с Debian Trixie)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1-mesa-glx libglib2.0-0 libgl1 gcc build-essential \
+    libgl1-mesa-dri \
+    libglx-mesa0 \
+    libglib2.0-0 \
+    gcc \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+# Создаём рабочую директорию
+WORKDIR /app
+
+# Копируем зависимости
 COPY requirements.txt .
+
+# Устанавливаем Python-зависимости
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Копируем весь проект
 COPY . .
 
-ENV PYTHONUNBUFFERED=1 \
-    QT_QPA_PLATFORM=offscreen \
-    MOCK_MODE=true \
-    DISCOVERY_INTERVAL=45
+# Экспортируем порт
+EXPOSE 8000
 
-EXPOSE 8080
+# Команда запуска FastAPI
+CMD ["uvicorn", "api.server:app", "--host", "0.0.0.0", "--port", "8000"]
 
 ENTRYPOINT ["python", "main.py"]
 CMD ["--mock-mode"]
