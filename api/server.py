@@ -10,7 +10,7 @@ logger = logging.getLogger("PrizolovSportsAI.API")
 
 app = FastAPI(
     title="Prizolov Sports AI - Public API",
-    version="1.18",
+    version="1.19",
     description="Public JSON API for prizolov.ru sports widgets (WordPress / Elementor)."
 )
 
@@ -79,12 +79,13 @@ async def read_root(request: Request):
             disc = getattr(orch, "discovery_engine", None)
             if disc:
                 events = disc.get_all_events()
-                # ИСПРАВЛЕНО: Строго извлекаем именно первый элемент списка [0]
+                # ИСПРАВЛЕНО: Безопасно вытаскиваем первый элемент списка через [0]
                 if events and isinstance(events, list) and len(events) > 0:
                     first_event = events[0]
-                    match_info["league"] = first_event.get("league", "РПЛ")
-                    match_info["home"] = first_event.get("home_team", "ЦСКА")
-                    match_info["away"] = first_event.get("away_team", "Динамо")
+                    if isinstance(first_event, dict):
+                        match_info["league"] = first_event.get("league", "РПЛ")
+                        match_info["home"] = first_event.get("home_team", "ЦСКА")
+                        match_info["away"] = first_event.get("away_team", "Динамо")
 
             cache = getattr(orch, "line_cache", None)
             if cache and isinstance(cache, dict) and len(cache) > 0:
