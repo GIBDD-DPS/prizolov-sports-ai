@@ -10,11 +10,10 @@ logger = logging.getLogger("PrizolovSportsAI.API")
 
 app = FastAPI(
     title="Prizolov Sports AI - Public API",
-    version="1.17",
+    version="1.18",
     description="Public JSON API for prizolov.ru sports widgets (WordPress / Elementor)."
 )
 
-# Нативная CORS‑настройка
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -29,7 +28,7 @@ except ImportError:
     try:
         from live_match_state import LiveMatchState
     except ImportError:
-        LiveMatchState = None  # type: ignore
+        LiveMatchState = None
 
 _fallback_registry = {}
 if LiveMatchState:
@@ -48,6 +47,7 @@ async def preflight_handler():
         }
     )
 
+
 @app.get("/")
 @app.get("/api/state")
 async def read_root(request: Request):
@@ -55,7 +55,6 @@ async def read_root(request: Request):
     match_info = {"league": "РПЛ", "home": "ЦСКА", "away": "Динамо", "status": "LIVE"}
     recommendations = []
     
-    # Генерация базового пула данных (Fallback)
     sports_pool = ["football", "hockey", "basketball"]
     teams_pool = [("Спартак", "Зенит"), ("ЦСКА", "СКА"), ("Реал", "Барса"), ("Лейкерс", "Бостон")]
     lines_pool = ["П1", "Х", "ТБ (2.5)", "Фора (0)", "ИТБ1 (1.5)"]
@@ -74,16 +73,15 @@ async def read_root(request: Request):
             "coefficient": round(random.uniform(1.45, 3.10), 2)
         })
 
-    # Попытка безопасно прочитать реальный кэш ИИ
     try:
         orch = getattr(app.state, "orchestrator", None)
         if orch:
             disc = getattr(orch, "discovery_engine", None)
             if disc:
                 events = disc.get_all_events()
-                # ИСПРАВЛЕНО: Извлекаем первый словарь из списка матчей корректно
+                # ИСПРАВЛЕНО: Строго извлекаем именно первый элемент списка [0]
                 if events and isinstance(events, list) and len(events) > 0:
-                    first_event = events[0]  # Берём первый матч
+                    first_event = events[0]
                     match_info["league"] = first_event.get("league", "РПЛ")
                     match_info["home"] = first_event.get("home_team", "ЦСКА")
                     match_info["away"] = first_event.get("away_team", "Динамо")
@@ -116,6 +114,7 @@ async def read_root(request: Request):
         },
         headers={"Access-Control-Allow-Origin": "*"}
     )
+
 
 @app.get("/api/match/live/{match_id}")
 async def get_live_match_state(match_id: str, request: Request):
