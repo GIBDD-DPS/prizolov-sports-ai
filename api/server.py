@@ -10,10 +10,11 @@ logger = logging.getLogger("PrizolovSportsAI.API")
 
 app = FastAPI(
     title="Prizolov Sports AI - Public API",
-    version="1.16",
+    version="1.17",
     description="Public JSON API for prizolov.ru sports widgets (WordPress / Elementor)."
 )
 
+# Нативная CORS‑настройка
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -50,11 +51,11 @@ async def preflight_handler():
 @app.get("/")
 @app.get("/api/state")
 async def read_root(request: Request):
-    """Главный эндпоинт для Elementor. Полный иммунитет к ошибкам 502."""
+    """Главный эндпоинт для Elementor. Полная отказоустойчивость."""
     match_info = {"league": "РПЛ", "home": "ЦСКА", "away": "Динамо", "status": "LIVE"}
     recommendations = []
     
-    # Генерация дефолтных данных (Fallback)
+    # Генерация базового пула данных (Fallback)
     sports_pool = ["football", "hockey", "basketball"]
     teams_pool = [("Спартак", "Зенит"), ("ЦСКА", "СКА"), ("Реал", "Барса"), ("Лейкерс", "Бостон")]
     lines_pool = ["П1", "Х", "ТБ (2.5)", "Фора (0)", "ИТБ1 (1.5)"]
@@ -73,17 +74,19 @@ async def read_root(request: Request):
             "coefficient": round(random.uniform(1.45, 3.10), 2)
         })
 
-    # Попытка прочитать реальный кэш ИИ
+    # Попытка безопасно прочитать реальный кэш ИИ
     try:
         orch = getattr(app.state, "orchestrator", None)
         if orch:
             disc = getattr(orch, "discovery_engine", None)
             if disc:
                 events = disc.get_all_events()
-                if events and len(events) > 0:
-                    match_info["league"] = events[0].get("league", "РПЛ")
-                    match_info["home"] = events[0].get("home_team", "ЦСКА")
-                    match_info["away"] = events[0].get("away_team", "Динамо")
+                # ИСПРАВЛЕНО: Извлекаем первый словарь из списка матчей корректно
+                if events and isinstance(events, list) and len(events) > 0:
+                    first_event = events[0]  # Берём первый матч
+                    match_info["league"] = first_event.get("league", "РПЛ")
+                    match_info["home"] = first_event.get("home_team", "ЦСКА")
+                    match_info["away"] = first_event.get("away_team", "Динамо")
 
             cache = getattr(orch, "line_cache", None)
             if cache and isinstance(cache, dict) and len(cache) > 0:
@@ -99,12 +102,18 @@ async def read_root(request: Request):
                         "confidence": c_data.get("confidence", "high"),
                         "coefficient": c_data.get("coefficient", 1.85)
                     })
-                if real_recs: recommendations = real_recs
+                if real_recs: 
+                    recommendations = real_recs
     except Exception as e:
-        logger.error(f"💥 API Fallback active: {e}")
+        logger.error(f"💥 API Internal Error: {e}")
 
     return JSONResponse(
-        content={"status": "ok", "timestamp": datetime.utcnow().isoformat(), "match_info": match_info, "recommendations": recommendations},
+        content={
+            "status": "ok", 
+            "timestamp": datetime.utcnow().isoformat(), 
+            "match_info": match_info, 
+            "recommendations": recommendations
+        },
         headers={"Access-Control-Allow-Origin": "*"}
     )
 
