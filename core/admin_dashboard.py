@@ -1,20 +1,8 @@
+#!/usr/bin/env python3
 # ============================================
 # Prizolov Sports AI - Admin Dashboard / API Layer
-# Version: 1.01 (+0.01: Added /api/cache & /api/events endpoints,
-#                 improved CORS, safer responses, WP/Elementor-ready,
-#                 enhanced logging, unified JSON structure)
-#
-# CHANGELOG (что сделано):
-# - Добавлен эндпоинт /api/cache → отдаёт line_cache оркестратора
-# - Добавлен эндпоинт /api/events → отдаёт события discovery_engine
-# - Улучшена CORS‑логика (унифицирована)
-# - Улучшена структура JSON‑ответов
-# - Добавлена защита от ошибок при обращении к orchestrator
-# - Улучшено логирование для Amvera / Docker
-# - Подготовка под WordPress/Elementor (AJAX‑совместимые ответы)
-# - Версия повышена на +0.01 (микро‑улучшения)
-#
-# Author: Dm.Andreyanov
+# Version: 1.02 (PRODUCTION OPTIMIZED FOR GATHER/AMVERA)
+# Author: Dm.Andreyanov / Refactored
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
 # ============================================
@@ -52,7 +40,7 @@ async def _options(request):
 # ============================================================
 
 async def _handle_status(request):
-    """Базовый статус‑эндпоинт."""
+    """Базовый статус‑эндпоинт (используется Amvera для Healthcheck)."""
     data = {
         "status": "ok",
         "service": "Prizolov Sports AI",
@@ -73,7 +61,8 @@ async def _handle_cache(request):
         return _cors(web.json_response({"error": "orchestrator_not_available"}, status=500))
 
     try:
-        cache = orch.line_cache
+        # Безопасное получение кэша линий
+        cache = getattr(orch, 'line_cache', {})
         return _cors(web.json_response({
             "status": "ok",
             "count": len(cache),
@@ -91,7 +80,7 @@ async def _handle_cache(request):
 
 async def _handle_events(request):
     orch = request.app.get("orchestrator")
-    if not orch or not orch.discovery_engine:
+    if not orch or not getattr(orch, 'discovery_engine', None):
         return _cors(web.json_response({"error": "discovery_not_available"}, status=500))
 
     try:
@@ -113,11 +102,10 @@ async def _handle_events(request):
 
 async def start_api_server(orchestrator=None, port: int = 8080):
     """
-    Минимальный сервер для Amvera.
-    - Читает PORT из ENV или использует аргумент
-    - Слушает на 0.0.0.0 для Docker
-    - Логирует каждый шаг
-    - Добавлены API‑эндпоинты для WordPress/Elementor
+    Минимальный и неблокирующий сервер для Amvera.
+    - Читает PORT из ENV или использует аргумент.
+    - Слушает на 0.0.0.0 для Docker.
+    - Не блокирует выполнение фонового цикла ИИ-оркестратора.
     """
     try:
         target_port = int(os.environ.get("PORT", port or 8080))
@@ -127,23 +115,24 @@ async def start_api_server(orchestrator=None, port: int = 8080):
         app = web.Application()
         app["orchestrator"] = orchestrator
 
-        # Базовые маршруты
+        # Базовые маршруты и Healthcheck
         app.router.add_get('/', _handle_status)
         app.router.add_get('/health', _handle_status)
         app.router.add_get('/api/state', _handle_status)
 
-        # Новые API‑маршруты
+        # API‑маршруты для интеграции с сайтом (WP / Elementor)
         app.router.add_get('/api/cache', _handle_cache)
         app.router.add_get('/api/events', _handle_events)
 
-        # CORS
+        # CORS preflight
         app.router.add_options('/{tail:.*}', _options)
 
-        # Запуск
+        # Инициализация раннера aiohttp
         runner = web.AppRunner(app)
         await runner.setup()
         logger.info("✅ AppRunner setup complete")
 
+        # Запуск TCP-сайта
         site = web.TCPSite(runner, '0.0.0.0', target_port)
         await site.start()
         logger.info(f"✅ TCPSite started on 0.0.0.0:{target_port}")
@@ -151,9 +140,9 @@ async def start_api_server(orchestrator=None, port: int = 8080):
         print(f"✅ SERVER READY - Port {target_port}", flush=True)
         sys.stdout.flush()
 
-        # Держим сервер живым
-        while True:
-            await asyncio.sleep(3600)
+        # [УБРАНО СТАРОЕ ОЖИДАНИЕ WHLLE TRUE]
+        # Возвращаем управление в main.py, чтобы aiohttp работал параллельно с ИИ-сканированием
+        return runner
 
     except Exception as e:
         error_msg = f"💥 FAILED TO START SERVER: {type(e).__name__}: {e}"
