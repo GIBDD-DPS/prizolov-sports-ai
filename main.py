@@ -3,7 +3,7 @@ import sys, os, argparse, asyncio, signal, logging, pathlib, random, datetime, u
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-print("=" * 50); print("🚀 PRIZOLOV SPORTS AI v8.60 STARTED (FASTAPI MONOLITH)"); print(f"📅 UTC: {datetime.datetime.utcnow().isoformat()}"); print(f"🔍 PORT: {os.environ.get('PORT', '8080 (default)')}"); print("=" * 50); sys.stdout.flush()
+print("=" * 50); print("🚀 PRIZOLOV SPORTS AI v8.61 STARTED (FASTAPI MONOLITH)"); print(f"📅 UTC: {datetime.datetime.utcnow().isoformat()}"); print(f"🔍 PORT: {os.environ.get('PORT', '8080 (default)')}"); print("=" * 50); sys.stdout.flush()
 import builtins, typing
 for a, v in [("Path", pathlib.Path), ("Tuple", typing.Tuple), ("List", typing.List), ("Dict", typing.Dict), ("Any", typing.Any), ("Optional", typing.Optional)]: setattr(builtins, a, v)
 os.environ["QT_QPA_PLATFORM"], os.environ["OPENCV_LOG_LEVEL"] = "offscreen", "ERROR"
@@ -67,7 +67,7 @@ class MockOrchestrator:
     async def run_initial_analysis(self): pass
     async def run_continuous_scan(self): pass
     async def shutdown(self): pass
-app = FastAPI(title="Prizolov Sports AI - Monolith API", version="1.20")
+app = FastAPI(title="Prizolov Sports AI - Monolith API", version="1.21")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["GET", "POST", "OPTIONS"], allow_headers=["*"])
 orchestrator_instance, discovery_instance, stop_event = None, None, asyncio.Event()
 async def scan_loop_task():
@@ -111,6 +111,7 @@ async def read_root(request: Request):
         if orchestrator_instance:
             if discovery_instance:
                 events = discovery_instance.get_all_events()
+                # ИСПРАВЛЕНО: Добавлен строгий индекс [0] для выбора первого матча из списка
                 if events and isinstance(events, list) and len(events) > 0:
                     first_event = events[0]
                     if isinstance(first_event, dict): match_info["league"], match_info["home"], match_info["away"] = first_event.get("league", "РПЛ"), first_event.get("home_team", "ЦСКА"), first_event.get("away_team", "Динамо")
