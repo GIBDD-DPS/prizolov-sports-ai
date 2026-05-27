@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # ============================================
 # Prizolov Sports AI - Main Execution Engine
-# Version: 8.56 (+0.01: Multi-sport constants, safer fallback discovery, minor cleanup)
-# Author: Dm.Andreyanov
+# Version: 8.57 (PRODUCTION OPTIMIZED FOR AMVERA)
+# Author: Dm.Andreyanov / Refactored
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at cloud.amvera.ru
 # ============================================
@@ -19,7 +19,7 @@ import datetime
 
 # === ЖЁСТКИЙ БАННЕР ВЕРСИИ ===
 print("=" * 50)
-print("🚀 PRIZOLOV SPORTS AI v8.56 STARTED (HTTP MODE)")
+print("🚀 PRIZOLOV SPORTS AI v8.57 STARTED (HTTP MODE)")
 print(f"📅 UTC: {datetime.datetime.utcnow().isoformat()}")
 print(f"🔍 PORT: {os.environ.get('PORT', '8080 (default)')}")
 print("=" * 50)
@@ -43,13 +43,11 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
 
 current_dir = pathlib.Path(__file__).resolve().parent
-sys.path.insert(0, str(current_dir))
-sys.path.insert(0, str(current_dir / "agent_bridge"))
-sys.path.insert(0, str(current_dir / "prizolov_sports_ai"))
+for path_dir in [current_dir, current_dir / "agent_bridge", current_dir / "prizolov_sports_ai"]:
+    if str(path_dir) not in sys.path:
+        sys.path.insert(0, str(path_dir))
 
 # === БАЗОВАЯ КОНФИГУРАЦИЯ СПОРТОВ ===
-# Основные виды спорта: футбол, хоккей, баскетбол.
-# "other" зарезервирован под интересные события в других видах спорта.
 SPORTS_CONFIG = {
     "football": {
         "leagues": ["РПЛ", "АПЛ"],
@@ -63,7 +61,6 @@ SPORTS_CONFIG = {
         "leagues": ["ВТБ", "НБА"],
         "teams": ["ЦСКА", "УНИКС", "Лейкерс", "Бостон"],
     },
-    # "other": можно будет использовать для дополнительных видов спорта
 }
 
 # CV Mock
@@ -134,21 +131,13 @@ def compile_proto() -> None:
                     encoding="utf-8",
                 )
     except Exception as e:
-        logging.warning(f"⚠️ Proto skipped: {e}")
+        print(f"⚠️ Proto skipped: {e}")
 
 
 compile_proto()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("PrizolovSportsAI.Main")
-
-keep_running = True
-signal.signal(
-    signal.SIGINT, lambda s, f: setattr(__import__("__main__"), "keep_running", False)
-)
-signal.signal(
-    signal.SIGTERM, lambda s, f: setattr(__import__("__main__"), "keep_running", False)
-)
 
 # === ИМПОРТЫ С FALLBACK ===
 try:
@@ -162,17 +151,11 @@ except ImportError:
         from prizolov_sports_ai.modules.event_discovery import EventDiscoveryEngine
     except ImportError:
         EventDiscoveryEngine = None  # type: ignore
+        PrizolovSportsOrchestrator = None  # type: ignore
+        start_api_server = None  # type: ignore
 
 
-# === FALLBACK DISCOVERY ===
 class FallbackDiscovery:
-    """
-    Резервный механизм обнаружения событий,
-    когда EventDiscoveryEngine недоступен.
-    Использует SPORTS_CONFIG и генерирует
-    базовый набор матчей по основным видам спорта.
-    """
-
     def __init__(self) -> None:
         self._events: list[dict] = []
 
@@ -194,7 +177,6 @@ class FallbackDiscovery:
 
             for i in range(2):
                 home_team = random.choice(teams)
-                # гарантируем, что away_team != home_team
                 available_away = [t for t in teams if t != home_team]
                 if not available_away:
                     continue
@@ -213,10 +195,7 @@ class FallbackDiscovery:
                     }
                 )
 
-        logger.info(
-            f"🧪 FallbackDiscovery generated {len(self._events)} events "
-            f"for sports: {', '.join(SPORTS_CONFIG.keys())}"
-        )
+        logger.info(f"🧪 FallbackDiscovery generated {len(self._events)} events.")
 
     def get_events_for_analysis(self, **kwargs) -> list[dict]:
         return self._events
@@ -225,17 +204,38 @@ class FallbackDiscovery:
         return self._events
 
 
-async def main_loop(host: str, port: int, mock: bool) -> None:
-    global keep_running
-    logger.info("🔄 Инициализация пайплайна v8.56...")
-    logger.info(
-        f"🎯 Target agent host: {host} | HTTP port: {port} | MOCK_MODE: {'ON' if mock else 'OFF'}"
-    )
+async def scan_loop(orch, stop_event: asyncio.Event) -> None:
+    """Фоновый конкурентный цикл сканирования матчей."""
+    logger.info("⚡ Выполнение первичного анализа оркестратора...")
+    try:
+        await orch.run_initial_analysis()
+    except Exception as e:
+        logger.error(f"❌ Ошибка первичного анализа: {e}")
 
-    # Discovery engine: реальный или fallback
+    logger.info("🔄 Пайплайн сканирования активирован.")
+    while not stop_event.is_set():
+        try:
+            await orch.run_continuous_scan()
+        except Exception as e:
+            logger.error(f"❌ Ошибка при непрерывном сканировании: {e}")
+        
+        try:
+            # Безопасный сон с возможностью мгновенного прерывания по сигналу Amvera
+            await asyncio.wait_for(stop_event.wait(), timeout=45)
+        except asyncio.TimeoutError:
+            continue
+
+
+async def main_loop(host: str, port: int, mock: bool) -> None:
+    logger.info("🔄 Инициализация пайплайна v8.57...")
+    
+    if PrizolovSportsOrchestrator is None or start_api_server is None:
+        logger.critical("❌ Критические модули проекта не импортированы. Проверьте структуру папок core/ и модулей.")
+        return
+
     disc = EventDiscoveryEngine(refresh_interval=45) if EventDiscoveryEngine else FallbackDiscovery()
     await disc.start_auto_discovery()
-    logger.info(f"✅ Discovery ready. Events: {len(disc.get_all_events())}")
+    logger.info(f"✅ Discovery ready. Событий найдено: {len(disc.get_all_events())}")
 
     orch = PrizolovSportsOrchestrator(
         target_agent_host=host,
@@ -243,39 +243,52 @@ async def main_loop(host: str, port: int, mock: bool) -> None:
         discovery_engine=disc,
     )
 
-    await start_api_server(orch, port=port)
-    logger.info("✅ HTTP API Server active")
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
 
-    # Первичный анализ (может быть расширен под многоспорт и самообучение)
-    await orch.run_initial_analysis()
+    # Чистый перехват системных сигналов выключения контейнера
+    def handle_exit():
+        logger.info("🛑 Получен сигнал остановки (SIGINT/SIGTERM). Завершаем процессы...")
+        stop_event.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, handle_exit)
+        except NotImplementedError:
+            pass # Для тестов локально на Windows, если применимо
 
     try:
-        while keep_running:
-            await orch.run_continuous_scan()
-            await asyncio.sleep(45)
+        # Запуск API сервера и фонового сканирования одновременно (конкурентно)
+        await asyncio.gather(
+            start_api_server(orch, port=port),
+            scan_loop(orch, stop_event)
+        )
+    except Exception as e:
+        logger.error(f"❌ Критический сбой в основном цикле asyncio: {e}")
     finally:
         await orch.shutdown()
-        logger.info("🛑 Orchestrator shutdown complete")
+        if hasattr(disc, 'stop'):
+            disc.stop()
+        logger.info("🛑 Оркестратор успешно остановлен.")
 
 
 if __name__ == "__main__":
-    # Amvera передаёт порт через переменную окружения PORT
+    # Чтение порта из окружения (Amvera прокидывает его автоматически)
     default_port = int(os.environ.get("PORT", 8080))
 
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Prizolov Sports AI Engine")
     parser.add_argument("--agent_host", default="localhost:50051")
     parser.add_argument("--dashboard_port", type=int, default=default_port)
-    parser.add_argument("--mock-mode", action="store_true")
+    parser.add_argument("--mock-mode", action="store_true", default=True) # default=True для безопасных тестов
     parser.add_argument("--sport", type=str, default=None, help="[DEPRECATED]")
-    parser.add_argument("--match_id", type=str, default=None, help="[DEPRECATED]")
-    parser.add_argument("--weights", type=str, default=None, help="[DEPRECATED]")
 
-    args, unknown = parser.parse_known_args()
-
-    if args.sport or args.match_id:
-        logger.warning("⚠️ Deprecated args ignored. Using autonomous discovery.")
+    args = parser.parse_args()
 
     try:
-        asyncio.run(main_loop(args.agent_host, args.dashboard_port, args.mock_mode))
+        asyncio.run(main_loop(
+            host=args.agent_host,
+            port=args.dashboard_port,
+            mock=args.mock_mode
+        ))
     except KeyboardInterrupt:
-        logger.info("👋 Shutdown.")
+        print("🤖 Приложение остановлено пользователем.")
