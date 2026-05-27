@@ -298,7 +298,6 @@ async def main_loop(host: str, port: int, mock: bool) -> None:
 
 
 if __name__ == "__main__":
-    # Читаем системный порт Amvera
     default_port = int(os.environ.get("PORT", 8080))
 
     parser = argparse.ArgumentParser(description="Prizolov Sports AI Production Engine")
@@ -309,7 +308,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-       try:
+    try:
         asyncio.run(main_loop(
             host=args.agent_host,
             port=args.dashboard_port,
