@@ -120,7 +120,7 @@ async def read_root(request: Request):
                 for m_id, c_data in cache.items(): real_recs.append({"league": c_data.get("league", "Спорт"), "sport": c_data.get("sport", "football"), "home": c_data.get("teams", {}).get("home", "Команда 1"), "away": c_data.get("teams", {}).get("away", "Команда 2"), "line": c_data.get("recommended_bet", "ТБ (2.5)"), "probability": c_data.get("probability", 0.75), "confidence": c_data.get("confidence", "high"), "coefficient": c_data.get("coefficient", 1.85)})
                 if real_recs: recommendations = real_recs
     except Exception as e: logger.error(f"💥 Ошибка сбора метрик API: {e}")
-    return JSONResponse(content={"status": "ok", "timestamp": datetime.datetime.utcnow().isoformat(), "match_info": match_info, "recommendations": recommendations}, headers={"Access-Control-Allow-Origin": "*"})
+    return {"status": "ok", "timestamp": datetime.datetime.utcnow().isoformat(), "match_info": match_info, "recommendations": recommendations}
 if __name__ == "__main__":
     target_port = int(os.environ.get("PORT", 8080))
     uvicorn.run("main:app", host="0.0.0.0", port=target_port, log_level="info")
