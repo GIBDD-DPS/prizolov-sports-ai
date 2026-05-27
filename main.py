@@ -206,28 +206,34 @@ class FallbackDiscovery:
 
 async def start_api_server(orchestrator=None, port: int = 8080):
     """
-    Запуск FastAPI сервера через Uvicorn в общем цикле asyncio.
-    Не блокирует выполнение ИИ-движка и связывает данные через app.state.
+    Запуск FastAPI сервера через Uvicorn в изолированном асинхронном режиме.
+    Флаг loop='asyncio' и handle_signals=False предотвращают краш движка в облаке Amvera.
     """
     try:
         from api.server import app
         
-        # Передаем ссылку на работающий оркестратор внутрь контекста FastAPI
+        # Передаем ссылку на оркестратор внутрь FastAPI
         app.state.orchestrator = orchestrator
         
         target_port = int(os.environ.get("PORT", port))
         
-        # Передаем фабрику в асинхронный сервер uvicorn
-        config = uvicorn.Config(app, host="0.0.0.0", port=target_port, log_level="info")
+        # Конфигурируем Uvicorn для работы внутри СУЩЕСТВУЮЩЕГО цикла asyncio
+        config = uvicorn.Config(
+            app, 
+            host="0.0.0.0", 
+            port=target_port, 
+            log_level="info",
+            loop="asyncio",        # Говорим использовать стандартный цикл asyncio
+            handle_signals=False   # ЗАПРЕЩАЕМ Uvicorn перехватывать сигналы SIGTERM
+        )
         server = uvicorn.Server(config)
         
-        logger.info(f"🚀 Запуск FastAPI сервера на порту {target_port}...")
+        logger.info(f"🚀 Инициализация FastAPI/Uvicorn на порту {target_port}...")
         await server.serve()
         
     except Exception as e:
         logger.critical(f"💥 Критическая ошибка инициализации FastAPI/Uvicorn: {e}")
         raise
-
 
 async def scan_loop(orch, stop_event: asyncio.Event) -> None:
     """Фоновый неблокирующий цикл ИИ-анализа и непрерывного сканирования спортивных линий."""
