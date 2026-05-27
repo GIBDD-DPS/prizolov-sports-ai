@@ -1,12 +1,4 @@
 #!/usr/bin/env python3
-# ============================================
-# Prizolov Sports AI - Main Execution Engine
-# Version: 8.58 (PRODUCTION FIXED FOR AMVERA)
-# Author: Dm.Andreyanov / Refactored
-# Organization: Prizolov Market / Prizolov Lab
-# Target: Production deployment at cloud.amvera.ru
-# ============================================
-
 import sys
 import os
 import argparse
@@ -17,107 +9,59 @@ import pathlib
 import random
 import datetime
 import uvicorn
-
-# === ЖЁСТКИЙ БАННЕР ВЕРСИИ ===
 print("=" * 50)
-print("🚀 PRIZOLOV SPORTS AI v8.58 STARTED (FASTAPI/HTTP MODE)")
+print("🚀 PRIZOLOV SPORTS AI v8.59 STARTED (FASTAPI/HTTP MODE)")
 print(f"📅 UTC: {datetime.datetime.utcnow().isoformat()}")
 print(f"🔍 PORT: {os.environ.get('PORT', '8080 (default)')}")
 print("=" * 50)
 sys.stdout.flush()
-
-# Инжекция типов для обратной совместимости со старыми модулями
 import builtins
 import typing
-
-for a, v in [
-    ("Path", pathlib.Path),
-    ("Tuple", typing.Tuple),
-    ("List", typing.List),
-    ("Dict", typing.Dict),
-    ("Any", typing.Any),
-    ("Optional", typing.Optional),
-]:
+for a, v in [("Path", pathlib.Path), ("Tuple", typing.Tuple), ("List", typing.List), ("Dict", typing.Dict), ("Any", typing.Any), ("Optional", typing.Optional)]:
     setattr(builtins, a, v)
-
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 os.environ["OPENCV_LOG_LEVEL"] = "ERROR"
-
-# === АВТОМАТИЧЕСКАЯ НАСТРОЙКА ПУТЕЙ ИМПОРТА ДЛЯ AMVERA ===
 current_dir = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(current_dir))
-
 subdirs = ["agent_bridge", "prizolov_sports_ai", "orchestrator", "core", "api", "modules"]
 for subdir in subdirs:
     full_path = current_dir / subdir
     if full_path.exists() and str(full_path) not in sys.path:
         sys.path.insert(0, str(full_path))
-    
     nested_path = current_dir / "prizolov_sports_ai" / subdir
     if nested_path.exists() and str(nested_path) not in sys.path:
         sys.path.insert(0, str(nested_path))
-
-# === БАЗОВАЯ КОНФИГУРАЦИЯ СПОРТОВ ===
 SPORTS_CONFIG = {
-    "football": {
-        "leagues": ["РПЛ", "АПЛ"],
-        "teams": ["Спартак", "Зенит", "Реал", "Барса"],
-    },
-    "hockey": {
-        "leagues": ["КХЛ", "НХЛ"],
-        "teams": ["ЦСКА", "СКА", "Тампа", "Колорадо"],
-    },
-    "basketball": {
-        "leagues": ["ВТБ", "НБА"],
-        "teams": ["ЦСКА", "УНИКС", "Лейкерс", "Бостон"],
-    },
+    "football": {"leagues": ["РПЛ", "АПЛ"], "teams": ["Спартак", "Зенит", "Реал", "Барса"]},
+    "hockey": {"leagues": ["КХЛ", "НХЛ"], "teams": ["ЦСКА", "СКА", "Тампа", "Колорадо"]},
+    "basketball": {"leagues": ["ВТБ", "НБА"], "teams": ["ЦСКА", "УНИКС", "Лейкерс", "Бостон"]}
 }
-
-# CV Mock — защита на случай, если headless-библиотека OpenCV не подгрузилась
 try:
     import cv2  # type: ignore
 except Exception:
     from types import ModuleType
     m = ModuleType("cv2")
-    for x in ["COLOR_BGR2GRAY", "COLOR_BGR2YCrCb", "COLOR_YCrCb2BGR", "INTER_CUBIC", 
-              "INTER_NEAREST", "THRESH_BINARY_INV", "THRESH_OTSU", "IMWRITE_JPEG_QUALITY", "INPAINT_NS"]:
+    for x in ["COLOR_BGR2GRAY", "COLOR_BGR2YCrCb", "COLOR_YCrCb2BGR", "INTER_CUBIC", "INTER_NEAREST", "THRESH_BINARY_INV", "THRESH_OTSU", "IMWRITE_JPEG_QUALITY", "INPAINT_NS"]:
         setattr(m, x, 0)
-    for f in ["VideoCapture", "resize", "cvtColor", "threshold", "inRange", "line", 
-              "putText", "imwrite", "undistortPoints", "undistort", "getOptimalNewCameraMatrix"]:
+    for f in ["VideoCapture", "resize", "cvtColor", "threshold", "inRange", "line", "putText", "imwrite", "undistortPoints", "undistort", "getOptimalNewCameraMatrix"]:
         setattr(m, f, lambda *a, **k: (None if f == "getOptimalNewCameraMatrix" else (0.0, a if a else None)))
     sys.modules["cv2"] = m
-
-
 def compile_proto() -> None:
-    """Компиляция gRPC прототипов при старте контейнера."""
     try:
         from grpc_tools import protoc
         p = current_dir / "proto" / "prizolov_agent.proto"
         o = current_dir / "agent_bridge"
         if p.exists():
             o.mkdir(parents=True, exist_ok=True)
-            protoc.main([
-                "grpc_tools.protoc",
-                f"--proto_path={p.parent}",
-                f"--python_out={o}",
-                f"--grpc_python_out={o}",
-                str(p),
-            ])
+            protoc.main(["grpc_tools.protoc", f"--proto_path={p.parent}", f"--python_out={o}", f"--grpc_python_out={o}", str(p)])
             g = o / "prizolov_agent_pb2_grpc.py"
             if g.exists():
-                g.write_text(
-                    g.read_text(encoding="utf-8").replace("from . import prizolov_agent_pb2", "import prizolov_agent_pb2"),
-                    encoding="utf-8",
-                )
+                g.write_text(g.read_text(encoding="utf-8").replace("from . import prizolov_agent_pb2", "import prizolov_agent_pb2"), encoding="utf-8")
     except Exception as e:
         print(f"⚠️ Proto skipped: {e}")
-
 compile_proto()
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("PrizolovSportsAI.Main")
-
-# === ИМПОРТЫ С FALLBACK ===
 try:
     from core.orchestrator import PrizolovSportsOrchestrator
     from modules.event_discovery import EventDiscoveryEngine
@@ -128,18 +72,13 @@ except ImportError:
     except ImportError:
         EventDiscoveryEngine = None  # type: ignore
         PrizolovSportsOrchestrator = None  # type: ignore
-
-
 class FallbackDiscovery:
     def __init__(self) -> None:
         self._events: list[dict] = []
-
     async def start_auto_discovery(self) -> None:
         await self._fetch()
-
     def stop(self) -> None:
         pass
-
     async def _fetch(self) -> None:
         now = datetime.datetime.utcnow()
         self._events = []
@@ -165,41 +104,33 @@ class FallbackDiscovery:
                     "betting_interest": 0.85,
                 })
         logger.info(f"🧪 FallbackDiscovery сгенерировал {len(self._events)} матчей.")
-
     def get_events_for_analysis(self, **kwargs) -> list[dict]: return self._events
     def get_all_events(self) -> list[dict]: return self._events
-
-
+class MockOrchestrator:
+    def __init__(self, discovery_engine):
+        self.discovery_engine = discovery_engine
+        self.line_cache = {}
+    async def run_initial_analysis(self): pass
+    async def run_continuous_scan(self): pass
+    async def shutdown(self): pass
 async def start_api_server(orchestrator=None, port: int = 8080):
-    """Запуск FastAPI сервера через Uvicorn внутри СУЩЕСТВУЮЩЕГО цикла asyncio."""
     try:
         from api.server import app
         app.state.orchestrator = orchestrator
         target_port = int(os.environ.get("PORT", port))
-        
-        config = uvicorn.Config(
-            app, 
-            host="0.0.0.0", 
-            port=target_port, 
-            log_level="info",
-            loop="asyncio",
-            handle_signals=False
-        )
+        config = uvicorn.Config(app, host="0.0.0.0", port=target_port, log_level="info", loop="asyncio", handle_signals=False)
         server = uvicorn.Server(config)
         logger.info(f"🚀 Инициализация FastAPI/Uvicorn на порту {target_port}...")
         await server.serve()
     except Exception as e:
         logger.critical(f"💥 Критическая ошибка инициализации FastAPI/Uvicorn: {e}")
         raise
-
-
 async def scan_loop(orch, stop_event: asyncio.Event) -> None:
     logger.info("⚡ Выполнение первичного ИИ-анализа...")
     try:
         if orch: await orch.run_initial_analysis()
     except Exception as e:
         logger.error(f"❌ Ошибка первичного анализа оркестратора: {e}")
-
     logger.info("🔄 Пайплайн циклического сканирования активен.")
     while not stop_event.is_set():
         try:
@@ -210,45 +141,37 @@ async def scan_loop(orch, stop_event: asyncio.Event) -> None:
             await asyncio.wait_for(stop_event.wait(), timeout=45)
         except asyncio.TimeoutError:
             continue
-
-
 async def main_loop(host: str, port: int, mock: bool) -> None:
     logger.info("🔄 Инициализация основного ядра пайплайна...")
-    
     disc = EventDiscoveryEngine(refresh_interval=45) if EventDiscoveryEngine else FallbackDiscovery()
     await disc.start_auto_discovery()
     logger.info(f"✅ Модуль Discovery готов. Матчей в обработке: {len(disc.get_all_events())}")
-
-    orch = None
     if PrizolovSportsOrchestrator:
-        orch = PrizolovSportsOrchestrator(target_agent_host=host, mock_mode=mock, discovery_engine=disc)
+        try:
+            orch = PrizolovSportsOrchestrator(target_agent_host=host, mock_mode=mock, discovery_engine=disc)
+            logger.info("✅ Реальный PrizolovSportsOrchestrator успешно инициализирован.")
+        except Exception as e:
+            logger.error(f"⚠️ Ошибка инициализации реального оркестратора, включаем Mock: {e}")
+            orch = MockOrchestrator(discovery_engine=disc)
     else:
-        logger.warning("⚠️ PrizolovSportsOrchestrator не найден. Запуск в режиме API-only.")
-
+        logger.warning("⚠️ Модуль core.orchestrator не найден. Включаем MockOrchestrator.")
+        orch = MockOrchestrator(discovery_engine=disc)
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
-
     def handle_exit():
         logger.info("🛑 Получен сигнал завершения работы контейнера. Закрываем соединения...")
         stop_event.set()
-
     for sig in (signal.SIGINT, signal.SIGTERM):
         try: loop.add_signal_handler(sig, handle_exit)
         except NotImplementedError: pass
-
     try:
-        await asyncio.gather(
-            start_api_server(orch, port=port),
-            scan_loop(orch, stop_event)
-        )
+        await asyncio.gather(start_api_server(orch, port=port), scan_loop(orch, stop_event))
     except Exception as e:
         logger.error(f"❌ Системный сбой асинхронного цикла: {e}")
     finally:
         if orch and hasattr(orch, 'shutdown'): await orch.shutdown()
         if hasattr(disc, 'stop'): disc.stop()
-        logger.info("🛑 Оркестратор успешно завершил свою работу.")
-
-
+        logger.info("🛑 Пайплайн успешно остановлен.")
 if __name__ == "__main__":
     default_port = int(os.environ.get("PORT", 8080))
     parser = argparse.ArgumentParser(description="Prizolov Sports AI Production Engine")
@@ -257,7 +180,6 @@ if __name__ == "__main__":
     parser.add_argument("--mock-mode", action="store_true", default=True)
     parser.add_argument("--sport", type=str, default=None, help="[DEPRECATED]")
     args = parser.parse_args()
-
     try:
         asyncio.run(main_loop(host=args.agent_host, port=args.dashboard_port, mock=args.mock_mode))
     except KeyboardInterrupt:
