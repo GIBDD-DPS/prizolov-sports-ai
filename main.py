@@ -309,4 +309,11 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    try:asyncio.run(main_loop(host=args.agent_host,port=args.dashboard_port,mock=args.mock_mode))except KeyboardInterrupt:print("🤖 Приложение штатно остановлено пользователем.")
+       try:
+        asyncio.run(main_loop(
+            host=args.agent_host,
+            port=args.dashboard_port,
+            mock=args.mock_mode
+        ))
+    except KeyboardInterrupt:
+        print("🤖 Приложение штатно остановлено пользователем.")
