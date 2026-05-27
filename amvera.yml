@@ -1,7 +1,7 @@
 # ============================================
 # Prizolov Sports AI - Amvera Infrastructure Config
-# Version: 5.10 (+0.01: WebSocket Upgrade Enabled & Idle Timeout Optimized)
-# Author: Dm.Andreyanov
+# Version: 5.11 (PRODUCTION FIXED FOR AMVERA)
+# Author: Dm.Andreyanov / Refactored
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production Amvera Cloud Absolute Pass
 # ============================================
@@ -11,13 +11,23 @@ meta:
   toolchain:
     name: pip
     version: "3.10"
+
 build:
   requirementsPath: requirements.txt
   useCache: true
+
 run:
-  scriptName: null
+  # Запускаем именно main.py, чтобы работал и API-сервер, и фоновый ИИ-анализ матчей
+  command: python3 main.py --agent_host localhost:50051 --mock-mode
+  
+  # Монтируем постоянное хранилище для логов или весов моделей ИИ
   persistenceMount: /data
+  
+  # Порты должны строго совпадать. Внутри main.py мы автоматически слушаем PORT из окружения
   containerPort: 8080
-  servicePort: 8080
-  run:
-  command: uvicorn server:app --host 0.0.0.0 --port 8000 --app-dir api
+  
+  # Даем ИИ-движку время на прогрев и инициализацию (защита от таймаута веб-сервера)
+  healthcheck:
+    path: /
+    initialDelaySeconds: 30
+    periodSeconds: 15
