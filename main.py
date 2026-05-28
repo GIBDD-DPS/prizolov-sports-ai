@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 import sys, os, argparse, asyncio, signal, logging, pathlib, random, datetime, uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-print("=" * 50); print("🚀 PRIZOLOV SPORTS AI v9.00 STARTED (WEBSOCKET MONOLITH)"); print(f"📅 UTC: {datetime.datetime.utcnow().isoformat()}"); print(f"🔍 PORT: {os.environ.get('PORT', '8080 (default)')}"); print("=" * 50); sys.stdout.flush()
+from fastapi.responses import JSONResponse
+print("=" * 50); print("🚀 PRIZOLOV SPORTS AI v9.50 STARTED (POST MONOLITH)"); print(f"📅 UTC: {datetime.datetime.utcnow().isoformat()}"); print(f"🔍 PORT: {os.environ.get('PORT', '8080 (default)')}"); print("=" * 50); sys.stdout.flush()
 import builtins, typing
 for a, v in [("Path", pathlib.Path), ("Tuple", typing.Tuple), ("List", typing.List), ("Dict", typing.Dict), ("Any", typing.Any), ("Optional", typing.Optional)]: setattr(builtins, a, v)
 os.environ["QT_QPA_PLATFORM"], os.environ["OPENCV_LOG_LEVEL"] = "offscreen", "ERROR"
@@ -56,10 +57,9 @@ class MockOrchestrator:
     async def run_initial_analysis(self): pass
     async def run_continuous_scan(self): pass
     async def shutdown(self): pass
-app = FastAPI(title="Prizolov Sports AI - WebSocket Server", version="2.00")
+app = FastAPI(title="Prizolov Sports AI - Monolith API", version="9.50")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 orchestrator_instance, discovery_instance, stop_event = None, None, asyncio.Event()
-active_connections: list[WebSocket] = []
 async def scan_loop_task():
     global orchestrator_instance, stop_event
     try:
@@ -68,9 +68,8 @@ async def scan_loop_task():
     while not stop_event.is_set():
         try:
             if orchestrator_instance: await orchestrator_instance.run_continuous_scan()
-            await broadcast_live_data()
         except Exception as e: logger.error(f"❌ Ошибка при ИИ-сканировании линий: {e}")
-        try: await asyncio.wait_for(stop_event.wait(), timeout=5)
+        try: await asyncio.wait_for(stop_event.wait(), timeout=45)
         except asyncio.TimeoutError: continue
 @app.on_event("startup")
 async def startup_event():
@@ -87,7 +86,12 @@ async def shutdown_event():
     global orchestrator_instance, discovery_instance, stop_event; stop_event.set()
     if orchestrator_instance and hasattr(orchestrator_instance, 'shutdown'): await orchestrator_instance.shutdown()
     if discovery_instance and hasattr(discovery_instance, 'stop'): discovery_instance.stop()
-def generate_current_state_packet():
+@app.options("/{catchall:path}")
+async def preflight_handler(): return JSONResponse(content="OK", status_code=200, headers={"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Allow-Headers": "*"})
+@app.get("/")
+async def read_root_get(): return {"status": "ok", "message": "Prizolov Monolith POST Active"}
+@app.post("/api/state")
+async def read_root(request: Request):
     global orchestrator_instance, discovery_instance
     match_info = {"league": "РПЛ", "home": "ЦСКА", "away": "Динамо", "status": "LIVE"}; recommendations = []
     teams_pool = [("Спартак", "Зенит"), ("ЦСКА", "СКА"), ("Реал", "Барса"), ("Лейкерс", "Бостон")]
@@ -106,28 +110,8 @@ def generate_current_state_packet():
                 real_recs = []
                 for m_id, c_data in cache.items(): real_recs.append({"league": c_data.get("league", "Спорт"), "sport": c_data.get("sport", "football"), "home": c_data.get("teams", {}).get("home", "Команда 1"), "away": c_data.get("teams", {}).get("away", "Команда 2"), "line": c_data.get("recommended_bet", "ТБ (2.5)"), "probability": c_data.get("probability", 0.75), "confidence": c_data.get("confidence", "high"), "coefficient": c_data.get("coefficient", 1.85)})
                 if real_recs: recommendations = real_recs
-    except Exception as e: logger.error(f"💥 Ошибка сборки пакета: {e}")
-    return {"status": "ok", "timestamp": datetime.datetime.utcnow().isoformat(), "match_info": match_info, "recommendations": recommendations}
-async def broadcast_live_data():
-    global active_connections
-    if not active_connections: return
-    packet = generate_current_state_packet()
-    for connection in active_connections:
-        try: await connection.send_json(packet)
-        except Exception: active_connections.remove(connection)
-@app.websocket("/ws/state")
-async def websocket_endpoint(websocket: WebSocket):
-    global active_connections
-    await websocket.accept()
-    active_connections.append(websocket)
-    try:
-        initial_packet = generate_current_state_packet()
-        await websocket.send_json(initial_packet)
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect: active_connections.remove(websocket)
-    except Exception:
-        if websocket in active_connections: active_connections.remove(websocket)
+    except Exception as e: logger.error(f"💥 Ошибка сбора метрик API: {e}")
+    return JSONResponse(status_code=200, content={"status": "ok", "timestamp": datetime.datetime.utcnow().isoformat(), "match_info": match_info, "recommendations": recommendations}, headers={"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "POST, OPTIONS", "Access-Control-Allow-Headers": "*"})
 if __name__ == "__main__":
     target_port = int(os.environ.get("PORT", 8080))
     uvicorn.run("main:app", host="0.0.0.0", port=target_port, log_level="info")
