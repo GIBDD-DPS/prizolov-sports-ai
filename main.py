@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 import sys, os, argparse, asyncio, signal, logging, pathlib, random, datetime, uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-print("=" * 50); print("🚀 PRIZOLOV SPORTS AI v8.62 STARTED (FASTAPI MONOLITH)"); print(f"📅 UTC: {datetime.datetime.utcnow().isoformat()}"); print(f"🔍 PORT: {os.environ.get('PORT', '8080 (default)')}"); print("=" * 50); sys.stdout.flush()
+print("=" * 50); print("🚀 PRIZOLOV SPORTS AI v9.00 STARTED (WEBSOCKET MONOLITH)"); print(f"📅 UTC: {datetime.datetime.utcnow().isoformat()}"); print(f"🔍 PORT: {os.environ.get('PORT', '8080 (default)')}"); print("=" * 50); sys.stdout.flush()
 import builtins, typing
 for a, v in [("Path", pathlib.Path), ("Tuple", typing.Tuple), ("List", typing.List), ("Dict", typing.Dict), ("Any", typing.Any), ("Optional", typing.Optional)]: setattr(builtins, a, v)
 os.environ["QT_QPA_PLATFORM"], os.environ["OPENCV_LOG_LEVEL"] = "offscreen", "ERROR"
@@ -29,16 +28,6 @@ except Exception:
     for x in ["COLOR_BGR2GRAY", "COLOR_BGR2YCrCb", "COLOR_YCrCb2BGR", "INTER_CUBIC", "INTER_NEAREST", "THRESH_BINARY_INV", "THRESH_OTSU", "IMWRITE_JPEG_QUALITY", "INPAINT_NS"]: setattr(m, x, 0)
     for f in ["VideoCapture", "resize", "cvtColor", "threshold", "inRange", "line", "putText", "imwrite", "undistortPoints", "undistort", "getOptimalNewCameraMatrix"]: setattr(m, f, lambda *a, **k: (None if f == "getOptimalNewCameraMatrix" else (0.0, a if a else None)))
     sys.modules["cv2"] = m
-def compile_proto() -> None:
-    try:
-        from grpc_tools import protoc
-        p, o = current_dir / "proto" / "prizolov_agent.proto", current_dir / "agent_bridge"
-        if p.exists():
-            o.mkdir(parents=True, exist_ok=True); protoc.main(["grpc_tools.protoc", f"--proto_path={p.parent}", f"--python_out={o}", f"--grpc_python_out={o}", str(p)])
-            g = o / "prizolov_agent_pb2_grpc.py"
-            if g.exists(): g.write_text(g.read_text(encoding="utf-8").replace("from . import prizolov_agent_pb2", "import prizolov_agent_pb2"), encoding="utf-8")
-    except Exception as e: print(f"⚠️ Proto skipped: {e}")
-compile_proto()
 try:
     from core.orchestrator import PrizolovSportsOrchestrator
     from modules.event_discovery import EventDiscoveryEngine
@@ -67,9 +56,10 @@ class MockOrchestrator:
     async def run_initial_analysis(self): pass
     async def run_continuous_scan(self): pass
     async def shutdown(self): pass
-app = FastAPI(title="Prizolov Sports AI - Monolith API", version="1.22")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["GET", "POST", "OPTIONS"], allow_headers=["*"])
+app = FastAPI(title="Prizolov Sports AI - WebSocket Server", version="2.00")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 orchestrator_instance, discovery_instance, stop_event = None, None, asyncio.Event()
+active_connections: list[WebSocket] = []
 async def scan_loop_task():
     global orchestrator_instance, stop_event
     try:
@@ -78,8 +68,9 @@ async def scan_loop_task():
     while not stop_event.is_set():
         try:
             if orchestrator_instance: await orchestrator_instance.run_continuous_scan()
+            await broadcast_live_data()
         except Exception as e: logger.error(f"❌ Ошибка при ИИ-сканировании линий: {e}")
-        try: await asyncio.wait_for(stop_event.wait(), timeout=45)
+        try: await asyncio.wait_for(stop_event.wait(), timeout=5)
         except asyncio.TimeoutError: continue
 @app.on_event("startup")
 async def startup_event():
@@ -96,11 +87,7 @@ async def shutdown_event():
     global orchestrator_instance, discovery_instance, stop_event; stop_event.set()
     if orchestrator_instance and hasattr(orchestrator_instance, 'shutdown'): await orchestrator_instance.shutdown()
     if discovery_instance and hasattr(discovery_instance, 'stop'): discovery_instance.stop()
-@app.options("/{catchall:path}")
-async def preflight_handler(): return JSONResponse(content="OK", status_code=200, headers={"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Allow-Headers": "*"})
-@app.get("/")
-@app.get("/api/state")
-async def read_root(request: Request):
+def generate_current_state_packet():
     global orchestrator_instance, discovery_instance
     match_info = {"league": "РПЛ", "home": "ЦСКА", "away": "Динамо", "status": "LIVE"}; recommendations = []
     teams_pool = [("Спартак", "Зенит"), ("ЦСКА", "СКА"), ("Реал", "Барса"), ("Лейкерс", "Бостон")]
@@ -119,8 +106,28 @@ async def read_root(request: Request):
                 real_recs = []
                 for m_id, c_data in cache.items(): real_recs.append({"league": c_data.get("league", "Спорт"), "sport": c_data.get("sport", "football"), "home": c_data.get("teams", {}).get("home", "Команда 1"), "away": c_data.get("teams", {}).get("away", "Команда 2"), "line": c_data.get("recommended_bet", "ТБ (2.5)"), "probability": c_data.get("probability", 0.75), "confidence": c_data.get("confidence", "high"), "coefficient": c_data.get("coefficient", 1.85)})
                 if real_recs: recommendations = real_recs
-    except Exception as e: logger.error(f"💥 Ошибка сбора метрик API: {e}")
+    except Exception as e: logger.error(f"💥 Ошибка сборки пакета: {e}")
     return {"status": "ok", "timestamp": datetime.datetime.utcnow().isoformat(), "match_info": match_info, "recommendations": recommendations}
+async def broadcast_live_data():
+    global active_connections
+    if not active_connections: return
+    packet = generate_current_state_packet()
+    for connection in active_connections:
+        try: await connection.send_json(packet)
+        except Exception: active_connections.remove(connection)
+@app.websocket("/ws/state")
+async def websocket_endpoint(websocket: WebSocket):
+    global active_connections
+    await websocket.accept()
+    active_connections.append(websocket)
+    try:
+        initial_packet = generate_current_state_packet()
+        await websocket.send_json(initial_packet)
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect: active_connections.remove(websocket)
+    except Exception:
+        if websocket in active_connections: active_connections.remove(websocket)
 if __name__ == "__main__":
     target_port = int(os.environ.get("PORT", 8080))
     uvicorn.run("main:app", host="0.0.0.0", port=target_port, log_level="info")
