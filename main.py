@@ -2,7 +2,7 @@
 import sys, os, argparse, asyncio, signal, logging, pathlib, random, datetime, uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-print("=" * 50); print("🚀 PRIZOLOV SPORTS AI v9.70 STARTED (HARD-CORS MONOLITH)"); print(f"📅 UTC: {datetime.datetime.utcnow().isoformat()}"); print(f"🔍 PORT: {os.environ.get('PORT', '8080 (default)')}"); print("=" * 50); sys.stdout.flush()
+print("=" * 50); print("🚀 PRIZOLOV SPORTS AI v9.80 STARTED (STABLE API RESPONSE)"); print(f"📅 UTC: {datetime.datetime.utcnow().isoformat()}"); print(f"🔍 PORT: {os.environ.get('PORT', '8080 (default)')}"); print("=" * 50); sys.stdout.flush()
 import builtins, typing
 for a, v in [("Path", pathlib.Path), ("Tuple", typing.Tuple), ("List", typing.List), ("Dict", typing.Dict), ("Any", typing.Any), ("Optional", typing.Optional)]: setattr(builtins, a, v)
 os.environ["QT_QPA_PLATFORM"], os.environ["OPENCV_LOG_LEVEL"] = "offscreen", "ERROR"
@@ -56,7 +56,7 @@ class MockOrchestrator:
     async def run_initial_analysis(self): pass
     async def run_continuous_scan(self): pass
     async def shutdown(self): pass
-app = FastAPI(title="Prizolov Sports AI - Monolith API", version="9.70")
+app = FastAPI(title="Prizolov Sports AI - Monolith API", version="9.80")
 orchestrator_instance, discovery_instance, stop_event = None, None, asyncio.Event()
 async def scan_loop_task():
     global orchestrator_instance, stop_event
@@ -86,7 +86,6 @@ async def shutdown_event():
     if discovery_instance and hasattr(discovery_instance, 'stop'): discovery_instance.stop()
 @app.middleware("http")
 async def hard_cors_injector_middleware(request: Request, call_next):
-    """Тотальный ручной перехват CORS. Гарантирует отдачу заголовков доверия на любые OPTIONS/POST запросы."""
     if request.method == "OPTIONS":
         return JSONResponse(status_code=200, content="OK", headers={"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type, Accept, Authorization, X-Requested-With"})
     response = await call_next(request)
@@ -95,7 +94,7 @@ async def hard_cors_injector_middleware(request: Request, call_next):
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, Accept, Authorization, X-Requested-With"
     return response
 @app.get("/")
-async def read_root_get(): return {"status": "ok", "message": "Prizolov Hard CORS Injector Active"}
+async def read_root_get(): return {"status": "ok", "message": "Prizolov Monolith Stable Headers Ready"}
 @app.post("/api/state")
 async def read_root(request: Request):
     global orchestrator_instance, discovery_instance
@@ -109,7 +108,7 @@ async def read_root(request: Request):
             if discovery_instance:
                 events = discovery_instance.get_all_events()
                 if events and isinstance(events, list) and len(events) > 0:
-                    first_event = events
+                    first_event = events[0]
                     if isinstance(first_event, dict): match_info["league"], match_info["home"], match_info["away"] = first_event.get("league", "РПЛ"), first_event.get("home_team", "ЦСКА"), first_event.get("away_team", "Динамо")
             cache = getattr(orchestrator_instance, "line_cache", None)
             if cache and isinstance(cache, dict) and len(cache) > 0:
@@ -117,7 +116,7 @@ async def read_root(request: Request):
                 for m_id, c_data in cache.items(): real_recs.append({"league": c_data.get("league", "Спорт"), "sport": c_data.get("sport", "football"), "home": c_data.get("teams", {}).get("home", "Команда 1"), "away": c_data.get("teams", {}).get("away", "Команда 2"), "line": c_data.get("recommended_bet", "ТБ (2.5)"), "probability": c_data.get("probability", 0.75), "confidence": c_data.get("confidence", "high"), "coefficient": c_data.get("coefficient", 1.85)})
                 if real_recs: recommendations = real_recs
     except Exception as e: logger.error(f"💥 Ошибка сбора метрик API: {e}")
-    return {"status": "ok", "timestamp": datetime.datetime.utcnow().isoformat(), "match_info": match_info, "recommendations": recommendations}
+    return JSONResponse(status_code=200, content={"status": "ok", "timestamp": datetime.datetime.utcnow().isoformat(), "match_info": match_info, "recommendations": recommendations}, headers={"Access-Control-Allow-Origin": "*"})
 if __name__ == "__main__":
     target_port = int(os.environ.get("PORT", 8080))
     uvicorn.run("main:app", host="0.0.0.0", port=target_port, log_level="info")
