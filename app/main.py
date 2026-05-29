@@ -5,170 +5,51 @@
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
 
-import logging
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.ext.asyncio import AsyncSession
-import redis.asyncio as redis
-import os
 
-from app.api.router import router as api_router
-from app.db import engine, get_db, init_db
-from app.scheduler import start_scheduler, stop_scheduler
-from app.core.ml_layer import MLLayer
-from app.core.ai_sentiment_layer import AISentimentLayer
-from data_ingest.free_apis import fetch_free_apis
-from data_ingest.aggregators import fetch_aggregators
+app = FastAPI(title="Prizolov Sports AI", version="3.023")
 
-logger = logging.getLogger(__name__)
-
-# Глобальные экземпляры ML и AI (с fallback)
-ml_layer = MLLayer(model_path=os.getenv("ML_MODEL_PATH"))
-ai_sentiment = AISentimentLayer(model_name=os.getenv("SENTIMENT_MODEL_NAME"))
-
-# Redis клиент (если используется)
-redis_client = redis.from_url(
-    os.getenv("REDIS_URL", "redis://localhost:6379/0"),
-    decode_responses=True
-)
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Управление жизненным циклом приложения."""
-    logger.info("Запуск приложения Prizolov Sports AI")
-    await init_db()
-    start_scheduler()
-    yield
-    stop_scheduler()
-    await engine.dispose()
-    await redis_client.close()
-    logger.info("Приложение остановлено")
-
-app = FastAPI(
-    title="Prizolov Sports AI",
-    description="Анализ спортивных событий с AI и ML",
-    version="3.023",
-    lifespan=lifespan
-)
-
-# ========== НАСТРОЙКА CORS ==========
+# Максимально широкий CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://prizolov.ru",
-        "http://localhost:8000",
-        "https://prizolov-sports-dmandreyanov.amvera.io"
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Подключение маршрутов API
-app.include_router(api_router, prefix="/api/v1")
-
-# ========== Эндпоинты ==========
 @app.get("/")
 async def root():
-    return {"message": "Prizolov Sports AI API", "version": "3.023"}
+    return {"message": "Prizolov Sports AI API"}
 
 @app.get("/health")
-async def health_check():
+async def health():
     return {"status": "ok"}
 
-@app.get("/ready")
-async def readiness_check(db: AsyncSession = Depends(get_db)):
-    errors = []
-    try:
-        await db.execute("SELECT 1")
-    except Exception as e:
-        errors.append(f"Database error: {e}")
-    try:
-        await redis_client.ping()
-    except Exception as e:
-        errors.append(f"Redis error: {e}")
-    if errors:
-        raise HTTPException(status_code=503, detail={"status": "not ready", "errors": errors})
-    return {"status": "ready", "database": "connected", "redis": "connected"}
-
-@app.get("/ml/predict")
-async def predict(features: dict):
-    result = ml_layer.predict(features)
-    return result
-
-@app.post("/sentiment/analyze")
-async def analyze_sentiment(text: str):
-    result = ai_sentiment.analyze(text)
-    return result
-
-@app.get("/config")
-async def get_config():
-    return {
-        "app_name": "Prizolov Sports AI",
-        "version": "3.023",
-        "ml_available": ml_layer.model is not None,
-        "nlp_available": ai_sentiment.sentiment_pipeline is not None
-    }
-
-# ===== ГЛАВНЫЙ ЭНДПОИНТ ДЛЯ ВИДЖЕТА (РЕАЛЬНЫЕ ДАННЫЕ) =====
 @app.post("/api/state")
 async def get_state():
-    """
-    Возвращает реальный живой матч и AI-рекомендации из внешних API.
-    """
-    try:
-        # 1. Получаем живые и предстоящие матчи
-        live_data = await fetch_free_apis()
-        matches = live_data.get("live", [])
-        if not matches:
-            matches = live_data.get("upcoming", [])
-            status = "UPCOMING" if matches else "NO_DATA"
-        else:
-            status = "LIVE"
-
-        if not matches:
-            # Если данных нет – возвращаем честную заглушку, а не фейковый матч
-            return {
-                "match_info": {
-                    "league": "Нет данных",
-                    "home": "Ожидание",
-                    "away": "матча",
-                    "status": "—"
-                },
-                "recommendations": []
-            }
-
-        # Берём первый матч из списка
-        match = matches[0]
-
-        # 2. Получаем коэффициенты (рекомендации) из aggregators
-        odds = await fetch_aggregators()
-        recommendations = []
-        for odd in odds[:5]:
-            recommendations.append({
-                "league": match.get("league", "РПЛ"),
+    # Временно простой ответ, без внешних API
+    return {
+        "match_info": {
+            "league": "Тестовая лига",
+            "home": "Команда А",
+            "away": "Команда Б",
+            "status": "LIVE"
+        },
+        "recommendations": [
+            {
+                "league": "Тест",
                 "sport": "football",
-                "home": match.get("home"),
-                "away": match.get("away"),
-                "line": odd.get("market_type", "Исход"),
-                "confidence": "high" if odd.get("price", 0) > 1.8 else "med",
-                "probability": 0.70 if odd.get("price", 0) > 1.8 else 0.55,
-                "coefficient": odd.get("price", 1.9)
-            })
-
-        return {
-            "match_info": {
-                "league": match.get("league", "РПЛ"),
-                "home": match.get("home", "?"),
-                "away": match.get("away", "?"),
-                "status": status
-            },
-            "recommendations": recommendations
-        }
-    except Exception as e:
-        logger.error(f"Ошибка в /api/state: {e}")
-        raise HTTPException(500, detail="Внутренняя ошибка сервера")
+                "home": "Команда А",
+                "away": "Команда Б",
+                "line": "Тотал больше 2.5",
+                "confidence": "high",
+                "probability": 0.75,
+                "coefficient": 1.90
+            }
+        ]
+    }
 
 if __name__ == "__main__":
     import uvicorn
