@@ -1,103 +1,65 @@
 # ============================================
-# Prizolov Sports AI - Setup
-# Version: 4.01 (Social Sentiment & Global AI Upgrade)
+# Copyright (c) 2026
+# Prizolov Agent OS v3.023
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
-# Target: Production deployment at prizolov.ru
 # ============================================
 
-import asyncio
-import re
-import structlog
-from typing import Dict, Any, List
+import logging
+from typing import Dict, Any, Optional
+import os
 
-log = structlog.get_logger()
+logger = logging.getLogger(__name__)
 
-class SentimentAnalyzer:
-    """
-    NLP-анализатор тональности для спортивных событий.
-    В версии 4.01 использует эвристическую модель на ключевых словах.
-    В продакшене заменяется на загрузку RuBERT / DeepPavlov / custom LLM.
-    """
-    def __init__(self):
-        self.positive_keywords = {
-            "победа", "выиграет", "фаворит", "уверенно", "сильнее", "топ", 
-            "в форме", "разгром", "дубль", "хет-трик", "проход", "win"
-        }
-        self.negative_keywords = {
-            "проиграет", "слабее", "травмы", "дисквалификация", "спад", 
-            "усталость", "мотивации нет", "слабая оборона", "потеря", "lose"
-        }
+# Попытка импортировать NLP-библиотеки (например, transformers)
+try:
+    from transformers import pipeline
+    REAL_NLP_AVAILABLE = True
+except ImportError:
+    REAL_NLP_AVAILABLE = False
+    logger.warning("NLP-библиотеки не найдены, используется fallback-анализ")
 
-    async def analyze_text_batch(self, texts: List[str], team_a: str, team_b: str) -> float:
-        """
-        Анализирует пакет текстовых сообщений.
-        Возвращает bias_score от -1.0 (сильно в пользу команды B) до +1.0 (сильно в пользу команды A).
-        0.0 означает нейтральный фон.
-        """
-        if not texts:
-            return 0.0
+class AISentimentLayer:
+    def __init__(self, model_name: Optional[str] = None):
+        self.sentiment_pipeline = None
+        if REAL_NLP_AVAILABLE:
+            try:
+                model = model_name or "blanchefort/rubert-base-cased-sentiment"
+                self.sentiment_pipeline = pipeline("sentiment-analysis", model=model)
+                logger.info(f"Загружена модель sentiment: {model}")
+            except Exception as e:
+                logger.error(f"Ошибка загрузки модели sentiment: {e}")
+                self.sentiment_pipeline = None
 
-        score_a = 0.0
-        score_b = 0.0
-        pattern_a = re.compile(re.escape(team_a), re.IGNORECASE)
-        pattern_b = re.compile(re.escape(team_b), re.IGNORECASE)
+    def analyze(self, text: str) -> Dict[str, Any]:
+        """Анализ тональности с fallback."""
+        if self.sentiment_pipeline is not None:
+            try:
+                result = self.sentiment_pipeline(text[:512])[0]
+                return {
+                    "label": result["label"],
+                    "score": result["score"],
+                    "method": "nlp_model"
+                }
+            except Exception as e:
+                logger.error(f"Ошибка NLP-анализа: {e}")
+        # Fallback: простая эвристика на основе ключевых слов
+        return self._heuristic_sentiment(text)
 
-        for txt in texts:
-            txt_lower = txt.lower()
-            if pattern_a.search(txt_lower):
-                score_a += sum(1 for kw in self.positive_keywords if kw in txt_lower)
-                score_a -= sum(1 for kw in self.negative_keywords if kw in txt_lower)
-            if pattern_b.search(txt_lower):
-                score_b += sum(1 for kw in self.positive_keywords if kw in txt_lower)
-                score_b -= sum(1 for kw in self.negative_keywords if kw in txt_lower)
-
-        total = max(abs(score_a) + abs(score_b), 1.0)
-        bias = (score_a - score_b) / total
-        return max(-1.0, min(1.0, bias))
-
-analyzer = SentimentAnalyzer()
-
-async def analyze_sentiment(match_data: Dict[str, Any]) -> Dict[str, float]:
-    """
-    AI/Sentiment слой.
-    Принимает собранные тексты (Telegram, новости, соцсети) и корректирует
-    вероятности исходов на основе общественной тональности.
-    """
-    match_id = match_data.get("match_id", "unknown")
-    home = match_data.get("home_team", "")
-    away = match_data.get("away_team", "")
-    # Тексты передаются из scheduler.py после парсинга
-    texts = match_data.get("raw_texts", [])
-
-    log.debug("AI Sentiment layer: analyzing", match_id=match_id, text_count=len(texts))
-
-    if not texts:
-        log.info("No sentiment data available, returning neutral baseline")
-        return {"home_win": 0.33, "draw": 0.34, "away_win": 0.33}
-
-    bias_score = await analyzer.analyze_text_batch(texts, home, away)
-
-    # Конвертация bias в корректировку вероятности
-    # Максимальный сдвиг тональности: ±20%
-    adjustment = bias_score * 0.20
-    base_home = 0.33
-    adjusted_home = max(0.05, min(0.90, base_home + adjustment))
-
-    # Перераспределение оставшейся массы между ничьей и гостями
-    remaining = 1.0 - adjusted_home
-    
-    # Если тонус за хозяев -> снижаем долю ничьей/гостей пропорционально
-    # Если тонус нейтральный/за гостей -> равное распределение остатка
-    if bias_score > 0.1:
-        return {
-            "home_win": round(adjusted_home, 4),
-            "draw": round(remaining * 0.40, 4),
-            "away_win": round(remaining * 0.60, 4)
-        }
-    else:
-        return {
-            "home_win": round(adjusted_home, 4),
-            "draw": round(remaining * 0.50, 4),
-            "away_win": round(remaining * 0.50, 4)
-        }
+    def _heuristic_sentiment(self, text: str) -> Dict[str, Any]:
+        """Очень простой анализатор на основе позитивных/негативных слов."""
+        text_lower = text.lower()
+        positive_words = ["хорошо", "отлично", "победа", "win", "good", "great"]
+        negative_words = ["плохо", "поражение", "проигрыш", "lose", "bad", "awful"]
+        pos_count = sum(1 for w in positive_words if w in text_lower)
+        neg_count = sum(1 for w in negative_words if w in text_lower)
+        if pos_count > neg_count:
+            label = "POSITIVE"
+            score = 0.7 + (pos_count / (pos_count + neg_count + 1)) * 0.3
+        elif neg_count > pos_count:
+            label = "NEGATIVE"
+            score = 0.7 + (neg_count / (pos_count + neg_count + 1)) * 0.3
+        else:
+            label = "NEUTRAL"
+            score = 0.5
+        return {"label": label, "score": min(score, 1.0), "method": "heuristic_fallback"}
