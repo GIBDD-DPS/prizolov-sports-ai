@@ -52,10 +52,12 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS
+# ========== НАСТРОЙКА CORS (разрешены все источники) ==========
+# Для продакшена рекомендуется заменить "*" на конкретные домены,
+# например: ["https://prizolov.ru", "https://your-site.com"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Для продакшена указать конкретные домены
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -104,7 +106,6 @@ async def analyze_sentiment(text: str):
     result = ai_sentiment.analyze(text)
     return result
 
-# Дополнительные эндпоинты (примеры)
 @app.get("/config")
 async def get_config():
     """Возвращает публичную конфигурацию (без секретов)."""
@@ -113,4 +114,41 @@ async def get_config():
         "version": "3.023",
         "ml_available": ml_layer.model is not None,
         "nlp_available": ai_sentiment.sentiment_pipeline is not None
+    }
+
+# Эндпоинт для POST /api/state (нужен для виджета Elementor)
+@app.post("/api/state")
+async def get_state():
+    """Возвращает текущее состояние матча и рекомендации AI."""
+    # Здесь должна быть реальная логика получения данных из БД или кэша.
+    # Для примера возвращаем тестовые данные.
+    return {
+        "match_info": {
+            "league": "РПЛ",
+            "home": "ЦСКА",
+            "away": "Динамо",
+            "status": "LIVE"
+        },
+        "recommendations": [
+            {
+                "league": "РПЛ",
+                "sport": "football",
+                "home": "ЦСКА",
+                "away": "Динамо",
+                "line": "ТБ 2.5",
+                "confidence": "high",
+                "probability": 0.78,
+                "coefficient": 1.85
+            },
+            {
+                "league": "РПЛ",
+                "sport": "football",
+                "home": "ЦСКА",
+                "away": "Динамо",
+                "line": "Обе забьют",
+                "confidence": "med",
+                "probability": 0.65,
+                "coefficient": 2.10
+            }
+        ]
     }
