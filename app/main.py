@@ -57,7 +57,11 @@ app = FastAPI(
 # например: ["https://prizolov.ru", "https://your-site.com"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://prizolov.ru",               # ваш домен
+        "http://localhost:8000",             # для локальной отладки
+        "https://prizolov-sports-dmandreyanov.amvera.io"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
