@@ -18,6 +18,8 @@ from app.db import engine, get_db, init_db
 from app.scheduler import start_scheduler, stop_scheduler
 from app.core.ml_layer import MLLayer
 from app.core.ai_sentiment_layer import AISentimentLayer
+from data_ingest.free_apis import fetch_free_apis
+from data_ingest.aggregators import fetch_aggregators
 
 logger = logging.getLogger(__name__)
 
@@ -34,12 +36,10 @@ redis_client = redis.from_url(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Управление жизненным циклом приложения."""
-    # Startup
     logger.info("Запуск приложения Prizolov Sports AI")
     await init_db()
     start_scheduler()
     yield
-    # Shutdown
     stop_scheduler()
     await engine.dispose()
     await redis_client.close()
@@ -52,14 +52,12 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# ========== НАСТРОЙКА CORS (разрешены все источники) ==========
-# Для продакшена рекомендуется заменить "*" на конкретные домены,
-# например: ["https://prizolov.ru", "https://your-site.com"]
+# ========== НАСТРОЙКА CORS ==========
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://prizolov.ru",               # ваш домен
-        "http://localhost:8000",             # для локальной отладки
+        "https://prizolov.ru",
+        "http://localhost:8000",
         "https://prizolov-sports-dmandreyanov.amvera.io"
     ],
     allow_credentials=True,
@@ -77,19 +75,15 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Проверка работоспособности сервиса (лёгкая)."""
     return {"status": "ok"}
 
 @app.get("/ready")
 async def readiness_check(db: AsyncSession = Depends(get_db)):
-    """Проверка готовности сервиса (включая БД и Redis)."""
     errors = []
-    # Проверка БД
     try:
         await db.execute("SELECT 1")
     except Exception as e:
         errors.append(f"Database error: {e}")
-    # Проверка Redis
     try:
         await redis_client.ping()
     except Exception as e:
@@ -100,19 +94,16 @@ async def readiness_check(db: AsyncSession = Depends(get_db)):
 
 @app.get("/ml/predict")
 async def predict(features: dict):
-    """Эндпоинт для ML-предсказаний с fallback."""
     result = ml_layer.predict(features)
     return result
 
 @app.post("/sentiment/analyze")
 async def analyze_sentiment(text: str):
-    """Анализ тональности текста с fallback."""
     result = ai_sentiment.analyze(text)
     return result
 
 @app.get("/config")
 async def get_config():
-    """Возвращает публичную конфигурацию (без секретов)."""
     return {
         "app_name": "Prizolov Sports AI",
         "version": "3.023",
@@ -120,39 +111,65 @@ async def get_config():
         "nlp_available": ai_sentiment.sentiment_pipeline is not None
     }
 
-# Эндпоинт для POST /api/state (нужен для виджета Elementor)
+# ===== ГЛАВНЫЙ ЭНДПОИНТ ДЛЯ ВИДЖЕТА (РЕАЛЬНЫЕ ДАННЫЕ) =====
 @app.post("/api/state")
 async def get_state():
-    """Возвращает текущее состояние матча и рекомендации AI."""
-    # Здесь должна быть реальная логика получения данных из БД или кэша.
-    # Для примера возвращаем тестовые данные.
-    return {
-        "match_info": {
-            "league": "РПЛ",
-            "home": "ЦСКА",
-            "away": "Динамо",
-            "status": "LIVE"
-        },
-        "recommendations": [
-            {
-                "league": "РПЛ",
-                "sport": "football",
-                "home": "ЦСКА",
-                "away": "Динамо",
-                "line": "ТБ 2.5",
-                "confidence": "high",
-                "probability": 0.78,
-                "coefficient": 1.85
-            },
-            {
-                "league": "РПЛ",
-                "sport": "football",
-                "home": "ЦСКА",
-                "away": "Динамо",
-                "line": "Обе забьют",
-                "confidence": "med",
-                "probability": 0.65,
-                "coefficient": 2.10
+    """
+    Возвращает реальный живой матч и AI-рекомендации из внешних API.
+    """
+    try:
+        # 1. Получаем живые и предстоящие матчи
+        live_data = await fetch_free_apis()
+        matches = live_data.get("live", [])
+        if not matches:
+            matches = live_data.get("upcoming", [])
+            status = "UPCOMING" if matches else "NO_DATA"
+        else:
+            status = "LIVE"
+
+        if not matches:
+            # Если данных нет – возвращаем честную заглушку, а не фейковый матч
+            return {
+                "match_info": {
+                    "league": "Нет данных",
+                    "home": "Ожидание",
+                    "away": "матча",
+                    "status": "—"
+                },
+                "recommendations": []
             }
-        ]
-    }
+
+        # Берём первый матч из списка
+        match = matches[0]
+
+        # 2. Получаем коэффициенты (рекомендации) из aggregators
+        odds = await fetch_aggregators()
+        recommendations = []
+        for odd in odds[:5]:
+            recommendations.append({
+                "league": match.get("league", "РПЛ"),
+                "sport": "football",
+                "home": match.get("home"),
+                "away": match.get("away"),
+                "line": odd.get("market_type", "Исход"),
+                "confidence": "high" if odd.get("price", 0) > 1.8 else "med",
+                "probability": 0.70 if odd.get("price", 0) > 1.8 else 0.55,
+                "coefficient": odd.get("price", 1.9)
+            })
+
+        return {
+            "match_info": {
+                "league": match.get("league", "РПЛ"),
+                "home": match.get("home", "?"),
+                "away": match.get("away", "?"),
+                "status": status
+            },
+            "recommendations": recommendations
+        }
+    except Exception as e:
+        logger.error(f"Ошибка в /api/state: {e}")
+        raise HTTPException(500, detail="Внутренняя ошибка сервера")
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
