@@ -6,57 +6,40 @@
 # Target: Production deployment at prizolov.ru
 # ============================================
 
-version: "3.8"
+version: '3.8'
 
 services:
-  app:
-    build: .
-    container_name: prizolov-app
-    ports:
-      - "8000:8000"
-    env_file: .env
+  postgres:
+    image: postgres:15
     environment:
-      - DATABASE_URL=postgresql+asyncpg://app_user:secure_pass@db:5432/sports_ai
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      db:
-        condition: service_started
-      redis:
-        condition: service_started
-    restart: unless-stopped
-    networks:
-      - prizolov-net
-
-  db:
-    image: postgres:16-alpine
-    container_name: prizolov-db
-    environment:
-      POSTGRES_USER: app_user
-      POSTGRES_PASSWORD: secure_pass
-      POSTGRES_DB: sports_ai
+      POSTGRES_USER: ${DB_USER:-app_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME:-sports_db}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pg_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
-    restart: unless-stopped
-    networks:
-      - prizolov-net
+    env_file:
+      - .env
 
   redis:
     image: redis:7-alpine
-    container_name: prizolov-redis
     ports:
       - "6379:6379"
-    volumes:
-      - redisdata:/data
-    restart: unless-stopped
-    networks:
-      - prizolov-net
+
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      DATABASE_URL: postgresql://${DB_USER:-app_user}:${DB_PASSWORD}@postgres/${DB_NAME:-sports_db}
+      REDIS_URL: redis://redis:6379/0
+    env_file:
+      - .env
+    # ... остальные настройки
 
 volumes:
-  pgdata:
-  redisdata:
-
-networks:
-  prizolov-net:
-    driver: bridge
+  pg_data:
