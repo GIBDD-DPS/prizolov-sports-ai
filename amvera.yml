@@ -8,11 +8,16 @@
 
 meta:
   environment: docker
-
+  toolchain:
+    name: docker
+    version: latest
 build:
   dockerfile: Dockerfile
-
+  skip: false
 run:
-  command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --loop asyncio --workers 1
-  containerPort: 8000
   persistenceMount: /data
+  image: null
+  command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --loop asyncio --workers 1
+  args: null
+  containerPort: 8000
+  servicePort: 8000
