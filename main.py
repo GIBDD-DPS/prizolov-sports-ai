@@ -57,6 +57,20 @@ class MockOrchestrator:
     async def run_continuous_scan(self): pass
     async def shutdown(self): pass
 app = FastAPI(title="Prizolov Sports AI - Monolith API", version="9.80")
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://prizolov.ru",
+        "http://localhost:5500",
+        "http://127.0.0.1:5500"
+    ],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Accept"],
+)
+
 orchestrator_instance, discovery_instance, stop_event = None, None, asyncio.Event()
 async def scan_loop_task():
     global orchestrator_instance, stop_event
