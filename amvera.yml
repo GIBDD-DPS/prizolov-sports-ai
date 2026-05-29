@@ -1,6 +1,6 @@
 # ============================================
 # Prizolov Sports AI - Setup
-# Version: 4.01 (Social Sentiment & Global AI Upgrade)
+# Version: 4.02 (Amvera Config Hotfix)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # Target: Production deployment at prizolov.ru
@@ -8,35 +8,11 @@
 
 meta:
   environment: docker
-  toolchain:
-    name: docker
 
 build:
-  context: .
   dockerfile: Dockerfile
-  args:
-    APP_ENV: production
 
 run:
   command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --loop asyncio --workers 1
-  ports:
-    - 8000
-  env:
-    - name: DATABASE_URL
-      required: true
-    - name: REDIS_URL
-      required: true
-    - name: SENTRY_DSN
-      required: false
-    - name: API_KEYS_ODDS
-      required: false
-    - name: API_KEYS_SPORTS
-      required: false
-    - name: TELEGRAM_API_ID
-      required: false
-    - name: TELEGRAM_API_HASH
-      required: false
-    - name: TELEGRAM_SESSION
-      required: false
-    - name: TELEGRAM_CHANNELS
-      required: false
+  containerPort: 8000
+  persistenceMount: /data
