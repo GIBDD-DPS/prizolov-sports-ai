@@ -1,4 +1,3 @@
-```python
 # ============================================
 # Prizolov Sports AI Backend
 # Version: 1.03
