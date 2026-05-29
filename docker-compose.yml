@@ -1,16 +1,62 @@
+# ============================================
+# Prizolov Sports AI - Setup
+# Version: 4.01 (Social Sentiment & Global AI Upgrade)
+# Author: Dm.Andreyanov
+# Organization: Prizolov Market / Prizolov Lab
+# Target: Production deployment at prizolov.ru
+# ============================================
+
 version: "3.8"
+
 services:
-  prizolov-sports-ai:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: prizolov_ai_core
-    restart: unless-stopped
-    environment:
-      - MOCK_MODE=true
-      - DISCOVERY_INTERVAL=45
+  app:
+    build: .
+    container_name: prizolov-app
     ports:
-      - "8080:8080"
+      - "8000:8000"
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://app_user:secure_pass@db:5432/sports_ai
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_started
+      redis:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - prizolov-net
+
+  db:
+    image: postgres:16-alpine
+    container_name: prizolov-db
+    environment:
+      POSTGRES_USER: app_user
+      POSTGRES_PASSWORD: secure_pass
+      POSTGRES_DB: sports_ai
     volumes:
-      - ./data:/app/data
-    # command убран — используются дефолты из Dockerfile (ENTRYPOINT + CMD)
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    networks:
+      - prizolov-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: prizolov-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    restart: unless-stopped
+    networks:
+      - prizolov-net
+
+volumes:
+  pgdata:
+  redisdata:
+
+networks:
+  prizolov-net:
+    driver: bridge
