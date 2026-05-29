@@ -1,0 +1,86 @@
+# ============================================
+# Prizolov Sports AI - Setup
+# Version: 4.01 (Social Sentiment & Global AI Upgrade)
+# Author: Dm.Andreyanov
+# Organization: Prizolov Market / Prizolov Lab
+# Target: Production deployment at prizolov.ru
+# ============================================
+
+# 🐍 Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# 🌍 Virtual Environments
+venv/
+ENV/
+env/
+.venv/
+
+# 💻 IDE & Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+
+# 🔒 Secrets & Environment
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+
+# 🗄️ Database Files
+*.db
+*.sqlite3
+*.sqlite
+*.dump
+
+# 📝 Logs
+*.log
+logs/
+*.out
+
+# 🤖 ML Models & Artifacts (хранить в Git LFS или внешнем хранилище)
+# models/*.joblib
+# models/*.pkl
+# models/*.onnx
+# checkpoints/
+
+# 🐳 Docker
+docker-compose.override.yml
+.docker/
+
+# 🧪 Testing & CI
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+
+# 🍎 OS Specific
+.DS_Store
+Thumbs.db
