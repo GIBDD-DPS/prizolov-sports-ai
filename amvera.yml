@@ -1,23 +1,9 @@
-# ============================================
-# Prizolov Sports AI - Setup
-# Version: 4.02 (Amvera Config Hotfix)
-# Author: Dm.Andreyanov
-# Organization: Prizolov Market / Prizolov Lab
-# Target: Production deployment at prizolov.ru
-# ============================================
-
 meta:
-  environment: docker
+  environment: python
   toolchain:
-    name: docker
-    version: latest
-build:
-  dockerfile: Dockerfile
-  skip: false
+    name: pip
+    version: 3.10
+
 run:
-  persistenceMount: /data
-  image: null
-  command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --loop asyncio --workers 1
-  args: null
-  containerPort: 8000
-  servicePort: 8000
+  # Запускаем напрямую наш корневой main.py и передаем динамический порт Amvera
+  command: "uvicorn main:app --host 0.0.0.0 --port $PORT --loop asyncio --workers 1"
