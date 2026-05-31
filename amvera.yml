@@ -8,5 +8,6 @@ build:
   requirements: requirements.txt
 
 run:
-  # 👍 ИСПРАВЛЕНО: Указан правильный путь к модулю внутри подпапки app
-  command: "PYTHONPATH=. uvicorn app.main:app --host 0.0.0.0 --loop asyncio --workers 1"
+  # 👍 ИСПРАВЛЕНО: Добавлены оба возможных пути (корень и папка app) в PYTHONPATH,
+  # а рабочая директория uvicorn установлена на корень проекта для правильного импорта app.main
+  command: "PYTHONPATH=.:./app uvicorn app.main:app --host 0.0.0.0 --loop asyncio --workers 1"
