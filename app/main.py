@@ -1,6 +1,6 @@
 # ============================================
 # Copyright (c) 2026
-# PRIZOLOV SPORTS AI v11.0 (STABLE PRODUCTION)
+# PRIZOLOV SPORTS AI v11.5 (FINAL STABLE)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
@@ -17,16 +17,15 @@ from fastapi.middleware.cors import CORSMiddleware
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("PrizolovSportsAI.Main")
 
-# 🔥 ЖЕСТКАЯ РЕГИСТРАЦИЯ ПУТЕЙ ДЛЯ ПАПКИ APP:
-# Принудительно заставляем Python искать модули внутри папки app/
+# Гарантируем, что текущая папка (app/) находится в системных путях
 current_dir = pathlib.Path(__file__).resolve().parent
 if str(current_dir) not in sys.path:
     sys.path.insert(0, str(current_dir))
 
 # Инициализация приложения FastAPI
-app = FastAPI(title="Prizolov Sports AI", version="11.0")
+app = FastAPI(title="Prizolov Sports AI", version="11.5")
 
-# Глобальный CORS (устраняет блокировки для prizolov.ru)
+# Глобальный CORS для связи с prizolov.ru
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -35,25 +34,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 🔥 ИСПРАВЛЕННЫЙ ИМПОРТ ЯДРА (Так как core находится в одной парке с main.py):
+# 🔥 ЧИСТЫЙ ИМПОРТ ЯДРА (Uvicorn уже находится внутри папки app):
 orchestrator = None
 try:
-    # Вариант А: Прямой импорт из текущей рабочей директории app/
     from core.orchestrator import PrizolovSportsOrchestrator
     orchestrator = PrizolovSportsOrchestrator()
-    logger.info("✅ УСПЕШНО: Оркестратор ядра ИИ успешно подключен напрямую!")
-except ImportError:
-    try:
-        # Вариант Б: Импорт через абсолютный путь пакета app
-        from app.core.orchestrator import PrizolovSportsOrchestrator
-        orchestrator = PrizolovSportsOrchestrator()
-        logger.info("✅ УСПЕШНО: Оркестратор ядра ИИ успешно подключен через app.*!")
-    except Exception as e:
-        logger.warning(f"⚠️ Оркестратор ядра недоступен, включен fallback-режим. Инфо: {e}")
+    logger.info("✅ УСПЕШНО: Оркестратор ядра ИИ успешно подключен напрямую из папки app/core!")
+except Exception as e:
+    logger.warning(f"⚠️ Оркестратор ядра недоступен, включен fallback-режим. Инфо: {e}")
 
 @app.get("/")
 async def root():
-    return {"status": "online", "version": "11.0"}
+    return {"status": "online", "version": "11.5"}
 
 @app.get("/health")
 async def health():
@@ -67,7 +59,7 @@ async def get_state(request: Request = None):
         except Exception:
             pass
 
-    # Если реальный ИИ-движок успешно импортирован — отдаем живые данные в Elementor
+    # Если ИИ-движок успешно импортирован — отдаем живые данные
     if orchestrator and hasattr(orchestrator, "get_live_state"):
         try:
             live_data = await orchestrator.get_live_state()
@@ -76,7 +68,7 @@ async def get_state(request: Request = None):
         except Exception as e:
             logger.error(f"Ошибка при сборе live-состояния ИИ: {e}")
 
-    # СТАБИЛЬНЫЙ ФЛЭШБЕК (Если оркестратор выдал пустоту или еще инициализируется)
+    # СТАБИЛЬНЫЙ ФЛЭШБЕК (Если оркестратор выдал пустоту или инициализируется)
     return {
         "match_info": {
             "league": "Мир РПЛ",
