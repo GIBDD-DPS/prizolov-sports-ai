@@ -5,5 +5,4 @@ meta:
     version: 3.10
 
 run:
-  # Мы убрали --port, теперь Amvera сама подставит верный порт при запуске
-  command: "uvicorn main:app --host 0.0.0.0 --loop asyncio --workers 1"
+  command: "uvicorn app.main:app --host 0.0.0.0 --loop asyncio --workers 1"
