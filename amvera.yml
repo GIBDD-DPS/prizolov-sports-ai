@@ -8,5 +8,5 @@ build:
   requirements: requirements.txt
 
 run:
-  # 👍 ИСПРАВЛЕНО: Полностью удален флаг --port. Amvera сама подставит порт по умолчанию.
-  command: "PYTHONPATH=. uvicorn main:app --host 0.0.0.0 --loop asyncio --workers 1"
+  # 👍 ИСПРАВЛЕНО: Указан правильный путь к модулю внутри подпапки app
+  command: "PYTHONPATH=. uvicorn app.main:app --host 0.0.0.0 --loop asyncio --workers 1"
