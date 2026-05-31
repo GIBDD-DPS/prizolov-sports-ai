@@ -5,5 +5,5 @@ meta:
     version: 3.10
 
 run:
-  # 👍 ИСПРАВЛЕНО: Блок build полностью удален, пути PYTHONPATH настроены для папки app
-  command: "PYTHONPATH=.:./app uvicorn app.main:app --host 0.0.0.0 --loop asyncio --workers 1"
+  # 👍 ИСПРАВЛЕНО: В PYTHONPATH прописаны все возможные пути вашей структуры проекта
+  command: "PYTHONPATH=.:./app:./prizolov_sports_ai uvicorn app.main:app --host 0.0.0.0 --loop asyncio --workers 1"
