@@ -5,7 +5,8 @@
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
 
-from fastapi import FastAPI
+# 👇 ДОБАВЛЕН Request В ИМПОРТ ИЗ fastapi
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Prizolov Sports AI", version="3.023")
@@ -27,8 +28,9 @@ async def root():
 async def health():
     return {"status": "ok"}
 
+# 👇 ДОБАВЛЕН ПАРАМЕТР request ДЛЯ ПРИЕМА ЛЮБЫХ JSON-ДАННЫХ ОТ ФРОНТЕНДА
 @app.post("/api/state")
-async def get_state():
+async def get_state(request: Request = None):
     # Временно простой ответ, без внешних API
     return {
         "match_info": {
