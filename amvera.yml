@@ -4,10 +4,6 @@ meta:
     name: pip
     version: 3.10
 
-build:
-  requirements: requirements.txt
-
 run:
-  # 👍 ИСПРАВЛЕНО: Добавлены оба возможных пути (корень и папка app) в PYTHONPATH,
-  # а рабочая директория uvicorn установлена на корень проекта для правильного импорта app.main
+  # 👍 ИСПРАВЛЕНО: Блок build полностью удален, пути PYTHONPATH настроены для папки app
   command: "PYTHONPATH=.:./app uvicorn app.main:app --host 0.0.0.0 --loop asyncio --workers 1"
