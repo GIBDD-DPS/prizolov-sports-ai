@@ -5,6 +5,5 @@ meta:
     version: 3.10
 
 run:
-  # 👍 ИСПРАВЛЕНО: Рабочая директория uvicorn установлена внутрь папки app, 
-  # что делает вложенную папку core видимой для Python без ошибок импорта.
-  command: "uvicorn main:app --app-dir app --host 0.0.0.0 --loop asyncio --workers 1"
+  # Запускаем приложение через модуль app.main и слушаем порт платформы.
+  command: "uvicorn app.main:app --host 0.0.0.0 --port $PORT --loop asyncio --workers 1"
