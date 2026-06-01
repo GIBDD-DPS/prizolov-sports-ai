@@ -273,7 +273,17 @@ LIVE_EVENTS = [
 ]
 
 REAL_EVENTS_CACHE_TTL_SECONDS = int(os.environ.get("REAL_EVENTS_CACHE_TTL_SECONDS", "90"))
-RUNTIME_EVENTS_CACHE: Dict[str, Any] = {"ts": 0.0, "events": []}
+RUNTIME_EVENTS_CACHE: Dict[str, Any] = {"ts": 0.0, "events": [], "source": "unknown"}
+REAL_SOURCE_STATUS: Dict[str, Any] = {
+    "last_fetch_at": None,
+    "last_fetch_ok": False,
+    "last_http_status": None,
+    "last_error": None,
+    "last_count": 0,
+    "used_fallback": True,
+    "active_source": "demo_fallback",
+    "cache_hit": False,
+}
 ODDS_API_UPCOMING_URL = "https://api.the-odds-api.com/v4/sports/upcoming/odds/"
 
 
@@ -436,7 +446,14 @@ def _transform_odds_event(event: Dict[str, Any], now_utc: datetime.datetime) -> 
 
 async def _fetch_real_events(limit: int = 30) -> List[Dict[str, Any]]:
     api_key = _resolve_odds_api_key()
+    REAL_SOURCE_STATUS["last_fetch_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    REAL_SOURCE_STATUS["cache_hit"] = False
+
     if not api_key:
+        REAL_SOURCE_STATUS["last_fetch_ok"] = False
+        REAL_SOURCE_STATUS["last_http_status"] = None
+        REAL_SOURCE_STATUS["last_error"] = "missing_api_key"
+        REAL_SOURCE_STATUS["last_count"] = 0
         return []
 
     params = {
@@ -452,14 +469,26 @@ async def _fetch_real_events(limit: int = 30) -> List[Dict[str, Any]]:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(ODDS_API_UPCOMING_URL, params=params) as resp:
                 if resp.status != 200:
+                    REAL_SOURCE_STATUS["last_fetch_ok"] = False
+                    REAL_SOURCE_STATUS["last_http_status"] = resp.status
+                    REAL_SOURCE_STATUS["last_error"] = f"http_{resp.status}"
+                    REAL_SOURCE_STATUS["last_count"] = 0
                     logger.warning(f"⚠️ Odds API вернул статус {resp.status}")
                     return []
                 payload = await resp.json()
     except Exception as exc:
+        REAL_SOURCE_STATUS["last_fetch_ok"] = False
+        REAL_SOURCE_STATUS["last_http_status"] = None
+        REAL_SOURCE_STATUS["last_error"] = f"request_error: {exc}"
+        REAL_SOURCE_STATUS["last_count"] = 0
         logger.warning(f"⚠️ Не удалось получить реальные события из Odds API: {exc}")
         return []
 
     if not isinstance(payload, list):
+        REAL_SOURCE_STATUS["last_fetch_ok"] = False
+        REAL_SOURCE_STATUS["last_http_status"] = 200
+        REAL_SOURCE_STATUS["last_error"] = "invalid_payload"
+        REAL_SOURCE_STATUS["last_count"] = 0
         return []
 
     now_utc = datetime.datetime.now(datetime.timezone.utc)
@@ -473,7 +502,13 @@ async def _fetch_real_events(limit: int = 30) -> List[Dict[str, Any]]:
             events.append(transformed)
 
     events.sort(key=lambda ev: (ev.get("status") != "LIVE", ev.get("time", "")))
-    return events[:limit]
+    result = events[:limit]
+
+    REAL_SOURCE_STATUS["last_fetch_ok"] = True
+    REAL_SOURCE_STATUS["last_http_status"] = 200
+    REAL_SOURCE_STATUS["last_error"] = None
+    REAL_SOURCE_STATUS["last_count"] = len(result)
+    return result
 
 
 async def _get_runtime_events(force_refresh: bool = False) -> List[Dict[str, Any]]:
@@ -481,17 +516,29 @@ async def _get_runtime_events(force_refresh: bool = False) -> List[Dict[str, Any
 
     cached_events = RUNTIME_EVENTS_CACHE.get("events") or []
     if not force_refresh and cached_events and (now_ts - float(RUNTIME_EVENTS_CACHE.get("ts", 0.0))) < REAL_EVENTS_CACHE_TTL_SECONDS:
+        source = str(RUNTIME_EVENTS_CACHE.get("source", "unknown"))
+        REAL_SOURCE_STATUS["cache_hit"] = True
+        REAL_SOURCE_STATUS["active_source"] = source
+        REAL_SOURCE_STATUS["used_fallback"] = source != "odds_api"
         return cached_events
 
     real_events = await _fetch_real_events(limit=40)
     if real_events:
         RUNTIME_EVENTS_CACHE["events"] = real_events
         RUNTIME_EVENTS_CACHE["ts"] = now_ts
+        RUNTIME_EVENTS_CACHE["source"] = "odds_api"
+        REAL_SOURCE_STATUS["cache_hit"] = False
+        REAL_SOURCE_STATUS["active_source"] = "odds_api"
+        REAL_SOURCE_STATUS["used_fallback"] = False
         return real_events
 
     # fallback на демо-каталог, если внешний источник недоступен.
     RUNTIME_EVENTS_CACHE["events"] = LIVE_EVENTS
     RUNTIME_EVENTS_CACHE["ts"] = now_ts
+    RUNTIME_EVENTS_CACHE["source"] = "demo_fallback"
+    REAL_SOURCE_STATUS["cache_hit"] = False
+    REAL_SOURCE_STATUS["active_source"] = "demo_fallback"
+    REAL_SOURCE_STATUS["used_fallback"] = True
     return LIVE_EVENTS
 
 
@@ -603,6 +650,31 @@ async def get_sports_list():
     return {
         "sports": sports,
         "total_events": len(events),
+    }
+
+
+@app.get("/api/source-status")
+async def source_status(refresh: bool = False):
+    """Диагностика источника данных: real API или fallback."""
+    if refresh:
+        await _get_runtime_events(force_refresh=True)
+
+    now_ts = asyncio.get_running_loop().time()
+    cache_ts = float(RUNTIME_EVENTS_CACHE.get("ts", 0.0))
+    cache_age_seconds = None if cache_ts <= 0 else round(max(0.0, now_ts - cache_ts), 2)
+
+    cached_events = RUNTIME_EVENTS_CACHE.get("events") or []
+    if not isinstance(cached_events, list):
+        cached_events = []
+
+    return {
+        "api_key_present": bool(_resolve_odds_api_key()),
+        "cache_ttl_seconds": REAL_EVENTS_CACHE_TTL_SECONDS,
+        "cache_age_seconds": cache_age_seconds,
+        "cached_events_count": len(cached_events),
+        "cache_source": RUNTIME_EVENTS_CACHE.get("source", "unknown"),
+        "source_status": REAL_SOURCE_STATUS,
+        "timestamp": datetime.datetime.utcnow().isoformat(),
     }
 
 
