@@ -1,1 +1,1 @@
-web: uvicorn app.main:app --host 0.0.0.0 --port $PORT --loop asyncio --workers 1
+web: sh -c 'uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080} --loop asyncio --workers 1'

@@ -5,5 +5,5 @@ meta:
     version: 3.10
 
 run:
-  # Запускаем приложение через модуль app.main и слушаем порт платформы.
-  command: "uvicorn app.main:app --host 0.0.0.0 --port $PORT --loop asyncio --workers 1"
+  # Если PORT не задан платформой, используем 8080.
+  command: "sh -c 'uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080} --loop asyncio --workers 1'"
