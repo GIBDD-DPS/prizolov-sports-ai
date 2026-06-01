@@ -100,6 +100,14 @@ async def get_state(request: Request = None):
         ]
     }
 
+@app.post("/get-ai-sports.php")
+async def get_ai_sports(request: Request = None):
+    """
+    Endpoint для frontend виджета (совместимость с прокси-интеграцией)
+    Перенаправляет на основной /api/state endpoint
+    """
+    return await get_state(request)
+
 if __name__ == "__main__":
     import uvicorn
     target_port = int(os.environ.get("PORT", 8080))
