@@ -1,0 +1,164 @@
+<!-- Контейнер для вывода виджета ИИ -->
+<div id="prizolov-ai-widget" style="background: #1e1e24; color: #fff; padding: 20px; border-radius: 12px; font-family: sans-serif; max-width: 450px; margin: 15px auto;">
+    <!-- Шапка LIVE-матча -->
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; padding-bottom: 10px; margin-bottom: 15px;">
+        <div>
+            <span id="c-league" style="font-size: 12px; text-transform: uppercase; color: #888; letter-spacing: 1px;">Загрузка лиги...</span>
+            <div id="c-match" style="font-size: 18px; font-weight: bold; margin-top: 5px;">Поиск события...</div>
+        </div>
+        <span id="c-time" style="background: #ff3b30; color: #fff; padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: bold; animation: blink 1.5s infinite;">LIVE</span>
+    </div>
+    <!-- Список рекомендаций -->
+    <div id="recs"><div class="ph" style="color: #888; text-align: center; padding: 20px;">🤖 AI анализирует рынок...</div></div>
+    <!-- DEBUG ИНФОРМАЦИЯ -->
+    <div id="debug-info" style="font-size: 10px; color: #666; margin-top: 15px; padding-top: 10px; border-top: 1px solid #333; display: none;">
+        <div id="debug-status"></div>
+    </div>
+</div>
+
+<style>
+@keyframes blink { 0% {opacity: 1;} 50% {opacity: 0.4;} 100% {opacity: 1;} }
+.rec { display: flex; justify-content: space-between; align-items: center; background: #2a2a32; padding: 12px; border-radius: 8px; margin-bottom: 8px; border-left: 4px solid #007aff; }
+.rec-league { font-size: 11px; color: #aaa; text-transform: uppercase; }
+.rec-marker { font-size: 14px; margin: 4px 0; font-weight: 500; }
+.rec-meta { font-size: 12px; color: #888; }
+.conf { padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: bold; margin-left: 5px; }
+.conf.high { background: rgba(52, 199, 89, 0.2); color: #34c759; }
+.conf.med { background: rgba(255, 149, 0, 0.2); color: #ff9500; }
+.rec-coef { background: #007aff; color: #fff; padding: 6px 12px; border-radius: 6px; font-weight: bold; font-size: 15px; min-width: 45px; text-align: center; }
+</style>
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    var TARGET_URL = "/get-ai-sports.php";
+    var DEBUG = true; // Включить отладку
+
+    function log(msg) {
+        console.log("[Prizolov AI Widget] " + msg);
+        if (DEBUG) {
+            var debugDiv = document.getElementById("debug-info");
+            var debugStatus = document.getElementById("debug-status");
+            if (debugDiv && debugStatus) {
+                debugDiv.style.display = "block";
+                debugStatus.innerHTML += msg + "<br>";
+                // Ограничиваем размер логов
+                if (debugStatus.innerHTML.split("<br>").length > 5) {
+                    debugStatus.innerHTML = debugStatus.innerHTML.split("<br>").slice(-5).join("<br>");
+                }
+            }
+        }
+    }
+
+    function escapeHtml(str) {
+        if (!str) return "";
+        return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    async function loadData() {
+        try {
+            log("📡 Отправляю запрос на " + TARGET_URL);
+            
+            var resp = await fetch(TARGET_URL, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                },
+                body: JSON.stringify({ version_bypass: Date.now() })
+            });
+
+            log("📋 HTTP статус: " + resp.status);
+
+            if (!resp.ok) {
+                throw new Error("HTTP " + resp.status);
+            }
+
+            var data = await resp.json();
+            log("✅ Данные получены. Ключи: " + Object.keys(data).join(", "));
+
+            // ДЕБАГ: Логируем всю структуру
+            console.log("[Prizolov AI] Full Response:", data);
+            log("📊 Match Info: " + JSON.stringify(data.match_info));
+            log("📊 Recommendations: " + (data.recommendations ? data.recommendations.length : 0) + " шт");
+
+            // ========================================
+            // ПАРСИНГ И ОТОБРАЖЕНИЕ
+            // ========================================
+            
+            // Шаг 1: Заполнить заголовок
+            if (data.match_info) {
+                var leagueEl = document.getElementById("c-league");
+                if (leagueEl) {
+                    leagueEl.innerText = data.match_info.league || "—";
+                    log("✏️ League: " + (data.match_info.league || "—"));
+                }
+                
+                var matchEl = document.getElementById("c-match");
+                if (matchEl) {
+                    var matchText = (data.match_info.home || "?") + " vs " + (data.match_info.away || "?");
+                    matchEl.innerText = matchText;
+                    log("✏️ Match: " + matchText);
+                }
+                
+                var timeEl = document.getElementById("c-time");
+                if (timeEl) {
+                    timeEl.innerText = data.match_info.status || "—";
+                    log("✏️ Status: " + (data.match_info.status || "—"));
+                }
+            } else {
+                log("⚠️ match_info отсутствует в ответе!");
+            }
+
+            // Шаг 2: Отобразить рекомендации
+            var recs = data.recommendations || [];
+            var recsDiv = document.getElementById("recs");
+            
+            log("🎯 Всего рекомендаций: " + recs.length);
+
+            if (recsDiv) {
+                if (recs.length > 0) {
+                    var htmlResult = "";
+                    
+                    for (var i = 0; i < Math.min(recs.length, 8); i++) {
+                        var r = recs[i];
+                        var probPercent = Math.round((r.probability || 0) * 100);
+                        var confClass = r.confidence === "high" ? "high" : "med";
+                        var confText = r.confidence === "high" ? "Выбор" : "Ср";
+                        var coefFormatted = parseFloat(r.coefficient || r.price || 0).toFixed(2);
+
+                        log("  [" + i + "] " + r.line + " @ " + coefFormatted);
+
+                        htmlResult += '<div class="rec">' +
+                                        '<div class="rec-info">' +
+                                            '<div class="rec-league">' + escapeHtml(r.league || "РПЛ") + ' • ' + (r.sport || "FOOTBALL").toUpperCase() + '</div>' +
+                                            '<div class="rec-marker">' + escapeHtml(r.home || "Команда") + ' vs ' + escapeHtml(r.away || "Команда") + ' ➔ <span style="color:#007aff; font-weight:bold;">' + escapeHtml(r.line || "Исход") + '</span></div>' +
+                                            '<div class="rec-meta">Вер: ' + probPercent + '% <span class="conf ' + confClass + '">' + confText + '</span></div>' +
+                                        '</div>' +
+                                        '<span class="rec-coef">' + coefFormatted + '</span>' +
+                                      '</div>';
+                    }
+                    
+                    recsDiv.innerHTML = htmlResult;
+                    log("✅ Рекомендации отрисованы: " + recs.length + " карточек");
+                } else {
+                    log("⚠️ Массив рекомендаций пуст!");
+                    recsDiv.innerHTML = '<div class="ph" style="color: #888; text-align: center; padding: 20px;">🤖 Нет рекомендаций (пока анализирует рынок)</div>';
+                }
+            }
+
+        } catch (e) {
+            log("❌ Ошибка: " + e.message);
+            console.error("Ошибка ИИ:", e);
+        }
+    }
+
+    async function startPolling() {
+        log("⏱️ Начинаю polling...");
+        await loadData();
+        setTimeout(startPolling, 30000); // Каждые 30 секунд
+    }
+
+    // ПЕРВЫЙ ЗАПРОС - сразу при загрузке
+    startPolling();
+});
+</script>
