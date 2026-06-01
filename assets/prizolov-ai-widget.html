@@ -5,14 +5,17 @@
         <div>
             <span id="c-league" style="font-size: 12px; text-transform: uppercase; color: #888; letter-spacing: 1px;">Загрузка лиги...</span>
             <div id="c-match" style="font-size: 18px; font-weight: bold; margin-top: 5px;">Поиск события...</div>
+            <div id="c-sport" style="font-size: 11px; color: #666; margin-top: 3px;">—</div>
         </div>
         <span id="c-time" style="background: #ff3b30; color: #fff; padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: bold; animation: blink 1.5s infinite;">LIVE</span>
     </div>
     <!-- Список рекомендаций -->
     <div id="recs"><div class="ph" style="color: #888; text-align: center; padding: 20px;">🤖 AI анализирует рынок...</div></div>
-    <!-- DEBUG ИНФОРМАЦИЯ -->
-    <div id="debug-info" style="font-size: 10px; color: #666; margin-top: 15px; padding-top: 10px; border-top: 1px solid #333; display: none;">
-        <div id="debug-status"></div>
+    <!-- Навигация по матчам -->
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 15px; padding-top: 10px; border-top: 1px solid #333;">
+        <button id="prev-match" style="background: #007aff; color: #fff; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;">← Предыдущий</button>
+        <span id="match-counter" style="font-size: 11px; color: #666;">Матч 1 из ?</span>
+        <button id="next-match" style="background: #007aff; color: #fff; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;">Следующий →</button>
     </div>
 </div>
 
@@ -26,37 +29,49 @@
 .conf.high { background: rgba(52, 199, 89, 0.2); color: #34c759; }
 .conf.med { background: rgba(255, 149, 0, 0.2); color: #ff9500; }
 .rec-coef { background: #007aff; color: #fff; padding: 6px 12px; border-radius: 6px; font-weight: bold; font-size: 15px; min-width: 45px; text-align: center; }
+button:hover { opacity: 0.8; }
 </style>
 
 <script>
 document.addEventListener("DOMContentLoaded", function() {
     var TARGET_URL = "/get-ai-sports.php";
-    var DEBUG = true; // Включить отладку
-
-    function log(msg) {
-        console.log("[Prizolov AI Widget] " + msg);
-        if (DEBUG) {
-            var debugDiv = document.getElementById("debug-info");
-            var debugStatus = document.getElementById("debug-status");
-            if (debugDiv && debugStatus) {
-                debugDiv.style.display = "block";
-                debugStatus.innerHTML += msg + "<br>";
-                // Ограничиваем размер логов
-                if (debugStatus.innerHTML.split("<br>").length > 5) {
-                    debugStatus.innerHTML = debugStatus.innerHTML.split("<br>").slice(-5).join("<br>");
-                }
-            }
-        }
-    }
+    var currentEventIndex = 0;
+    var allEvents = [];
 
     function escapeHtml(str) {
         if (!str) return "";
         return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
 
-    async function loadData() {
+    async function fetchAllEvents() {
         try {
-            log("📡 Отправляю запрос на " + TARGET_URL);
+            console.log("[Prizolov AI] 📥 Загружаю полный список матчей...");
+            
+            // Пытаемся получить все события через основной endpoint
+            var resp = await fetch("/get-ai-sports.php", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                },
+                body: JSON.stringify({ version_bypass: Date.now(), get_all: true })
+            });
+
+            if (!resp.ok) throw new Error("HTTP " + resp.status);
+            
+            var data = await resp.json();
+            console.log("[Prizolov AI] ✅ Данные загружены:", data);
+            
+            return data;
+        } catch (e) {
+            console.error("[Prizolov AI] ❌ Ошибка загрузки:", e);
+            return null;
+        }
+    }
+
+    async function displayEvent(index) {
+        try {
+            console.log("[Prizolov AI] 🔄 Загружаю событие #" + (index + 1));
             
             var resp = await fetch(TARGET_URL, {
                 method: "POST",
@@ -64,57 +79,40 @@ document.addEventListener("DOMContentLoaded", function() {
                     "Content-Type": "application/json",
                     "Accept": "application/json"
                 },
-                body: JSON.stringify({ version_bypass: Date.now() })
+                body: JSON.stringify({ 
+                    version_bypass: Date.now(),
+                    event_index: index 
+                })
             });
 
-            log("📋 HTTP статус: " + resp.status);
-
-            if (!resp.ok) {
-                throw new Error("HTTP " + resp.status);
-            }
-
+            if (!resp.ok) throw new Error("HTTP " + resp.status);
             var data = await resp.json();
-            log("✅ Данные получены. Ключи: " + Object.keys(data).join(", "));
 
-            // ДЕБАГ: Логируем всю структуру
-            console.log("[Prizolov AI] Full Response:", data);
-            log("📊 Match Info: " + JSON.stringify(data.match_info));
-            log("📊 Recommendations: " + (data.recommendations ? data.recommendations.length : 0) + " шт");
+            console.log("[Prizolov AI] ✅ Событие получено:", data);
 
-            // ========================================
-            // ПАРСИНГ И ОТОБРАЖЕНИЕ
-            // ========================================
-            
-            // Шаг 1: Заполнить заголовок
+            // Заполнение заголовка
             if (data.match_info) {
                 var leagueEl = document.getElementById("c-league");
-                if (leagueEl) {
-                    leagueEl.innerText = data.match_info.league || "—";
-                    log("✏️ League: " + (data.match_info.league || "—"));
-                }
+                if (leagueEl) leagueEl.innerText = data.match_info.league || "—";
                 
                 var matchEl = document.getElementById("c-match");
                 if (matchEl) {
-                    var matchText = (data.match_info.home || "?") + " vs " + (data.match_info.away || "?");
-                    matchEl.innerText = matchText;
-                    log("✏️ Match: " + matchText);
+                    matchEl.innerText = (data.match_info.home || "?") + " vs " + (data.match_info.away || "?");
+                }
+                
+                var sportEl = document.getElementById("c-sport");
+                if (sportEl) {
+                    sportEl.innerText = (data.match_info.sport || "football").toUpperCase();
                 }
                 
                 var timeEl = document.getElementById("c-time");
-                if (timeEl) {
-                    timeEl.innerText = data.match_info.status || "—";
-                    log("✏️ Status: " + (data.match_info.status || "—"));
-                }
-            } else {
-                log("⚠️ match_info отсутствует в ответе!");
+                if (timeEl) timeEl.innerText = data.match_info.status || "—";
             }
 
-            // Шаг 2: Отобразить рекомендации
+            // Отображение рекомендаций
             var recs = data.recommendations || [];
             var recsDiv = document.getElementById("recs");
             
-            log("🎯 Всего рекомендаций: " + recs.length);
-
             if (recsDiv) {
                 if (recs.length > 0) {
                     var htmlResult = "";
@@ -125,8 +123,6 @@ document.addEventListener("DOMContentLoaded", function() {
                         var confClass = r.confidence === "high" ? "high" : "med";
                         var confText = r.confidence === "high" ? "Выбор" : "Ср";
                         var coefFormatted = parseFloat(r.coefficient || r.price || 0).toFixed(2);
-
-                        log("  [" + i + "] " + r.line + " @ " + coefFormatted);
 
                         htmlResult += '<div class="rec">' +
                                         '<div class="rec-info">' +
@@ -139,26 +135,55 @@ document.addEventListener("DOMContentLoaded", function() {
                     }
                     
                     recsDiv.innerHTML = htmlResult;
-                    log("✅ Рекомендации отрисованы: " + recs.length + " карточек");
+                    console.log("[Prizolov AI] ✅ Рекомендации отрисованы: " + recs.length);
                 } else {
-                    log("⚠️ Массив рекомендаций пуст!");
-                    recsDiv.innerHTML = '<div class="ph" style="color: #888; text-align: center; padding: 20px;">🤖 Нет рекомендаций (пока анализирует рынок)</div>';
+                    recsDiv.innerHTML = '<div class="ph" style="color: #888; text-align: center; padding: 20px;">🤖 Нет рекомендаций для этого матча</div>';
+                    console.log("[Prizolov AI] ⚠️ Нет рекомендаций");
                 }
             }
 
+            // Обновление счетчика (если есть данные о всех событиях)
+            if (allEvents.length > 0) {
+                var counter = document.getElementById("match-counter");
+                if (counter) counter.innerText = "Матч " + (index + 1) + " из " + allEvents.length;
+            }
+
         } catch (e) {
-            log("❌ Ошибка: " + e.message);
-            console.error("Ошибка ИИ:", e);
+            console.error("[Prizolov AI] ❌ Ошибка отображения:", e);
         }
     }
 
-    async function startPolling() {
-        log("⏱️ Начинаю polling...");
-        await loadData();
-        setTimeout(startPolling, 30000); // Каждые 30 секунд
+    // Кнопки навигации
+    document.getElementById("next-match").addEventListener("click", function() {
+        if (allEvents.length > 0) {
+            currentEventIndex = (currentEventIndex + 1) % allEvents.length;
+            displayEvent(currentEventIndex);
+        }
+    });
+
+    document.getElementById("prev-match").addEventListener("click", function() {
+        if (allEvents.length > 0) {
+            currentEventIndex = (currentEventIndex - 1 + allEvents.length) % allEvents.length;
+            displayEvent(currentEventIndex);
+        }
+    });
+
+    // Инициализация
+    async function init() {
+        console.log("[Prizolov AI] 🚀 Инициализация виджета...");
+        
+        // Загружаем первое событие сразу
+        await displayEvent(0);
+        
+        // Каждые 10 секунд показываем следующий матч автоматически
+        setInterval(function() {
+            if (allEvents.length > 0) {
+                currentEventIndex = (currentEventIndex + 1) % allEvents.length;
+                displayEvent(currentEventIndex);
+            }
+        }, 10000);
     }
 
-    // ПЕРВЫЙ ЗАПРОС - сразу при загрузке
-    startPolling();
+    init();
 });
 </script>
