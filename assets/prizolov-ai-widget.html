@@ -40,202 +40,100 @@ document.addEventListener("DOMContentLoaded", function() {
 
     function escapeHtml(str) {
         if (!str) return "";
-        return String(str)
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;");
-    }
-
-    function formatSport(sport) {
-        if (!sport) return "FOOTBALL";
-        return String(sport).toUpperCase();
-    }
-
-    function normalizeProbability(value) {
-        var parsed = parseFloat(value);
-        if (!isFinite(parsed)) return 0;
-        if (parsed > 1) parsed = parsed / 100;
-        if (parsed < 0) parsed = 0;
-        if (parsed > 1) parsed = 1;
-        return parsed;
-    }
-
-    function normalizeCoefficient(value) {
-        var parsed = parseFloat(value);
-        if (!isFinite(parsed) || parsed <= 0) return 1.5;
-        return parsed;
-    }
-
-    function normalizeEvent(raw) {
-        if (!raw || typeof raw !== "object") return null;
-
-        var matchInfo = raw.match_info || {};
-        var recommendations = Array.isArray(raw.recommendations) ? raw.recommendations : [];
-        var baseSport = raw.sport || matchInfo.sport || "football";
-        var baseLeague = raw.league || matchInfo.league || "—";
-        var baseHome = raw.home || raw.home_team || matchInfo.home || "—";
-        var baseAway = raw.away || raw.away_team || matchInfo.away || "—";
-
-        var normalizedRecs = recommendations.map(function(rec) {
-            return {
-                line: rec.line || rec.market || "Исход",
-                confidence: rec.confidence === "high" ? "high" : "med",
-                probability: normalizeProbability(rec.probability),
-                coefficient: normalizeCoefficient(rec.coefficient || rec.price || rec.odds),
-                league: rec.league || baseLeague,
-                sport: rec.sport || baseSport,
-                home: rec.home || baseHome,
-                away: rec.away || baseAway
-            };
-        });
-
-        return {
-            league: baseLeague,
-            home: baseHome,
-            away: baseAway,
-            sport: baseSport,
-            status: raw.status || matchInfo.status || raw.time || "LIVE",
-            recommendations: normalizedRecs
-        };
-    }
-
-    function extractEvents(payload) {
-        var source = [];
-
-        if (payload && Array.isArray(payload.events)) {
-            source = payload.events;
-        } else if (Array.isArray(payload)) {
-            source = payload;
-        } else if (payload && (payload.match_info || Array.isArray(payload.recommendations))) {
-            source = [payload];
-        }
-
-        return source.map(normalizeEvent).filter(function(event) {
-            return !!event;
-        });
-    }
-
-    function updateCounter() {
-        var counter = document.getElementById("match-counter");
-        if (!counter) return;
-        if (allEvents.length === 0) {
-            counter.innerText = "Матчи не найдены";
-            return;
-        }
-        counter.innerText = "Матч " + (currentEventIndex + 1) + " из " + allEvents.length;
-    }
-
-    async function fetchSingleEvent(index) {
-        try {
-            var resp = await fetch(TARGET_URL, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Accept": "application/json"
-                },
-                body: JSON.stringify({
-                    version_bypass: Date.now(),
-                    event_index: index
-                })
-            });
-            if (!resp.ok) throw new Error("HTTP " + resp.status);
-            return await resp.json();
-        } catch (e) {
-            console.error("[Prizolov AI] ❌ Ошибка загрузки события:", e);
-            return null;
-        }
+        return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
 
     async function fetchAllEvents() {
         try {
             console.log("[Prizolov AI] 📥 Загружаю полный список матчей...");
+            
+            // Пытаемся получить все события через основной endpoint
+            var resp = await fetch("/get-ai-sports.php", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                },
+                body: JSON.stringify({ version_bypass: Date.now(), get_all: true })
+            });
+
+            if (!resp.ok) throw new Error("HTTP " + resp.status);
+            
+            var data = await resp.json();
+            console.log("[Prizolov AI] ✅ Данные загружены:", data);
+            
+            return data;
+        } catch (e) {
+            console.error("[Prizolov AI] ❌ Ошибка загрузки:", e);
+            return null;
+        }
+    }
+
+    async function displayEvent(index) {
+        try {
+            console.log("[Prizolov AI] 🔄 Загружаю событие #" + (index + 1));
+            
             var resp = await fetch(TARGET_URL, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
                     "Accept": "application/json"
                 },
-                body: JSON.stringify({
+                body: JSON.stringify({ 
                     version_bypass: Date.now(),
-                    get_all: true
+                    event_index: index 
                 })
             });
 
             if (!resp.ok) throw new Error("HTTP " + resp.status);
             var data = await resp.json();
-            var events = extractEvents(data);
-            console.log("[Prizolov AI] ✅ Загружено live событий:", events.length);
-            return events;
-        } catch (e) {
-            console.error("[Prizolov AI] ❌ Ошибка загрузки списка:", e);
-            return [];
-        }
-    }
 
-    async function displayEvent(index) {
-        try {
-            // Если список ещё пуст, пробуем получить хотя бы одно событие.
-            if (allEvents.length === 0) {
-                var singlePayload = await fetchSingleEvent(index);
-                var fallbackEvents = extractEvents(singlePayload);
-                if (fallbackEvents.length > 0) {
-                    allEvents = fallbackEvents;
-                } else {
-                    var recsDivEmpty = document.getElementById("recs");
-                    if (recsDivEmpty) {
-                        recsDivEmpty.innerHTML = '<div class="ph" style="color: #888; text-align: center; padding: 20px;">🤖 Live события пока не найдены</div>';
-                    }
-                    updateCounter();
-                    return;
-                }
-            }
-
-            currentEventIndex = (index % allEvents.length + allEvents.length) % allEvents.length;
-            var event = allEvents[currentEventIndex];
-            console.log("[Prizolov AI] 🔄 Показываю событие #" + (currentEventIndex + 1), event);
+            console.log("[Prizolov AI] ✅ Событие получено:", data);
 
             // Заполнение заголовка
-            var leagueEl = document.getElementById("c-league");
-            if (leagueEl) leagueEl.innerText = event.league || "—";
-
-            var matchEl = document.getElementById("c-match");
-            if (matchEl) {
-                matchEl.innerText = (event.home || "?") + " vs " + (event.away || "?");
+            if (data.match_info) {
+                var leagueEl = document.getElementById("c-league");
+                if (leagueEl) leagueEl.innerText = data.match_info.league || "—";
+                
+                var matchEl = document.getElementById("c-match");
+                if (matchEl) {
+                    matchEl.innerText = (data.match_info.home || "?") + " vs " + (data.match_info.away || "?");
+                }
+                
+                var sportEl = document.getElementById("c-sport");
+                if (sportEl) {
+                    sportEl.innerText = (data.match_info.sport || "football").toUpperCase();
+                }
+                
+                var timeEl = document.getElementById("c-time");
+                if (timeEl) timeEl.innerText = data.match_info.status || "—";
             }
-
-            var sportEl = document.getElementById("c-sport");
-            if (sportEl) {
-                sportEl.innerText = formatSport(event.sport);
-            }
-
-            var timeEl = document.getElementById("c-time");
-            if (timeEl) timeEl.innerText = event.status || "LIVE";
 
             // Отображение рекомендаций
-            var recs = Array.isArray(event.recommendations) ? event.recommendations : [];
+            var recs = data.recommendations || [];
             var recsDiv = document.getElementById("recs");
-
+            
             if (recsDiv) {
                 if (recs.length > 0) {
                     var htmlResult = "";
-
+                    
                     for (var i = 0; i < Math.min(recs.length, 8); i++) {
                         var r = recs[i];
-                        var probPercent = Math.round(normalizeProbability(r.probability) * 100);
+                        var probPercent = Math.round((r.probability || 0) * 100);
                         var confClass = r.confidence === "high" ? "high" : "med";
                         var confText = r.confidence === "high" ? "Выбор" : "Ср";
-                        var coefFormatted = normalizeCoefficient(r.coefficient).toFixed(2);
+                        var coefFormatted = parseFloat(r.coefficient || r.price || 0).toFixed(2);
 
                         htmlResult += '<div class="rec">' +
                                         '<div class="rec-info">' +
-                                            '<div class="rec-league">' + escapeHtml(r.league || event.league || "РПЛ") + ' • ' + formatSport(r.sport || event.sport) + '</div>' +
-                                            '<div class="rec-marker">' + escapeHtml(r.home || event.home || "Команда") + ' vs ' + escapeHtml(r.away || event.away || "Команда") + ' ➔ <span style="color:#007aff; font-weight:bold;">' + escapeHtml(r.line || "Исход") + '</span></div>' +
+                                            '<div class="rec-league">' + escapeHtml(r.league || "РПЛ") + ' • ' + (r.sport || "FOOTBALL").toUpperCase() + '</div>' +
+                                            '<div class="rec-marker">' + escapeHtml(r.home || "Команда") + ' vs ' + escapeHtml(r.away || "Команда") + ' ➔ <span style="color:#007aff; font-weight:bold;">' + escapeHtml(r.line || "Исход") + '</span></div>' +
                                             '<div class="rec-meta">Вер: ' + probPercent + '% <span class="conf ' + confClass + '">' + confText + '</span></div>' +
                                         '</div>' +
                                         '<span class="rec-coef">' + coefFormatted + '</span>' +
                                       '</div>';
                     }
-
+                    
                     recsDiv.innerHTML = htmlResult;
                     console.log("[Prizolov AI] ✅ Рекомендации отрисованы: " + recs.length);
                 } else {
@@ -244,7 +142,12 @@ document.addEventListener("DOMContentLoaded", function() {
                 }
             }
 
-            updateCounter();
+            // Обновление счетчика (если есть данные о всех событиях)
+            if (allEvents.length > 0) {
+                var counter = document.getElementById("match-counter");
+                if (counter) counter.innerText = "Матч " + (index + 1) + " из " + allEvents.length;
+            }
+
         } catch (e) {
             console.error("[Prizolov AI] ❌ Ошибка отображения:", e);
         }
@@ -268,12 +171,10 @@ document.addEventListener("DOMContentLoaded", function() {
     // Инициализация
     async function init() {
         console.log("[Prizolov AI] 🚀 Инициализация виджета...");
-
-        allEvents = await fetchAllEvents();
-
-        // Загружаем первое событие сразу (или fallback на single-event).
+        
+        // Загружаем первое событие сразу
         await displayEvent(0);
-
+        
         // Каждые 10 секунд показываем следующий матч автоматически
         setInterval(function() {
             if (allEvents.length > 0) {
