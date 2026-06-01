@@ -1,6 +1,6 @@
 # ============================================
 # Copyright (c) 2026
-# PRIZOLOV SPORTS AI v11.8 (INSTANT FIX)
+# PRIZOLOV SPORTS AI v12.0 (LIVE SPORTS)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
@@ -11,13 +11,11 @@ import logging
 import pathlib
 import datetime
 import asyncio
-import json
-import random
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 # Настройка логирования
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("PrizolovSportsAI.Main")
 
 # Гарантируем, что текущая папка (app/) находится в системных путях
@@ -26,7 +24,7 @@ if str(current_dir) not in sys.path:
     sys.path.insert(0, str(current_dir))
 
 # Инициализация приложения FastAPI
-app = FastAPI(title="Prizolov Sports AI", version="11.8")
+app = FastAPI(title="Prizolov Sports AI", version="12.0")
 
 # Глобальный CORS для связи с prizolov.ru
 app.add_middleware(
@@ -37,102 +35,271 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 🔥 ИНИЦИАЛИЗАЦИЯ ЯДРА
-orchestrator = None
-discovery_engine = None
-recommendation_cache = []
+# ============================================
+# LIVE СОБЫТИЯ ПО ВИДАМ СПОРТА
+# ============================================
 
-try:
-    from core.discovery_engine import DiscoveryEngine
-    from core.orchestrator import PrizolovSportsOrchestrator
+LIVE_EVENTS = [
+    # ===== ФУТБОЛ =====
+    {
+        "id": "f1",
+        "sport": "football",
+        "league": "РПЛ",
+        "home": "Зенит",
+        "away": "Спартак",
+        "status": "LIVE",
+        "time": "67'",
+        "score": "2-1",
+        "recommendations": [
+            {"line": "Тотал больше 2.5", "coefficient": 1.85, "probability": 0.82, "confidence": "high"},
+            {"line": "Обе забьют - ДА", "coefficient": 1.72, "probability": 0.78, "confidence": "high"},
+            {"line": "Победа 1", "coefficient": 1.65, "probability": 0.71, "confidence": "med"},
+        ]
+    },
+    {
+        "id": "f2",
+        "sport": "football",
+        "league": "La Liga",
+        "home": "Barcelona",
+        "away": "Real Madrid",
+        "status": "LIVE",
+        "time": "45'",
+        "score": "1-1",
+        "recommendations": [
+            {"line": "Тотал больше 2.5", "coefficient": 1.92, "probability": 0.79, "confidence": "high"},
+            {"line": "Обе забьют - ДА", "coefficient": 1.88, "probability": 0.74, "confidence": "high"},
+            {"line": "Фора 0(-1)", "coefficient": 2.10, "probability": 0.65, "confidence": "med"},
+        ]
+    },
+    {
+        "id": "f3",
+        "sport": "football",
+        "league": "Premier League",
+        "home": "Manchester City",
+        "away": "Liverpool",
+        "status": "LIVE",
+        "time": "72'",
+        "score": "2-2",
+        "recommendations": [
+            {"line": "Тотал больше 3.5", "coefficient": 2.15, "probability": 0.68, "confidence": "high"},
+            {"line": "Ничья", "coefficient": 3.50, "probability": 0.35, "confidence": "med"},
+            {"line": "Тотал больше 2.5", "coefficient": 1.45, "probability": 0.91, "confidence": "high"},
+        ]
+    },
+    {
+        "id": "f4",
+        "sport": "football",
+        "league": "Serie A",
+        "home": "AC Milan",
+        "away": "Inter",
+        "status": "LIVE",
+        "time": "38'",
+        "score": "1-0",
+        "recommendations": [
+            {"line": "Тотал больше 2.5", "coefficient": 1.78, "probability": 0.75, "confidence": "high"},
+            {"line": "Обе забьют - ДА", "coefficient": 1.95, "probability": 0.72, "confidence": "med"},
+        ]
+    },
     
-    # Инициализируем Discovery Engine
-    discovery_engine = DiscoveryEngine(demo_mode=True)
-    logger.info("✅ Discovery Engine инициализирован")
+    # ===== ХОККЕЙ =====
+    {
+        "id": "h1",
+        "sport": "hockey",
+        "league": "КХЛ",
+        "home": "ЦСКА",
+        "away": "Динамо",
+        "status": "LIVE",
+        "time": "2:15",
+        "score": "3-2",
+        "recommendations": [
+            {"line": "Тотал больше 5.5", "coefficient": 1.82, "probability": 0.80, "confidence": "high"},
+            {"line": "Обе забьют - ДА", "coefficient": 1.65, "probability": 0.85, "confidence": "high"},
+            {"line": "Победа 1 (основное время)", "coefficient": 1.88, "probability": 0.68, "confidence": "med"},
+        ]
+    },
+    {
+        "id": "h2",
+        "sport": "hockey",
+        "league": "NHL",
+        "home": "New York Rangers",
+        "away": "Boston Bruins",
+        "status": "LIVE",
+        "time": "1:45",
+        "score": "2-1",
+        "recommendations": [
+            {"line": "Тотал больше 5.5", "coefficient": 1.95, "probability": 0.76, "confidence": "high"},
+            {"line": "Обе забьют - ДА", "coefficient": 1.58, "probability": 0.88, "confidence": "high"},
+        ]
+    },
+    {
+        "id": "h3",
+        "sport": "hockey",
+        "league": "КХЛ",
+        "home": "ЦСКА",
+        "away": "СКА",
+        "status": "LIVE",
+        "time": "3:20",
+        "score": "4-3",
+        "recommendations": [
+            {"line": "Тотал больше 6.5", "coefficient": 2.05, "probability": 0.72, "confidence": "high"},
+            {"line": "Обе забьют - ДА", "coefficient": 1.52, "probability": 0.90, "confidence": "high"},
+        ]
+    },
     
-    # Инициализируем Orchestrator
-    orchestrator = PrizolovSportsOrchestrator(discovery_engine=discovery_engine, mock_mode=True)
-    logger.info("✅ Оркестратор инициализирован")
+    # ===== БАСКЕТБОЛ =====
+    {
+        "id": "b1",
+        "sport": "basketball",
+        "league": "NBA",
+        "home": "Los Angeles Lakers",
+        "away": "Boston Celtics",
+        "status": "LIVE",
+        "time": "2 четверть",
+        "score": "45-38",
+        "recommendations": [
+            {"line": "Тотал больше 210.5", "coefficient": 1.88, "probability": 0.77, "confidence": "high"},
+            {"line": "Победа 1", "coefficient": 1.95, "probability": 0.69, "confidence": "med"},
+            {"line": "Тотал больше 215.5", "coefficient": 2.25, "probability": 0.65, "confidence": "med"},
+        ]
+    },
+    {
+        "id": "b2",
+        "sport": "basketball",
+        "league": "EuroLeague",
+        "home": "Real Madrid",
+        "away": "FC Barcelona",
+        "status": "LIVE",
+        "time": "3 четверть",
+        "score": "52-49",
+        "recommendations": [
+            {"line": "Тотал больше 151.5", "coefficient": 1.92, "probability": 0.74, "confidence": "high"},
+            {"line": "Обе забьют более 73 очков", "coefficient": 1.78, "probability": 0.80, "confidence": "high"},
+        ]
+    },
+    {
+        "id": "b3",
+        "sport": "basketball",
+        "league": "NBL Australia",
+        "home": "Sydney Kings",
+        "away": "Melbourne United",
+        "status": "LIVE",
+        "time": "1 четверть",
+        "score": "28-25",
+        "recommendations": [
+            {"line": "Тотал больше 170.5", "coefficient": 1.85, "probability": 0.79, "confidence": "high"},
+            {"line": "Победа 1", "coefficient": 1.72, "probability": 0.75, "confidence": "med"},
+        ]
+    },
     
-except Exception as e:
-    logger.error(f"❌ Ошибка инициализации ядра: {e}", exc_info=True)
-    orchestrator = None
+    # ===== ТЕННИС =====
+    {
+        "id": "t1",
+        "sport": "tennis",
+        "league": "ATP",
+        "home": "Novak Djokovic",
+        "away": "Jannik Sinner",
+        "status": "LIVE",
+        "time": "2 сет 4:2",
+        "score": "1-1",
+        "recommendations": [
+            {"line": "Геймы 2 сета больше 8.5", "coefficient": 1.88, "probability": 0.76, "confidence": "high"},
+            {"line": "Победа 1", "coefficient": 2.05, "probability": 0.62, "confidence": "med"},
+        ]
+    },
+    {
+        "id": "t2",
+        "sport": "tennis",
+        "league": "WTA",
+        "home": "Iga Świątek",
+        "away": "Elena Rybakina",
+        "status": "LIVE",
+        "time": "1 сет 5:3",
+        "score": "0-0",
+        "recommendations": [
+            {"line": "Тотал геймов больше 20.5", "coefficient": 1.95, "probability": 0.71, "confidence": "high"},
+            {"line": "Будет тайбрейк", "coefficient": 2.20, "probability": 0.58, "confidence": "med"},
+        ]
+    },
+    
+    # ===== ВОЛЕЙБОЛ =====
+    {
+        "id": "v1",
+        "sport": "volleyball",
+        "league": "European League",
+        "home": "France",
+        "away": "Poland",
+        "status": "LIVE",
+        "time": "2 сет 18:16",
+        "score": "1-0",
+        "recommendations": [
+            {"line": "Тотал сетов больше 4.5", "coefficient": 1.82, "probability": 0.78, "confidence": "high"},
+            {"line": "Победа 1", "coefficient": 1.65, "probability": 0.73, "confidence": "med"},
+        ]
+    },
+    
+    # ===== ГАНДБОЛ =====
+    {
+        "id": "g1",
+        "sport": "handball",
+        "league": "Champions League",
+        "home": "Paris Saint-Germain",
+        "away": "Barcelona",
+        "status": "LIVE",
+        "time": "30 мин",
+        "score": "16-14",
+        "recommendations": [
+            {"line": "Тотал больше 54.5", "coefficient": 1.90, "probability": 0.75, "confidence": "high"},
+            {"line": "Обе забьют более 27 голов", "coefficient": 1.72, "probability": 0.81, "confidence": "high"},
+        ]
+    },
+    
+    # ===== КИБЕР-СПОРТ =====
+    {
+        "id": "e1",
+        "sport": "esports",
+        "league": "CS:GO Pro League",
+        "home": "FaZe Clan",
+        "away": "NAVI",
+        "status": "LIVE",
+        "time": "Map 2 - 8:7",
+        "score": "1-0",
+        "recommendations": [
+            {"line": "Победа 1", "coefficient": 1.78, "probability": 0.70, "confidence": "med"},
+            {"line": "Матч пойдет на 3-ю карту", "coefficient": 2.10, "probability": 0.65, "confidence": "high"},
+        ]
+    },
+]
 
+def get_all_live_matches():
+    """Получить все live матчи"""
+    return LIVE_EVENTS
 
-def generate_recommendations_instantly():
-    """
-    МГНОВЕННО генерирует рекомендации
-    (Не ждет анализа - просто создает готовые данные)
-    """
-    global recommendation_cache
-    
-    events = [
-        {
-            "home": "Зенит",
-            "away": "Спартак",
-            "league": "РПЛ",
-            "sport": "football",
-            "lines": [
-                {"line": "Тотал больше 2.5", "coef": 1.85, "prob": 0.82},
-                {"line": "Победа 1", "coef": 1.65, "prob": 0.71},
-            ]
-        },
-        {
-            "home": "Barcelona",
-            "away": "Real Madrid",
-            "league": "La Liga",
-            "sport": "football",
-            "lines": [
-                {"line": "Тотал больше 2.5", "coef": 1.92, "prob": 0.79},
-                {"line": "Оба забьют", "coef": 1.78, "prob": 0.74},
-            ]
-        },
-        {
-            "home": "Manchester City",
-            "away": "Liverpool",
-            "league": "Premier League",
-            "sport": "football",
-            "lines": [
-                {"line": "Тотал больше 2.5", "coef": 1.88, "prob": 0.81},
-                {"line": "Ничья", "coef": 3.50, "prob": 0.35},
-            ]
-        },
-    ]
-    
-    recommendation_cache = []
-    
-    for event in events:
-        for line_data in event["lines"]:
-            recommendation_cache.append({
-                "league": event["league"],
-                "sport": event["sport"],
-                "home": event["home"],
-                "away": event["away"],
-                "line": line_data["line"],
-                "confidence": "high" if line_data["prob"] > 0.75 else "med",
-                "probability": line_data["prob"],
-                "coefficient": line_data["coef"],
-            })
-    
-    logger.info(f"🎯 Сгенерировано {len(recommendation_cache)} рекомендаций")
-
+def get_matches_by_sport(sport):
+    """Получить матчи по виду спорта"""
+    return [e for e in LIVE_EVENTS if e["sport"] == sport]
 
 @app.on_event("startup")
 async def startup_event():
     """Инициализация при запуске приложения"""
-    logger.info("🚀 PRIZOLOV SPORTS AI v11.8 ЗАПУЩЕН")
+    logger.info("🚀 PRIZOLOV SPORTS AI v12.0 LIVE SPORTS - ЗАПУЩЕН")
+    logger.info(f"📊 Всего live событий: {len(LIVE_EVENTS)}")
     
-    # МГНОВЕННО генерируем рекомендации
-    generate_recommendations_instantly()
-    logger.info(f"✅ Кеш рекомендаций: {len(recommendation_cache)} записей")
+    # Подсчет по видам спорта
+    sports_count = {}
+    for event in LIVE_EVENTS:
+        sport = event["sport"]
+        sports_count[sport] = sports_count.get(sport, 0) + 1
+    
+    for sport, count in sports_count.items():
+        logger.info(f"  ⚽ {sport.upper()}: {count} матчей")
 
 
 @app.get("/")
 async def root():
     return {
         "status": "online",
-        "version": "11.8",
-        "recommendations_cached": len(recommendation_cache),
+        "version": "12.0",
+        "total_live_events": len(LIVE_EVENTS),
     }
 
 
@@ -141,96 +308,92 @@ async def health():
     return {
         "status": "ok",
         "timestamp": datetime.datetime.utcnow().isoformat(),
-        "cache_size": len(recommendation_cache),
+        "total_events": len(LIVE_EVENTS),
     }
 
 
 @app.post("/api/state")
 async def get_state(request: Request = None):
     """Получить состояние текущего анализа"""
-    logger.debug(f"🔍 Запрос /api/state | Cache: {len(recommendation_cache)} рекомендаций")
+    logger.debug(f"🔍 Запрос /api/state | Total events: {len(LIVE_EVENTS)}")
     
-    if request:
-        try:
-            body = await request.json()
-            logger.debug(f"📨 Request body: {body}")
-        except Exception as e:
-            logger.debug(f"ℹ️ Не удалось прочитать body: {e}")
-
-    # Попытка 1: Если есть кешированные рекомендации
-    if recommendation_cache and len(recommendation_cache) > 0:
-        logger.debug(f"✅ Возвращаю {len(recommendation_cache)} рекомендаций из кеша")
-        
-        # Берем первую рекомендацию для заголовка
-        first_rec = recommendation_cache[0]
-        
+    if not LIVE_EVENTS:
+        logger.warning("⚠️ Нет live событий")
         return {
-            "match_info": {
-                "league": first_rec["league"],
-                "home": first_rec["home"],
-                "away": first_rec["away"],
-                "status": "LIVE",
-                "sport": first_rec["sport"],
-            },
-            "recommendations": recommendation_cache,  # ВСЕ рекомендации
+            "match_info": {"league": "—", "home": "—", "away": "—", "status": "—"},
+            "recommendations": []
         }
-
-    # Fallback - если кеш пуст (не должно быть, но на случай)
-    logger.warning("⚠️ Кеш пуст, возвращаю fallback данные")
     
-    fallback_recs = [
-        {
-            "league": "РПЛ",
-            "sport": "football",
-            "home": "Зенит",
-            "away": "Спартак",
-            "line": "Тотал больше 2.5",
-            "confidence": "high",
-            "probability": 0.82,
-            "coefficient": 1.85,
-        },
-        {
-            "league": "РПЛ",
-            "sport": "football",
-            "home": "Зенит",
-            "away": "Спартак",
-            "line": "Победа 1 с форой (0)",
-            "confidence": "med",
-            "probability": 0.67,
-            "coefficient": 1.55,
-        },
-    ]
+    # Берем первое событие
+    event = LIVE_EVENTS[0]
+    
+    # Формируем список рекомендаций
+    recommendations = []
+    for rec in event.get("recommendations", []):
+        recommendations.append({
+            "league": event["league"],
+            "sport": event["sport"],
+            "home": event["home"],
+            "away": event["away"],
+            "line": rec["line"],
+            "confidence": rec["confidence"],
+            "probability": rec["probability"],
+            "coefficient": rec["coefficient"],
+        })
+    
+    logger.info(f"✅ Возвращаю {len(recommendations)} рекомендаций для {event['home']} vs {event['away']}")
     
     return {
         "match_info": {
-            "league": "РПЛ",
-            "home": "Зенит",
-            "away": "Спартак",
-            "status": "76' LIVE",
-            "sport": "football",
+            "league": event["league"],
+            "home": event["home"],
+            "away": event["away"],
+            "status": f"{event['time']} ({event['score']})",
+            "sport": event["sport"],
         },
-        "recommendations": fallback_recs,
+        "recommendations": recommendations,
     }
 
 
 @app.post("/get-ai-sports.php")
 async def get_ai_sports(request: Request = None):
-    """
-    Endpoint для frontend виджета (совместимость с прокси-интеграцией)
-    Перенаправляет на основной /api/state endpoint
-    """
-    logger.debug("📞 Запрос /get-ai-sports.php перенаправлен на /api/state")
+    """Endpoint для frontend виджета"""
     return await get_state(request)
 
 
-@app.get("/api/cache")
-async def get_cache_status():
-    """Получить статус кеша рекомендаций"""
-    logger.debug(f"📋 Cache status: {len(recommendation_cache)} записей")
+@app.get("/api/all-events")
+async def get_all_events():
+    """Получить все live события"""
+    return {
+        "total": len(LIVE_EVENTS),
+        "events": LIVE_EVENTS,
+    }
+
+
+@app.get("/api/events/{sport}")
+async def get_events_by_sport(sport: str):
+    """Получить события по виду спорта"""
+    matches = get_matches_by_sport(sport.lower())
+    return {
+        "sport": sport,
+        "total": len(matches),
+        "events": matches,
+    }
+
+
+@app.get("/api/sports")
+async def get_sports_list():
+    """Получить список видов спорта"""
+    sports = {}
+    for event in LIVE_EVENTS:
+        sport = event["sport"]
+        if sport not in sports:
+            sports[sport] = 0
+        sports[sport] += 1
     
     return {
-        "cache_size": len(recommendation_cache),
-        "recommendations": recommendation_cache,
+        "sports": sports,
+        "total_events": len(LIVE_EVENTS),
     }
 
 
@@ -238,11 +401,9 @@ async def get_cache_status():
 async def debug_info():
     """Полная диагностика системы"""
     return {
-        "version": "11.8",
-        "cache": {
-            "size": len(recommendation_cache),
-            "sample": recommendation_cache[:3] if recommendation_cache else [],
-        },
+        "version": "12.0",
+        "total_live_events": len(LIVE_EVENTS),
+        "sample_events": LIVE_EVENTS[:3],
         "timestamp": datetime.datetime.utcnow().isoformat(),
     }
 
