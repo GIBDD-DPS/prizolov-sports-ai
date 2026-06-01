@@ -11,6 +11,7 @@ import logging
 import pathlib
 import datetime
 import asyncio
+from typing import Any, Dict
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -316,49 +317,25 @@ async def health():
 async def get_state(request: Request = None):
     """Получить состояние текущего анализа"""
     logger.debug(f"🔍 Запрос /api/state | Total events: {len(LIVE_EVENTS)}")
-    
-    if not LIVE_EVENTS:
-        logger.warning("⚠️ Нет live событий")
-        return {
-            "match_info": {"league": "—", "home": "—", "away": "—", "status": "—"},
-            "recommendations": []
-        }
-    
-    # Берем первое событие
-    event = LIVE_EVENTS[0]
-    
-    # Формируем список рекомендаций
-    recommendations = []
-    for rec in event.get("recommendations", []):
-        recommendations.append({
-            "league": event["league"],
-            "sport": event["sport"],
-            "home": event["home"],
-            "away": event["away"],
-            "line": rec["line"],
-            "confidence": rec["confidence"],
-            "probability": rec["probability"],
-            "coefficient": rec["coefficient"],
-        })
-    
-    logger.info(f"✅ Возвращаю {len(recommendations)} рекомендаций для {event['home']} vs {event['away']}")
-    
-    return {
-        "match_info": {
-            "league": event["league"],
-            "home": event["home"],
-            "away": event["away"],
-            "status": f"{event['time']} ({event['score']})",
-            "sport": event["sport"],
-        },
-        "recommendations": recommendations,
-    }
+    payload = await _read_json_payload(request)
+    return _build_state_response(payload)
 
 
 @app.post("/get-ai-sports.php")
 async def get_ai_sports(request: Request = None):
     """Endpoint для frontend виджета"""
-    return await get_state(request)
+    payload = await _read_json_payload(request)
+
+    # Основной контракт виджета /sport/: отдаём все live-события по флагу get_all.
+    if payload.get("get_all"):
+        logger.info(f"📦 Возвращаю полный список live событий: {len(LIVE_EVENTS)}")
+        return {
+            "total": len(LIVE_EVENTS),
+            "events": LIVE_EVENTS,
+        }
+
+    # Backward-compatible режим single event (для старого фронта).
+    return _build_state_response(payload)
 
 
 @app.get("/api/all-events")
@@ -405,6 +382,74 @@ async def debug_info():
         "total_live_events": len(LIVE_EVENTS),
         "sample_events": LIVE_EVENTS[:3],
         "timestamp": datetime.datetime.utcnow().isoformat(),
+    }
+
+
+async def _read_json_payload(request: Request = None) -> Dict[str, Any]:
+    """Безопасно прочитать JSON body запроса."""
+    if request is None:
+        return {}
+
+    try:
+        payload = await request.json()
+        if isinstance(payload, dict):
+            return payload
+    except Exception:
+        # Пустой body или невалидный JSON — не ошибка, просто берём значения по умолчанию.
+        pass
+
+    return {}
+
+
+def _build_state_response(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Построить ответ в формате single-event."""
+    if not LIVE_EVENTS:
+        logger.warning("⚠️ Нет live событий")
+        return {
+            "match_info": {"league": "—", "home": "—", "away": "—", "status": "—", "sport": "—"},
+            "recommendations": [],
+            "event_index": 0,
+            "total_events": 0,
+        }
+
+    raw_index = payload.get("event_index", 0)
+    try:
+        event_index = int(raw_index)
+    except (TypeError, ValueError):
+        event_index = 0
+
+    event_index = event_index % len(LIVE_EVENTS)
+    event = LIVE_EVENTS[event_index]
+
+    recommendations = []
+    for rec in event.get("recommendations", []):
+        recommendations.append({
+            "league": event["league"],
+            "sport": event["sport"],
+            "home": event["home"],
+            "away": event["away"],
+            "line": rec["line"],
+            "confidence": rec["confidence"],
+            "probability": rec["probability"],
+            "coefficient": rec["coefficient"],
+        })
+
+    logger.info(
+        f"✅ Возвращаю {len(recommendations)} рекомендаций для "
+        f"{event['home']} vs {event['away']} (index={event_index})"
+    )
+
+    return {
+        "match_info": {
+            "league": event["league"],
+            "home": event["home"],
+            "away": event["away"],
+            "status": f"{event['time']} ({event['score']})",
+            "sport": event["sport"],
+        },
+        "recommendations": recommendations,
+        "event_index": event_index,
+        "total_events": len(LIVE_EVENTS),
     }
 
 
