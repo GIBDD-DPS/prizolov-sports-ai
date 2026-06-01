@@ -44,7 +44,7 @@ try:
     from core.orchestrator import PrizolovSportsOrchestrator
     
     # Инициализируем Discovery Engine
-    discovery_engine = DiscoveryEngine(demo_mode=True)  # demo_mode=False в production
+    discovery_engine = DiscoveryEngine(demo_mode=False)  # demo_mode=False в production
     logger.info("✅ Discovery Engine инициализирован")
     
     # Инициализируем Orchestrator с Discovery Engine
