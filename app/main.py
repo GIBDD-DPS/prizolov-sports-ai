@@ -11,7 +11,8 @@ import logging
 import pathlib
 import datetime
 import asyncio
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
+import aiohttp
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -271,13 +272,237 @@ LIVE_EVENTS = [
     },
 ]
 
-def get_all_live_matches():
-    """Получить все live матчи"""
+REAL_EVENTS_CACHE_TTL_SECONDS = int(os.environ.get("REAL_EVENTS_CACHE_TTL_SECONDS", "90"))
+RUNTIME_EVENTS_CACHE: Dict[str, Any] = {"ts": 0.0, "events": []}
+ODDS_API_UPCOMING_URL = "https://api.the-odds-api.com/v4/sports/upcoming/odds/"
+
+
+def _resolve_odds_api_key() -> Optional[str]:
+    return (
+        os.environ.get("THE_ODDS_API_KEY")
+        or os.environ.get("API_KEYS_ODDS")
+        or os.environ.get("ODDS_API_KEY")
+    )
+
+
+def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime.datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_sport_key(sport_key: Optional[str]) -> str:
+    raw = (sport_key or "").lower()
+    if raw.startswith("soccer"):
+        return "football"
+    if raw.startswith("icehockey"):
+        return "hockey"
+    if raw.startswith("basketball"):
+        return "basketball"
+    if raw.startswith("tennis"):
+        return "tennis"
+    if raw.startswith("volleyball"):
+        return "volleyball"
+    if raw.startswith("mma"):
+        return "mma"
+    if raw.startswith("esports"):
+        return "esports"
+    if "_" in raw:
+        return raw.split("_", 1)[0]
+    return raw or "other"
+
+
+def _format_event_time(commence_time: Optional[str]) -> str:
+    dt = _parse_iso_datetime(commence_time)
+    if not dt:
+        return "—"
+    return dt.astimezone(datetime.timezone.utc).strftime("%H:%M UTC")
+
+
+def _compute_probabilities(outcomes: List[Dict[str, Any]]) -> Dict[str, float]:
+    valid = []
+    for outcome in outcomes:
+        try:
+            price = float(outcome.get("price"))
+        except (TypeError, ValueError):
+            continue
+        if price > 1.0:
+            valid.append((outcome.get("name") or "Исход", price))
+
+    if not valid:
+        return {}
+
+    inv_values = [(name, 1.0 / price) for name, price in valid]
+    inv_sum = sum(val for _, val in inv_values)
+    if inv_sum <= 0:
+        return {name: 0.0 for name, _ in valid}
+
+    probs: Dict[str, float] = {}
+    for name, inv in inv_values:
+        probs[name] = round(min(0.99, max(0.01, inv / inv_sum)), 4)
+    return probs
+
+
+def _extract_recommendations(event: Dict[str, Any], league: str, sport: str, home: str, away: str) -> List[Dict[str, Any]]:
+    recommendations: List[Dict[str, Any]] = []
+    bookmakers = event.get("bookmakers") or []
+
+    if not isinstance(bookmakers, list):
+        return recommendations
+
+    chosen_market: Optional[Dict[str, Any]] = None
+    for bookmaker in bookmakers:
+        for market in bookmaker.get("markets") or []:
+            if market.get("key") in {"h2h", "totals", "spreads"}:
+                chosen_market = market
+                break
+        if chosen_market:
+            break
+
+    if not chosen_market:
+        return recommendations
+
+    outcomes = chosen_market.get("outcomes") or []
+    if not isinstance(outcomes, list):
+        return recommendations
+
+    probabilities = _compute_probabilities(outcomes)
+    market_key = chosen_market.get("key", "h2h")
+
+    for outcome in outcomes[:3]:
+        try:
+            price = float(outcome.get("price"))
+        except (TypeError, ValueError):
+            continue
+
+        if price <= 1.0:
+            continue
+
+        line_name = str(outcome.get("name") or "Исход")
+        point = outcome.get("point")
+        if point is not None:
+            line_name = f"{line_name} {point}"
+
+        probability = probabilities.get(str(outcome.get("name") or "Исход"), round(min(0.99, 1.0 / price), 4))
+
+        recommendations.append(
+            {
+                "league": league,
+                "sport": sport,
+                "home": home,
+                "away": away,
+                "line": line_name if market_key != "h2h" else f"{market_key.upper()}: {line_name}",
+                "confidence": "high" if probability >= 0.45 else "med",
+                "probability": probability,
+                "coefficient": round(price, 2),
+            }
+        )
+
+    return recommendations
+
+
+def _transform_odds_event(event: Dict[str, Any], now_utc: datetime.datetime) -> Optional[Dict[str, Any]]:
+    home = event.get("home_team")
+    away = event.get("away_team")
+    if not home or not away:
+        return None
+
+    sport = _normalize_sport_key(event.get("sport_key"))
+    league = event.get("sport_title") or event.get("sport_key") or "Unknown League"
+    commence_time = event.get("commence_time")
+    commence_dt = _parse_iso_datetime(commence_time)
+
+    status = "UPCOMING"
+    if commence_dt and commence_dt <= now_utc:
+        status = "LIVE"
+
+    recommendations = _extract_recommendations(event, league, sport, home, away)
+
+    return {
+        "id": event.get("id") or f"{sport}_{home}_{away}",
+        "sport": sport,
+        "league": league,
+        "home": home,
+        "away": away,
+        "status": status,
+        "time": "LIVE" if status == "LIVE" else _format_event_time(commence_time),
+        "score": "—",
+        "recommendations": recommendations,
+    }
+
+
+async def _fetch_real_events(limit: int = 30) -> List[Dict[str, Any]]:
+    api_key = _resolve_odds_api_key()
+    if not api_key:
+        return []
+
+    params = {
+        "apiKey": api_key,
+        "regions": "eu,uk",
+        "markets": "h2h,totals",
+        "oddsFormat": "decimal",
+        "dateFormat": "iso",
+    }
+
+    timeout = aiohttp.ClientTimeout(total=12)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(ODDS_API_UPCOMING_URL, params=params) as resp:
+                if resp.status != 200:
+                    logger.warning(f"⚠️ Odds API вернул статус {resp.status}")
+                    return []
+                payload = await resp.json()
+    except Exception as exc:
+        logger.warning(f"⚠️ Не удалось получить реальные события из Odds API: {exc}")
+        return []
+
+    if not isinstance(payload, list):
+        return []
+
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    events: List[Dict[str, Any]] = []
+
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        transformed = _transform_odds_event(item, now_utc)
+        if transformed:
+            events.append(transformed)
+
+    events.sort(key=lambda ev: (ev.get("status") != "LIVE", ev.get("time", "")))
+    return events[:limit]
+
+
+async def _get_runtime_events(force_refresh: bool = False) -> List[Dict[str, Any]]:
+    now_ts = asyncio.get_running_loop().time()
+
+    cached_events = RUNTIME_EVENTS_CACHE.get("events") or []
+    if not force_refresh and cached_events and (now_ts - float(RUNTIME_EVENTS_CACHE.get("ts", 0.0))) < REAL_EVENTS_CACHE_TTL_SECONDS:
+        return cached_events
+
+    real_events = await _fetch_real_events(limit=40)
+    if real_events:
+        RUNTIME_EVENTS_CACHE["events"] = real_events
+        RUNTIME_EVENTS_CACHE["ts"] = now_ts
+        return real_events
+
+    # fallback на демо-каталог, если внешний источник недоступен.
+    RUNTIME_EVENTS_CACHE["events"] = LIVE_EVENTS
+    RUNTIME_EVENTS_CACHE["ts"] = now_ts
     return LIVE_EVENTS
 
-def get_matches_by_sport(sport):
+
+def get_all_live_matches(events: Optional[List[Dict[str, Any]]] = None):
+    """Получить все live матчи"""
+    return events if events is not None else LIVE_EVENTS
+
+def get_matches_by_sport(sport: str, events: Optional[List[Dict[str, Any]]] = None):
     """Получить матчи по виду спорта"""
-    return [e for e in LIVE_EVENTS if e["sport"] == sport]
+    source = events if events is not None else LIVE_EVENTS
+    return [e for e in source if str(e.get("sport", "")).lower() == sport.lower()]
 
 def log_startup_summary():
     """Лог startup-сводки по live-событиям."""
@@ -307,51 +532,56 @@ async def root():
 
 @app.get("/health")
 async def health():
+    events = await _get_runtime_events()
     return {
         "status": "ok",
         "timestamp": datetime.datetime.utcnow().isoformat(),
-        "total_events": len(LIVE_EVENTS),
+        "total_events": len(events),
     }
 
 
 @app.post("/api/state")
 async def get_state(request: Request = None):
     """Получить состояние текущего анализа"""
-    logger.debug(f"🔍 Запрос /api/state | Total events: {len(LIVE_EVENTS)}")
     payload = await _read_json_payload(request)
-    return _build_state_response(payload)
+    events = await _get_runtime_events()
+    logger.debug(f"🔍 Запрос /api/state | Total events: {len(events)}")
+    return _build_state_response(payload, events)
 
 
 @app.post("/get-ai-sports.php")
 async def get_ai_sports(request: Request = None):
     """Endpoint для frontend виджета"""
     payload = await _read_json_payload(request)
+    events = await _get_runtime_events()
 
-    # Основной контракт виджета /sport/: отдаём все live-события по флагу get_all.
+    # Основной контракт виджета /sport/: отдаём live-события из real-source (или fallback).
     if payload.get("get_all"):
-        logger.info(f"📦 Возвращаю полный список live событий: {len(LIVE_EVENTS)}")
+        logger.info(f"📦 Возвращаю полный список live событий: {len(events)}")
         return {
-            "total": len(LIVE_EVENTS),
-            "events": LIVE_EVENTS,
+            "total": len(events),
+            "events": events,
         }
 
     # Backward-compatible режим single event (для старого фронта).
-    return _build_state_response(payload)
+    return _build_state_response(payload, events)
 
 
 @app.get("/api/all-events")
 async def get_all_events():
     """Получить все live события"""
+    events = await _get_runtime_events()
     return {
-        "total": len(LIVE_EVENTS),
-        "events": LIVE_EVENTS,
+        "total": len(events),
+        "events": events,
     }
 
 
 @app.get("/api/events/{sport}")
 async def get_events_by_sport(sport: str):
     """Получить события по виду спорта"""
-    matches = get_matches_by_sport(sport.lower())
+    events = await _get_runtime_events()
+    matches = get_matches_by_sport(sport.lower(), events)
     return {
         "sport": sport,
         "total": len(matches),
@@ -362,26 +592,28 @@ async def get_events_by_sport(sport: str):
 @app.get("/api/sports")
 async def get_sports_list():
     """Получить список видов спорта"""
+    events = await _get_runtime_events()
     sports = {}
-    for event in LIVE_EVENTS:
-        sport = event["sport"]
+    for event in events:
+        sport = event.get("sport", "other")
         if sport not in sports:
             sports[sport] = 0
         sports[sport] += 1
-    
+
     return {
         "sports": sports,
-        "total_events": len(LIVE_EVENTS),
+        "total_events": len(events),
     }
 
 
 @app.get("/api/debug")
 async def debug_info():
     """Полная диагностика системы"""
+    events = await _get_runtime_events()
     return {
         "version": "12.0",
-        "total_live_events": len(LIVE_EVENTS),
-        "sample_events": LIVE_EVENTS[:3],
+        "total_live_events": len(events),
+        "sample_events": events[:3],
         "timestamp": datetime.datetime.utcnow().isoformat(),
     }
 
@@ -402,9 +634,9 @@ async def _read_json_payload(request: Request = None) -> Dict[str, Any]:
     return {}
 
 
-def _build_state_response(payload: Dict[str, Any]) -> Dict[str, Any]:
+def _build_state_response(payload: Dict[str, Any], events: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Построить ответ в формате single-event."""
-    if not LIVE_EVENTS:
+    if not events:
         logger.warning("⚠️ Нет live событий")
         return {
             "match_info": {"league": "—", "home": "—", "away": "—", "status": "—", "sport": "—"},
@@ -419,8 +651,8 @@ def _build_state_response(payload: Dict[str, Any]) -> Dict[str, Any]:
     except (TypeError, ValueError):
         event_index = 0
 
-    event_index = event_index % len(LIVE_EVENTS)
-    event = LIVE_EVENTS[event_index]
+    event_index = event_index % len(events)
+    event = events[event_index]
 
     recommendations = []
     for rec in event.get("recommendations", []):
@@ -450,7 +682,7 @@ def _build_state_response(payload: Dict[str, Any]) -> Dict[str, Any]:
         },
         "recommendations": recommendations,
         "event_index": event_index,
-        "total_events": len(LIVE_EVENTS),
+        "total_events": len(events),
     }
 
 
