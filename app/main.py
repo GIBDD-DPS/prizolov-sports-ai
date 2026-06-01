@@ -279,9 +279,8 @@ def get_matches_by_sport(sport):
     """Получить матчи по виду спорта"""
     return [e for e in LIVE_EVENTS if e["sport"] == sport]
 
-@app.on_event("startup")
-async def startup_event():
-    """Инициализация при запуске приложения"""
+def log_startup_summary():
+    """Лог startup-сводки по live-событиям."""
     logger.info("🚀 PRIZOLOV SPORTS AI v12.0 LIVE SPORTS - ЗАПУЩЕН")
     logger.info(f"📊 Всего live событий: {len(LIVE_EVENTS)}")
     
@@ -293,6 +292,8 @@ async def startup_event():
     
     for sport, count in sports_count.items():
         logger.info(f"  ⚽ {sport.upper()}: {count} матчей")
+
+log_startup_summary()
 
 
 @app.get("/")
