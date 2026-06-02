@@ -113,6 +113,7 @@ EXTERNAL_DONOR_SIGNAL_LIMIT_PER_EVENT = int(os.getenv("EXTERNAL_DONOR_SIGNAL_LIM
 
 MAX_ODDS_AGE_SECONDS = int(os.getenv("MAX_ODDS_AGE_SECONDS", "900"))  # 15 минут
 STALE_ODDS_PENALTY_FACTOR = float(os.getenv("STALE_ODDS_PENALTY_FACTOR", "0.92"))
+MAX_LIVE_EVENT_AGE_HOURS = float(os.getenv("MAX_LIVE_EVENT_AGE_HOURS", "4"))
 
 
 # ============================================
@@ -1402,6 +1403,8 @@ def _build_upcoming_events(now_utc: datetime.datetime, window_hours: int) -> Lis
     for tpl in UPCOMING_EVENT_TEMPLATES:
         event_id, sport, league, home, away, offset_h, recs = tpl
         start_at = now_utc + datetime.timedelta(hours=float(offset_h))
+        if start_at <= now_utc:
+            continue
         if start_at > horizon:
             continue
 
@@ -1427,6 +1430,25 @@ def _build_upcoming_events(now_utc: datetime.datetime, window_hours: int) -> Lis
     return events
 
 
+def _is_event_relevant_now(event: Dict[str, Any], now_utc: datetime.datetime, window_hours: int) -> bool:
+    start_at = _parse_iso_datetime(event.get("start_at"))
+    is_live = _safe_bool(event.get("is_live"), False)
+
+    if start_at is None:
+        return is_live
+
+    if is_live:
+        max_age = datetime.timedelta(hours=max(1.0, MAX_LIVE_EVENT_AGE_HOURS))
+        if start_at > now_utc + datetime.timedelta(minutes=5):
+            return False
+        if start_at < now_utc - max_age:
+            return False
+        return True
+
+    horizon = now_utc + datetime.timedelta(hours=max(1, window_hours))
+    return now_utc <= start_at <= horizon
+
+
 def _collect_raw_events(window_hours: int, include_live: bool, include_upcoming: bool) -> List[Dict[str, Any]]:
     now_utc = _now_utc()
     items: List[Dict[str, Any]] = []
@@ -1434,7 +1456,12 @@ def _collect_raw_events(window_hours: int, include_live: bool, include_upcoming:
         items.extend(_build_live_events(now_utc))
     if include_upcoming:
         items.extend(_build_upcoming_events(now_utc, window_hours))
-    return items
+
+    return [
+        event
+        for event in items
+        if _is_event_relevant_now(event, now_utc, window_hours)
+    ]
 
 
 def _score_recommendation(rec: Dict[str, Any], now_utc: datetime.datetime) -> Dict[str, Any]:
@@ -2143,6 +2170,7 @@ async def source_status():
             "default_min_bookmakers_support": DEFAULT_MIN_BOOKMAKERS_SUPPORT,
             "max_odds_age_seconds": MAX_ODDS_AGE_SECONDS,
             "stale_odds_penalty_factor": STALE_ODDS_PENALTY_FACTOR,
+            "max_live_event_age_hours": MAX_LIVE_EVENT_AGE_HOURS,
             "external_consensus_enabled": EXTERNAL_CONSENSUS_ENABLED,
             "external_consensus_min_sources": EXTERNAL_CONSENSUS_MIN_SOURCES,
             "external_donor_signal_limit_per_event": EXTERNAL_DONOR_SIGNAL_LIMIT_PER_EVENT,

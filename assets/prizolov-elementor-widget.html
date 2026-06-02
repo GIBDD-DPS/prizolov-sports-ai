@@ -475,6 +475,8 @@
   var MIN_PROBABILITY = 0.6;
   var MIN_COEFFICIENT = 1.5;
   var MIN_CONSENSUS_SOURCES = 3;
+  var MAX_SNAPSHOT_AGE_MS = 10 * 60 * 1000;
+  var MAX_LIVE_EVENT_AGE_MS = 4 * 60 * 60 * 1000;
   var AUTO_ROTATE_MS = 10000;
   var AUTO_REFRESH_MS = 45000;
   var INDEX_SCAN_LIMIT = 40;
@@ -624,6 +626,9 @@
         if (!raw) return null;
         var parsed = JSON.parse(raw);
         if (!parsed || !Array.isArray(parsed.events)) return null;
+        var savedTs = Date.parse(parsed.saved_at || "");
+        if (!Number.isFinite(savedTs)) return null;
+        if ((Date.now() - savedTs) > MAX_SNAPSHOT_AGE_MS) return null;
         return parsed;
       } catch (e) {
         return null;
@@ -714,11 +719,34 @@
       return 0;
     }
 
+    function toTimestamp(value) {
+      if (!value) return 0;
+      var t = Date.parse(value);
+      return Number.isFinite(t) ? t : 0;
+    }
+
+    function isActualEvent(event) {
+      if (!event) return false;
+      var now = Date.now();
+      var startTs = toTimestamp(event.start_at);
+
+      if (event.is_live) {
+        if (!startTs) return true;
+        if (startTs > now + 5 * 60 * 1000) return false;
+        return (now - startTs) <= MAX_LIVE_EVENT_AGE_MS;
+      }
+
+      if (!startTs) return false;
+      var horizon = now + WINDOW_HOURS * 60 * 60 * 1000;
+      return startTs >= now && startTs <= horizon;
+    }
+
     function applyMode(events) {
       var cfg = MODES[currentMode] || MODES.all24;
-      if (cfg.onlyLive) return events.filter(function (e) { return e.is_live; });
-      if (cfg.onlyUpcoming) return events.filter(function (e) { return !e.is_live; });
-      return events;
+      var actual = events.filter(isActualEvent);
+      if (cfg.onlyLive) return actual.filter(function (e) { return e.is_live; });
+      if (cfg.onlyUpcoming) return actual.filter(function (e) { return !e.is_live; });
+      return actual;
     }
 
     function renderSportsLine() {
@@ -898,6 +926,7 @@
       requestJson("GET", withBase(ALL_EVENTS_URL) + "?" + qs({
         window_hours: String(WINDOW_HOURS),
         include_live: modeCfg.includeLive ? "true" : "false",
+        include_upcoming: modeCfg.onlyLive ? "false" : "true",
         passable_only: "false",
         min_probability: "0",
         min_coefficient: "1",
@@ -917,6 +946,7 @@
         get_all: true,
         window_hours: WINDOW_HOURS,
         include_live: modeCfg.includeLive,
+        include_upcoming: !modeCfg.onlyLive,
         passable_only: false,
         min_probability: 0,
         min_coefficient: 1,
@@ -946,6 +976,7 @@
           event_index: i,
           window_hours: WINDOW_HOURS,
           include_live: modeCfg.includeLive,
+          include_upcoming: !modeCfg.onlyLive,
           passable_only: false,
           min_probability: 0,
           min_coefficient: 1,
@@ -1002,7 +1033,7 @@
       fetchAllEvents(function (raw) {
         var normalized = raw.map(normalizeEvent).filter(Boolean).filter(function (e) {
           return e.allRecommendations && e.allRecommendations.length > 0;
-        });
+        }).filter(isActualEvent);
         normalized = applyMode(normalized);
         normalized.sort(function (a, b) {
           var p = topProbability(b) - topProbability(a);
