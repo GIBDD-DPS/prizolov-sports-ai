@@ -443,6 +443,7 @@
   var AUTO_ROTATE_MS = 10000;
   var AUTO_REFRESH_MS = 45000;
   var INDEX_SCAN_LIMIT = 40;
+  var STORE_CACHE_KEY_PREFIX = "prizolov_storefront_snapshot_v1:";
 
   var MODES = {
     all24: { label: "LIVE + 24ч", includeLive: true, onlyLive: false, onlyUpcoming: false },
@@ -459,6 +460,8 @@
     var currentMode = "all24";
     var currentEventIndex = 0;
     var allEvents = [];
+    var usingCachedSnapshot = false;
+    var lastUpdatedLabel = "—";
 
     function byId(id) {
       return root.querySelector("#" + id);
@@ -531,6 +534,35 @@
         xhr.send(body ? JSON.stringify(body) : null);
       } catch (err) {
         fail(err);
+      }
+    }
+
+
+    function saveSnapshot(mode, payload) {
+      try {
+        if (!window.sessionStorage) return;
+        sessionStorage.setItem(
+          STORE_CACHE_KEY_PREFIX + mode,
+          JSON.stringify({
+            saved_at: new Date().toISOString(),
+            events: payload
+          })
+        );
+      } catch (e) {
+        // ignore storage errors in strict privacy mode
+      }
+    }
+
+    function loadSnapshot(mode) {
+      try {
+        if (!window.sessionStorage) return null;
+        var raw = sessionStorage.getItem(STORE_CACHE_KEY_PREFIX + mode);
+        if (!raw) return null;
+        var parsed = JSON.parse(raw);
+        if (!parsed || !Array.isArray(parsed.events)) return null;
+        return parsed;
+      } catch (e) {
+        return null;
       }
     }
 
@@ -669,7 +701,13 @@
       if (byId("total-recs")) byId("total-recs").textContent = String(totalRecs);
       if (byId("total-sports")) byId("total-sports").textContent = String(Object.keys(sports).length);
       if (byId("avg-coef")) byId("avg-coef").textContent = totalRecs > 0 ? (totalCoef / totalRecs).toFixed(2) : "0";
-      if (byId("stats-note")) byId("stats-note").textContent = "Режим: " + MODES[currentMode].label + " • рекомендации: >60% и >=1.5";
+      if (byId("stats-note")) {
+        var note = "Режим: " + MODES[currentMode].label +
+          " • рекомендации: >60% и >=1.5" +
+          " • обновлено: " + lastUpdatedLabel;
+        if (usingCachedSnapshot) note += " • резервный кэш";
+        byId("stats-note").textContent = note;
+      }
     }
 
     function renderMain(index) {
@@ -861,7 +899,24 @@
           if (Math.abs(p) > 0.0001) return p;
           return String(a.start_at || "").localeCompare(String(b.start_at || ""));
         });
-        allEvents = normalized;
+
+        if (normalized.length > 0) {
+          usingCachedSnapshot = false;
+          lastUpdatedLabel = new Date().toLocaleTimeString();
+          saveSnapshot(currentMode, normalized);
+          allEvents = normalized;
+        } else {
+          var snapshot = loadSnapshot(currentMode);
+          if (snapshot && Array.isArray(snapshot.events) && snapshot.events.length > 0) {
+            usingCachedSnapshot = true;
+            allEvents = snapshot.events;
+            var dt = new Date(snapshot.saved_at || Date.now());
+            lastUpdatedLabel = dt.toLocaleTimeString();
+          } else {
+            allEvents = [];
+          }
+        }
+
         if (currentEventIndex >= allEvents.length) currentEventIndex = 0;
 
         renderSportsLine();
