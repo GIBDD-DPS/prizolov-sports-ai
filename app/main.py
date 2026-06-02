@@ -284,6 +284,11 @@ REAL_SOURCE_STATUS: Dict[str, Any] = {
     "last_count": 0,
     "last_input_count": 0,
     "last_filtered_out": 0,
+    "adaptive_enabled": False,
+    "adaptive_min_probability": None,
+    "adaptive_min_probability_base": None,
+    "adaptive_adjustments": [],
+    "adaptive_feedback_used": 0,
     "used_fallback": True,
     "active_source": "demo_fallback",
     "cache_hit": False,
@@ -332,6 +337,11 @@ MIN_RECOMMENDATION_PROBABILITY = min(0.9, max(0.01, float(os.environ.get("MIN_RE
 MAX_RECOMMENDATIONS_PER_EVENT = max(1, int(os.environ.get("MAX_RECOMMENDATIONS_PER_EVENT", "3")))
 REAL_EVENTS_MAX_UPCOMING_HOURS = max(1, int(os.environ.get("REAL_EVENTS_MAX_UPCOMING_HOURS", "72")))
 MIN_EVENT_QUALITY_SCORE = min(100.0, max(0.0, float(os.environ.get("MIN_EVENT_QUALITY_SCORE", "42"))))
+
+ADAPTIVE_THRESHOLD_ENABLED = os.environ.get("ADAPTIVE_THRESHOLD_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+ADAPTIVE_THRESHOLD_MIN_FEEDBACK = max(1, int(os.environ.get("ADAPTIVE_THRESHOLD_MIN_FEEDBACK", "20")))
+ADAPTIVE_MIN_PROBABILITY_FLOOR = min(0.8, max(0.01, float(os.environ.get("ADAPTIVE_MIN_PROBABILITY_FLOOR", "0.40"))))
+ADAPTIVE_MIN_PROBABILITY_CEIL = min(0.95, max(ADAPTIVE_MIN_PROBABILITY_FLOOR, float(os.environ.get("ADAPTIVE_MIN_PROBABILITY_CEIL", "0.72"))))
 
 
 def _normalize_lang(lang: Optional[str]) -> str:
@@ -1060,6 +1070,94 @@ def _build_learning_alerts(window_metrics: Dict[str, Any], min_samples: int = 10
     return alerts
 
 
+
+def _compute_adaptive_min_probability(status: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    base_threshold = _clamp(MIN_RECOMMENDATION_PROBABILITY, ADAPTIVE_MIN_PROBABILITY_FLOOR, ADAPTIVE_MIN_PROBABILITY_CEIL)
+    if not ADAPTIVE_THRESHOLD_ENABLED:
+        return {
+            "enabled": False,
+            "base_min_probability": round(base_threshold, 4),
+            "effective_min_probability": round(base_threshold, 4),
+            "delta": 0.0,
+            "feedback_count_used": 0,
+            "adjustments": [],
+            "reason": "adaptive_disabled",
+        }
+
+    learning_status = status or _get_self_learning_status()
+    feedback_count = max(0, _safe_int((learning_status or {}).get("total_feedback"), 0))
+    if feedback_count < ADAPTIVE_THRESHOLD_MIN_FEEDBACK:
+        return {
+            "enabled": True,
+            "base_min_probability": round(base_threshold, 4),
+            "effective_min_probability": round(base_threshold, 4),
+            "delta": 0.0,
+            "feedback_count_used": feedback_count,
+            "adjustments": [],
+            "reason": "insufficient_feedback",
+        }
+
+    summary = (learning_status or {}).get("summary") or {}
+    brier = summary.get("global_brier_score")
+    calibration_gap = summary.get("global_calibration_gap")
+    roi = summary.get("global_roi_avg")
+    hit_rate = summary.get("global_hit_rate")
+
+    threshold = base_threshold
+    adjustments: List[Dict[str, Any]] = []
+
+    if brier is not None:
+        brier_value = _safe_float(brier)
+        if brier_value > 0.24:
+            threshold += 0.04
+            adjustments.append({"metric": "brier", "delta": 0.04, "value": round(brier_value, 6), "rule": "high_brier"})
+        elif brier_value > 0.20:
+            threshold += 0.02
+            adjustments.append({"metric": "brier", "delta": 0.02, "value": round(brier_value, 6), "rule": "medium_brier"})
+        elif brier_value < 0.16:
+            threshold -= 0.02
+            adjustments.append({"metric": "brier", "delta": -0.02, "value": round(brier_value, 6), "rule": "good_brier"})
+
+    if calibration_gap is not None:
+        gap_value = abs(_safe_float(calibration_gap))
+        if gap_value > 0.12:
+            threshold += 0.03
+            adjustments.append({"metric": "calibration_gap", "delta": 0.03, "value": round(gap_value, 6), "rule": "large_gap"})
+        elif gap_value < 0.05:
+            threshold -= 0.01
+            adjustments.append({"metric": "calibration_gap", "delta": -0.01, "value": round(gap_value, 6), "rule": "small_gap"})
+
+    if roi is not None:
+        roi_value = _safe_float(roi)
+        if roi_value < -0.08:
+            threshold += 0.03
+            adjustments.append({"metric": "roi", "delta": 0.03, "value": round(roi_value, 6), "rule": "negative_roi"})
+        elif roi_value > 0.12:
+            threshold -= 0.015
+            adjustments.append({"metric": "roi", "delta": -0.015, "value": round(roi_value, 6), "rule": "strong_roi"})
+
+    if hit_rate is not None:
+        hit_value = _safe_float(hit_rate)
+        if hit_value < 0.48:
+            threshold += 0.015
+            adjustments.append({"metric": "hit_rate", "delta": 0.015, "value": round(hit_value, 6), "rule": "low_hit_rate"})
+        elif hit_value > 0.62:
+            threshold -= 0.01
+            adjustments.append({"metric": "hit_rate", "delta": -0.01, "value": round(hit_value, 6), "rule": "high_hit_rate"})
+
+    effective = _clamp(threshold, ADAPTIVE_MIN_PROBABILITY_FLOOR, ADAPTIVE_MIN_PROBABILITY_CEIL)
+    return {
+        "enabled": True,
+        "base_min_probability": round(base_threshold, 4),
+        "effective_min_probability": round(effective, 4),
+        "delta": round(effective - base_threshold, 4),
+        "feedback_count_used": feedback_count,
+        "adjustments": adjustments,
+        "reason": "adaptive_from_metrics" if adjustments else "no_adjustment_needed",
+    }
+
+
+
 def _get_self_learning_status() -> Dict[str, Any]:
     with SELF_LEARNING_LOCK:
         total_feedback = max(0, _safe_int(SELF_LEARNING_STATE.get("total_feedback"), 0))
@@ -1289,7 +1387,7 @@ def _recommendation_strength(probability: float, price: float) -> float:
     return round((probability * 0.7) + (edge * 0.3), 4)
 
 
-def _extract_recommendations(event: Dict[str, Any], league: str, sport: str, home: str, away: str) -> List[Dict[str, Any]]:
+def _extract_recommendations(event: Dict[str, Any], league: str, sport: str, home: str, away: str, min_probability_threshold: float) -> List[Dict[str, Any]]:
     recommendations: List[Dict[str, Any]] = []
     bookmakers = event.get("bookmakers") or []
 
@@ -1349,7 +1447,7 @@ def _extract_recommendations(event: Dict[str, Any], league: str, sport: str, hom
         probability = probabilities.get(outcome_name, round(min(0.99, 1.0 / price), 4))
         probability = max(0.01, min(0.99, probability))
 
-        if probability < MIN_RECOMMENDATION_PROBABILITY:
+        if probability < min_probability_threshold:
             continue
 
         scored_candidates.append(
@@ -1374,7 +1472,7 @@ def _extract_recommendations(event: Dict[str, Any], league: str, sport: str, hom
     return recommendations
 
 
-def _transform_odds_event(event: Dict[str, Any], now_utc: datetime.datetime) -> Optional[Dict[str, Any]]:
+def _transform_odds_event(event: Dict[str, Any], now_utc: datetime.datetime, min_probability_threshold: float) -> Optional[Dict[str, Any]]:
     home = event.get("home_team")
     away = event.get("away_team")
     if not home or not away:
@@ -1394,7 +1492,7 @@ def _transform_odds_event(event: Dict[str, Any], now_utc: datetime.datetime) -> 
     if commence_dt and commence_dt <= now_utc:
         status = "LIVE"
 
-    recommendations = _extract_recommendations(event, league, sport, home, away)
+    recommendations = _extract_recommendations(event, league, sport, home, away, min_probability_threshold=min_probability_threshold)
     if not recommendations:
         return None
 
@@ -1476,6 +1574,13 @@ async def _fetch_real_events(limit: int = 30) -> List[Dict[str, Any]]:
         return []
 
     now_utc = datetime.datetime.now(datetime.timezone.utc)
+    learning_status = _get_self_learning_status()
+    adaptive_threshold = _compute_adaptive_min_probability(learning_status)
+    effective_min_probability = _safe_float(
+        adaptive_threshold.get("effective_min_probability"),
+        MIN_RECOMMENDATION_PROBABILITY,
+    )
+
     events: List[Dict[str, Any]] = []
     filtered_out = 0
 
@@ -1483,7 +1588,11 @@ async def _fetch_real_events(limit: int = 30) -> List[Dict[str, Any]]:
         if not isinstance(item, dict):
             filtered_out += 1
             continue
-        transformed = _transform_odds_event(item, now_utc)
+        transformed = _transform_odds_event(
+            item,
+            now_utc,
+            min_probability_threshold=effective_min_probability,
+        )
         if transformed:
             events.append(transformed)
         else:
@@ -1504,6 +1613,11 @@ async def _fetch_real_events(limit: int = 30) -> List[Dict[str, Any]]:
     REAL_SOURCE_STATUS["last_input_count"] = len(payload)
     REAL_SOURCE_STATUS["last_filtered_out"] = filtered_out
     REAL_SOURCE_STATUS["last_count"] = len(result)
+    REAL_SOURCE_STATUS["adaptive_enabled"] = bool(adaptive_threshold.get("enabled", False))
+    REAL_SOURCE_STATUS["adaptive_min_probability"] = adaptive_threshold.get("effective_min_probability")
+    REAL_SOURCE_STATUS["adaptive_min_probability_base"] = adaptive_threshold.get("base_min_probability")
+    REAL_SOURCE_STATUS["adaptive_adjustments"] = adaptive_threshold.get("adjustments", [])
+    REAL_SOURCE_STATUS["adaptive_feedback_used"] = adaptive_threshold.get("feedback_count_used", 0)
     return result
 
 
@@ -1798,6 +1912,11 @@ async def source_status(refresh: bool = False):
             "supported_runtime_sports": sorted(SUPPORTED_RUNTIME_SPORTS),
             "min_bookmakers_per_event": MIN_BOOKMAKERS_PER_EVENT,
             "min_recommendation_probability": MIN_RECOMMENDATION_PROBABILITY,
+            "effective_min_recommendation_probability": REAL_SOURCE_STATUS.get("adaptive_min_probability") or MIN_RECOMMENDATION_PROBABILITY,
+            "adaptive_threshold_enabled": ADAPTIVE_THRESHOLD_ENABLED,
+            "adaptive_threshold_min_feedback": ADAPTIVE_THRESHOLD_MIN_FEEDBACK,
+            "adaptive_min_probability_floor": ADAPTIVE_MIN_PROBABILITY_FLOOR,
+            "adaptive_min_probability_ceil": ADAPTIVE_MIN_PROBABILITY_CEIL,
             "min_event_quality_score": MIN_EVENT_QUALITY_SCORE,
             "max_recommendations_per_event": MAX_RECOMMENDATIONS_PER_EVENT,
             "max_upcoming_hours": REAL_EVENTS_MAX_UPCOMING_HOURS,
@@ -1835,8 +1954,11 @@ async def get_learning_metrics(
     )
     alerts = _build_learning_alerts(windows, min_samples=alert_min_samples)
 
+    threshold_guidance = _compute_adaptive_min_probability(status)
+
     return {
         "status": status,
+        "quality_threshold": threshold_guidance,
         "windows": windows,
         "alerts": alerts,
         "recent_feedback": _get_recent_feedback(limit=recent_limit),

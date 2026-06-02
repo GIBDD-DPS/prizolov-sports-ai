@@ -134,5 +134,15 @@ python3 scripts/auto_feedback_worker.py \
 - `alert_min_samples` — минимальное число samples для алертов деградации
 
 Ответ включает блоки:
+- `quality_threshold` (базовый и эффективный порог вероятности с адаптацией по метрикам)
 - `windows` (`recent`, `baseline`, `trend_delta`)
 - `alerts` (сигналы стабильности/деградации качества)
+
+
+Адаптивный порог рекомендаций (runtime):
+- `ADAPTIVE_THRESHOLD_ENABLED`
+- `ADAPTIVE_THRESHOLD_MIN_FEEDBACK`
+- `ADAPTIVE_MIN_PROBABILITY_FLOOR`
+- `ADAPTIVE_MIN_PROBABILITY_CEIL`
+
+Текущий эффективный порог доступен в `/api/source-status` через `quality_filters.effective_min_recommendation_probability`.

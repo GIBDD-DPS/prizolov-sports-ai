@@ -128,6 +128,8 @@ class TestWidgetApiContract(unittest.TestCase):
         self.assertIn("min_recommendation_probability", quality)
         self.assertIn("min_event_quality_score", quality)
         self.assertIn("max_recommendations_per_event", quality)
+        self.assertIn("effective_min_recommendation_probability", quality)
+        self.assertIn("adaptive_threshold_enabled", quality)
 
         self.assertIn("self_learning", payload)
         self.assertIn("enabled", payload["self_learning"])
@@ -188,6 +190,7 @@ class TestWidgetApiContract(unittest.TestCase):
         payload = metrics_response.json()
         self.assertIn("status", payload)
         self.assertIn("recent_feedback", payload)
+        self.assertIn("quality_threshold", payload)
         self.assertIn("windows", payload)
         self.assertIn("alerts", payload)
 
@@ -197,6 +200,10 @@ class TestWidgetApiContract(unittest.TestCase):
         self.assertIn("global_brier_score", summary)
         self.assertIn("global_calibration_gap", summary)
         self.assertIn("global_roi_count", summary)
+
+        threshold = payload["quality_threshold"]
+        self.assertIn("effective_min_probability", threshold)
+        self.assertIn("base_min_probability", threshold)
 
         windows = payload["windows"]
         self.assertIn("recent", windows)
