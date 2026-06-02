@@ -62,6 +62,9 @@ env/
 logs/
 *.out
 
+# 🧠 Runtime self-learning / worker state
+runtime/*.json
+
 # 🤖 ML Models & Artifacts (хранить в Git LFS или внешнем хранилище)
 # models/*.joblib
 # models/*.pkl

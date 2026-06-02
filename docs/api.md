@@ -38,3 +38,43 @@ POST /analyze — разовый анализ матча
 GET /models/status — статус загруженных моделей
 
 Документация OpenAPI доступна по /docs при локальном запуске.
+
+## Self-learning API
+
+- `GET /api/learning/status` — текущий статус самообучения (по видам спорта).
+- `POST /api/learning/feedback` — запись факта исхода прогноза.
+
+Пример payload для feedback:
+
+```json
+{
+  "sport": "football",
+  "predicted_probability": 0.63,
+  "outcome": true
+}
+```
+
+## Auto feedback worker (cron)
+
+Добавлен скрипт: `scripts/auto_feedback_worker.py`.
+
+Что делает:
+- запрашивает события из `/api/all-events`;
+- сохраняет рекомендации в локальный state (`runtime/auto_feedback_worker_state.json`);
+- после задержки `--settle-seconds` пытается определить исход для `H2H` по score и отправляет в `/api/learning/feedback`;
+- при флаге `--bootstrap-when-unresolved` может отправлять bootstrap feedback, если score-резолв недоступен.
+
+Базовый запуск:
+
+```bash
+python3 scripts/auto_feedback_worker.py \
+  --api-base-url "http://127.0.0.1:8080" \
+  --settle-seconds 7200 \
+  --max-feedback-per-run 25
+```
+
+Пример cron (каждые 10 минут):
+
+```cron
+*/10 * * * * cd /workspace && /usr/bin/python3 scripts/auto_feedback_worker.py --api-base-url "http://127.0.0.1:8080" >> /workspace/logs/auto_feedback_worker.log 2>&1
+```
