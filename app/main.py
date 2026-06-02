@@ -833,6 +833,8 @@ def _collect_top_recommendations(
                     "edge": rec.get("edge"),
                     "bookmakers_support": rec.get("bookmakers_support"),
                     "weighted_bookmakers_support": rec.get("weighted_bookmakers_support"),
+                    "no_vig_probability": rec.get("no_vig_probability"),
+                    "market_overround": rec.get("market_overround"),
                     "is_premium": rec.get("is_premium", False),
                     "selection_tier": rec.get("selection_tier"),
                     "reasoning": rec.get("reasoning"),
