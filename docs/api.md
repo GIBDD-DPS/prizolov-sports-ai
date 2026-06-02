@@ -174,6 +174,8 @@ Value-only premium lines режим:
 - self-learning поддерживает time-decay веса (`SELF_LEARNING_DECAY_*`)
 - CLV (opening vs closing) собирается и попадает в learning/metrics
 - correlation-guard ограничивает число сильно связанных линий на событие
+- готовые production пресеты: `bash scripts/quality_profile_presets.sh {conservative|balanced|aggressive}`
+- рекомендуемый профиль для старта: `balanced`
 
 
 Параметры `GET /api/learning/metrics`:
