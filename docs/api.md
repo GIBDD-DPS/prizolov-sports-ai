@@ -247,3 +247,4 @@ Response additions:
 - `EXTERNAL_DONOR_ENABLE_SYNTHETIC` - keep synthetic fallback on/off
 - `EXTERNAL_DONOR_HTTP_TIMEOUT_SECONDS`, `EXTERNAL_DONOR_HTTP_MAX_BODY_BYTES`
 - `EXTERNAL_DONOR_RSS_ITEM_LIMIT`, `EXTERNAL_DONOR_TEXT_ITEM_LIMIT`
+- Ready donor pack: `docs/external_donor_pack.env`

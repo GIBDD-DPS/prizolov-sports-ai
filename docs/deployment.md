@@ -76,6 +76,10 @@ EXTERNAL_DONOR_RSS_ITEM_LIMIT=50
 EXTERNAL_DONOR_TEXT_ITEM_LIMIT=60
 ```
 
+
+Ready donor pack (validated public feeds):
+- `docs/external_donor_pack.env`
+
 After deploy, verify:
 - `GET /api/donors/status`
 - `GET /api/source-status` (quality + external donor runtime)
