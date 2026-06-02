@@ -138,7 +138,7 @@ class TestWidgetApiContract(unittest.TestCase):
 
     def test_all_events_supports_filters_and_top_recommendations(self):
         response = self.client.get(
-            "/api/all-events?lang=en&sport=football&min_probability=0.6&sort_by=priority&limit=3"
+            "/api/all-events?lang=en&sport=football&min_probability=0.6&sort_by=auto&limit=3&policy_mode=degraded&adaptive_policy=true"
         )
         self.assertEqual(response.status_code, 200)
 
@@ -147,9 +147,13 @@ class TestWidgetApiContract(unittest.TestCase):
         self.assertIn("meta", payload)
         self.assertIn("top_recommendations", payload)
         self.assertIn("storefront_policy", payload)
+        self.assertIn("storefront_policy_context", payload)
         self.assertIn("requested", payload["filters"])
         self.assertIn("effective", payload["filters"])
         self.assertLessEqual(payload["total"], 3)
+        self.assertEqual(payload["storefront_policy"].get("mode"), "degraded")
+        self.assertTrue(payload["filters"]["effective"].get("recommendations_only", False))
+        self.assertEqual(payload["filters"]["effective"].get("sort_by"), "quality")
 
         effective_min_probability = payload["filters"]["effective"].get("min_probability", 0.0)
 
@@ -160,15 +164,18 @@ class TestWidgetApiContract(unittest.TestCase):
                 self.assertGreaterEqual(float(top_probability), float(effective_min_probability))
 
     def test_top_recommendations_endpoint(self):
-        response = self.client.get("/api/recommendations/top?lang=en&limit=5&min_probability=0.5")
+        response = self.client.get("/api/recommendations/top?lang=en&limit=5&min_probability=0.5&policy_mode=normal&adaptive_policy=false")
         self.assertEqual(response.status_code, 200)
 
         payload = response.json()
         self.assertIn("recommendations", payload)
         self.assertIn("storefront_policy", payload)
+        self.assertIn("storefront_policy_context", payload)
         self.assertIn("filters", payload)
         self.assertIn("effective", payload["filters"])
         self.assertLessEqual(payload.get("total", 0), 5)
+        self.assertEqual(payload["storefront_policy"].get("mode"), "normal")
+        self.assertFalse(payload["storefront_policy_context"].get("adaptive_policy_enabled", True))
 
         effective_min_probability = payload["filters"]["effective"].get("min_probability", 0.0)
 
@@ -195,7 +202,7 @@ class TestWidgetApiContract(unittest.TestCase):
         self.assertEqual(feedback_response.status_code, 200)
 
         metrics_response = self.client.get(
-            "/api/learning/metrics?recent_limit=5&recent_window_hours=48&baseline_window_hours=168&alert_min_samples=1"
+            "/api/learning/metrics?recent_limit=5&recent_window_hours=48&baseline_window_hours=168&alert_min_samples=1&policy_mode=guarded&adaptive_policy=true"
         )
         self.assertEqual(metrics_response.status_code, 200)
 
@@ -203,6 +210,8 @@ class TestWidgetApiContract(unittest.TestCase):
         self.assertIn("status", payload)
         self.assertIn("recent_feedback", payload)
         self.assertIn("quality_threshold", payload)
+        self.assertIn("storefront_policy", payload)
+        self.assertIn("storefront_policy_context", payload)
         self.assertIn("windows", payload)
         self.assertIn("alerts", payload)
 
@@ -216,6 +225,9 @@ class TestWidgetApiContract(unittest.TestCase):
         threshold = payload["quality_threshold"]
         self.assertIn("effective_min_probability", threshold)
         self.assertIn("base_min_probability", threshold)
+
+        self.assertIn(payload["storefront_policy"].get("mode"), {"guarded", "degraded", "normal"})
+        self.assertEqual(payload["storefront_policy_context"].get("policy_mode_requested"), "guarded")
 
         windows = payload["windows"]
         self.assertIn("recent", windows)

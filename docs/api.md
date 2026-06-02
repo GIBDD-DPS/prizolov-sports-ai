@@ -42,7 +42,7 @@ GET /models/status — статус загруженных моделей
 ## Self-learning API
 
 - `GET /api/learning/status` — текущий статус самообучения (по видам спорта).
-- `GET /api/learning/metrics` — расширенные метрики калибровки (Brier, calibration gap, ROI, recent feedback, trend windows, alerts).
+- `GET /api/learning/metrics` — расширенные метрики калибровки (Brier, calibration gap, ROI, recent feedback, trend windows, alerts, storefront policy preview).
 - `POST /api/learning/feedback` — запись факта исхода прогноза.
 
 Пример payload для feedback:
@@ -115,6 +115,8 @@ python3 scripts/auto_feedback_worker.py \
 - `min_quality` — минимальный `quality_score`
 - `min_probability` — минимальная вероятность top-рекомендации
 - `sort_by` — `priority | quality | probability | freshness | time | auto`
+- `policy_mode` — `auto | normal | guarded | degraded` (ручной override режима витрины)
+- `adaptive_policy` — `true/false` (включать/отключать adaptive storefront-логику для запроса)
 - `limit` — максимум событий
 - `recommendations_only` — только события с рекомендациями
 - `include_top` — включать ли плоский `top_recommendations`
@@ -126,10 +128,11 @@ python3 scripts/auto_feedback_worker.py \
 - `top_recommendations` (готовый список для блока "лучшие ставки")
 - `filters.requested` / `filters.effective` (что запросил клиент и что применилось с учетом adaptive policy)
 - `storefront_policy` (режим витрины: `normal | guarded | degraded`)
+- `storefront_policy_context` (requested mode, adaptive on/off, base policy mode)
 
 Отдельный endpoint витрины:
 - `GET /api/recommendations/top` — плоский список лучших рекомендаций
-  - параметры: `lang`, `sport`, `limit`, `min_probability`
+  - параметры: `lang`, `sport`, `limit`, `min_probability`, `policy_mode`, `adaptive_policy`
 
 
 Параметры `GET /api/learning/metrics`:
@@ -163,3 +166,5 @@ python3 scripts/auto_feedback_worker.py \
 - `STOREFRONT_DEGRADED_MAX_EVENTS`
 
 В degraded-режиме API автоматически усиливает фильтрацию и сортировку по качеству для более надежной выдачи.
+
+`GET /api/learning/metrics` также поддерживает `policy_mode` и `adaptive_policy` для preview storefront-режима в аналитике.

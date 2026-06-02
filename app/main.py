@@ -472,6 +472,13 @@ def _normalize_sort_by(sort_by: Optional[str]) -> str:
     return "priority"
 
 
+def _normalize_policy_mode(policy_mode: Optional[str]) -> str:
+    normalized = str(policy_mode or "auto").strip().lower()
+    if normalized in {"auto", "normal", "guarded", "degraded"}:
+        return normalized
+    return "auto"
+
+
 def _event_sort_key(event: Dict[str, Any], sort_by: str) -> Any:
     status_weight = 0 if str(event.get("status", "")).upper() == "LIVE" else 1
     quality_score = _safe_float(event.get("quality_score"), 0.0)
@@ -1233,7 +1240,72 @@ def _compute_storefront_policy(
     return base_policy
 
 
-def _build_storefront_context(status: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def _apply_storefront_policy_override(
+    base_policy: Dict[str, Any],
+    threshold_guidance: Dict[str, Any],
+    policy_mode: str,
+    adaptive_policy_enabled: bool,
+) -> Dict[str, Any]:
+    normalized_mode = _normalize_policy_mode(policy_mode)
+
+    if not adaptive_policy_enabled:
+        policy = dict(base_policy)
+        policy.update(
+            {
+                "mode": "normal",
+                "recommended_sort_by": "priority",
+                "recommendations_only": False,
+                "enforced_min_probability": 0.0,
+                "enforced_min_quality": 0.0,
+                "max_events": 200,
+                "reason": "adaptive_policy_disabled_by_request",
+                "trigger_codes": policy.get("trigger_codes", []),
+            }
+        )
+        return policy
+
+    if normalized_mode == "auto":
+        return dict(base_policy)
+
+    threshold_effective = _safe_float(threshold_guidance.get("effective_min_probability"), MIN_RECOMMENDATION_PROBABILITY)
+    mode_profiles = {
+        "normal": {
+            "mode": "normal",
+            "recommended_sort_by": "priority",
+            "recommendations_only": False,
+            "enforced_min_probability": 0.0,
+            "enforced_min_quality": 0.0,
+            "max_events": 200,
+        },
+        "guarded": {
+            "mode": "guarded",
+            "recommended_sort_by": "quality",
+            "recommendations_only": False,
+            "enforced_min_probability": round(_clamp(max(0.55, threshold_effective), 0.01, 0.99), 4),
+            "enforced_min_quality": 50.0,
+            "max_events": 120,
+        },
+        "degraded": {
+            "mode": "degraded",
+            "recommended_sort_by": "quality",
+            "recommendations_only": True,
+            "enforced_min_probability": round(_clamp(max(STOREFRONT_DEGRADED_MIN_PROBABILITY, threshold_effective), 0.01, 0.99), 4),
+            "enforced_min_quality": round(_clamp(STOREFRONT_DEGRADED_MIN_QUALITY, 0.0, 100.0), 2),
+            "max_events": max(1, min(200, STOREFRONT_DEGRADED_MAX_EVENTS)),
+        },
+    }
+
+    selected = dict(base_policy)
+    selected.update(mode_profiles.get(normalized_mode, mode_profiles["normal"]))
+    selected["reason"] = f"manual_policy_override_{normalized_mode}"
+    return selected
+
+
+def _build_storefront_context(
+    status: Optional[Dict[str, Any]] = None,
+    policy_mode: str = "auto",
+    adaptive_policy_enabled: bool = True,
+) -> Dict[str, Any]:
     learning_status = status or _get_self_learning_status()
     recent_feedback = _get_recent_feedback(limit=SELF_LEARNING_HISTORY_LIMIT)
     windows = _compute_learning_windows(
@@ -1243,17 +1315,26 @@ def _build_storefront_context(status: Optional[Dict[str, Any]] = None) -> Dict[s
     )
     alerts = _build_learning_alerts(windows, min_samples=STOREFRONT_ALERT_MIN_SAMPLES)
     threshold_guidance = _compute_adaptive_min_probability(learning_status)
-    policy = _compute_storefront_policy(
+    base_policy = _compute_storefront_policy(
         status=learning_status,
         window_metrics=windows,
         alerts=alerts,
         threshold_guidance=threshold_guidance,
     )
+    effective_policy = _apply_storefront_policy_override(
+        base_policy=base_policy,
+        threshold_guidance=threshold_guidance,
+        policy_mode=policy_mode,
+        adaptive_policy_enabled=adaptive_policy_enabled,
+    )
     return {
         "windows": windows,
         "alerts": alerts,
         "threshold": threshold_guidance,
-        "policy": policy,
+        "base_policy": base_policy,
+        "policy": effective_policy,
+        "policy_mode_requested": _normalize_policy_mode(policy_mode),
+        "adaptive_policy_enabled": bool(adaptive_policy_enabled),
     }
 
 
@@ -1881,13 +1962,15 @@ async def get_all_events(
     recommendations_only: bool = False,
     include_top: bool = True,
     top_limit: int = 10,
+    policy_mode: str = "auto",
+    adaptive_policy: bool = True,
 ):
     """Получить все live события с фильтрами и ранжированием."""
     selected_lang = _normalize_lang(lang)
     events = await _get_runtime_events()
     localized_events = _localize_events(events, selected_lang)
 
-    storefront_context = _build_storefront_context()
+    storefront_context = _build_storefront_context(policy_mode=policy_mode, adaptive_policy_enabled=adaptive_policy)
     storefront_policy = storefront_context.get("policy", {})
     filter_ctx = _resolve_storefront_effective_filters(
         sort_by=sort_by,
@@ -1926,6 +2009,11 @@ async def get_all_events(
             **filter_ctx,
         },
         "storefront_policy": storefront_policy,
+        "storefront_policy_context": {
+            "policy_mode_requested": storefront_context.get("policy_mode_requested", "auto"),
+            "adaptive_policy_enabled": storefront_context.get("adaptive_policy_enabled", True),
+            "base_policy_mode": (storefront_context.get("base_policy") or {}).get("mode"),
+        },
         "meta": _build_events_meta(prepared_events, len(localized_events)),
         "events": prepared_events,
         "top_recommendations": top_recommendations,
@@ -1939,13 +2027,15 @@ async def get_events_by_sport(
     min_probability: float = 0.0,
     sort_by: str = "priority",
     limit: int = 30,
+    policy_mode: str = "auto",
+    adaptive_policy: bool = True,
 ):
     """Получить события по виду спорта."""
     selected_lang = _normalize_lang(lang)
     events = await _get_runtime_events()
     localized_events = _localize_events(events, selected_lang)
 
-    storefront_context = _build_storefront_context()
+    storefront_context = _build_storefront_context(policy_mode=policy_mode, adaptive_policy_enabled=adaptive_policy)
     storefront_policy = storefront_context.get("policy", {})
     filter_ctx = _resolve_storefront_effective_filters(
         sort_by=sort_by,
@@ -1973,6 +2063,11 @@ async def get_events_by_sport(
         "total": len(prepared_events),
         "filters": filter_ctx,
         "storefront_policy": storefront_policy,
+        "storefront_policy_context": {
+            "policy_mode_requested": storefront_context.get("policy_mode_requested", "auto"),
+            "adaptive_policy_enabled": storefront_context.get("adaptive_policy_enabled", True),
+            "base_policy_mode": (storefront_context.get("base_policy") or {}).get("mode"),
+        },
         "meta": _build_events_meta(prepared_events, len(localized_events)),
         "events": prepared_events,
         "top_recommendations": _collect_top_recommendations(
@@ -1989,13 +2084,15 @@ async def get_top_recommendations(
     sport: Optional[str] = None,
     limit: int = 10,
     min_probability: float = 0.0,
+    policy_mode: str = "auto",
+    adaptive_policy: bool = True,
 ):
     """Плоский список лучших рекомендаций для витрины."""
     selected_lang = _normalize_lang(lang)
     events = await _get_runtime_events()
     localized_events = _localize_events(events, selected_lang)
 
-    storefront_context = _build_storefront_context()
+    storefront_context = _build_storefront_context(policy_mode=policy_mode, adaptive_policy_enabled=adaptive_policy)
     storefront_policy = storefront_context.get("policy", {})
     filter_ctx = _resolve_storefront_effective_filters(
         sort_by="priority",
@@ -2029,6 +2126,11 @@ async def get_top_recommendations(
         "total": len(recommendations),
         "filters": filter_ctx,
         "storefront_policy": storefront_policy,
+        "storefront_policy_context": {
+            "policy_mode_requested": storefront_context.get("policy_mode_requested", "auto"),
+            "adaptive_policy_enabled": storefront_context.get("adaptive_policy_enabled", True),
+            "base_policy_mode": (storefront_context.get("base_policy") or {}).get("mode"),
+        },
         "recommendations": recommendations,
     }
 
@@ -2103,7 +2205,7 @@ async def source_status(refresh: bool = False):
             "sports_with_feedback": len(learning_status.get("sports", {})),
             "summary": learning_status.get("summary", {}),
         },
-        "storefront_policy": _build_storefront_context(status=learning_status).get("policy", {}),
+        "storefront_policy": _build_storefront_context(status=learning_status, policy_mode="auto", adaptive_policy_enabled=True).get("policy", {}),
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
 
@@ -2120,6 +2222,8 @@ async def get_learning_metrics(
     recent_window_hours: int = 24,
     baseline_window_hours: int = 168,
     alert_min_samples: int = 10,
+    policy_mode: str = "auto",
+    adaptive_policy: bool = True,
 ):
     """Расширенные метрики самообучения (калибровка, Brier, ROI, recent feedback, тренды, алерты)."""
     status = _get_self_learning_status()
@@ -2132,17 +2236,21 @@ async def get_learning_metrics(
     alerts = _build_learning_alerts(windows, min_samples=alert_min_samples)
 
     threshold_guidance = _compute_adaptive_min_probability(status)
-    storefront_policy = _compute_storefront_policy(
+    storefront_context = _build_storefront_context(
         status=status,
-        window_metrics=windows,
-        alerts=alerts,
-        threshold_guidance=threshold_guidance,
+        policy_mode=policy_mode,
+        adaptive_policy_enabled=adaptive_policy,
     )
 
     return {
         "status": status,
         "quality_threshold": threshold_guidance,
-        "storefront_policy": storefront_policy,
+        "storefront_policy": storefront_context.get("policy", {}),
+        "storefront_policy_context": {
+            "policy_mode_requested": storefront_context.get("policy_mode_requested", "auto"),
+            "adaptive_policy_enabled": storefront_context.get("adaptive_policy_enabled", True),
+            "base_policy_mode": (storefront_context.get("base_policy") or {}).get("mode"),
+        },
         "windows": windows,
         "alerts": alerts,
         "recent_feedback": _get_recent_feedback(limit=recent_limit),
