@@ -16,9 +16,9 @@
   "sport": "football",
   "game_time": "67:42",
   "timestamp_ms": 1747850000000,
-  "ball_state": { ... },
-  "metrics": { ... },
-  "line_data": { ... },
+  "ball_state": {},
+  "metrics": {},
+  "line_data": {},
   "ai_recommendations": [
     {
       "market": "TO 2.5",
@@ -30,150 +30,100 @@
     }
   ]
 }
-REST Endpoints (FastAPI)
+```
 
-GET /health — статус системы
-GET /matches/live — список live-матчей
-POST /analyze — разовый анализ матча
-GET /models/status — статус загруженных моделей
+---
 
-Документация OpenAPI доступна по /docs при локальном запуске.
+## REST Endpoints (FastAPI)
 
-## Self-learning API
+### Общие параметры витрины для value-only premium lines
 
-- `GET /api/learning/status` — текущий статус самообучения (по видам спорта).
-- `GET /api/learning/metrics` — расширенные метрики калибровки (Brier, calibration gap, ROI, recent feedback, trend windows, alerts, storefront policy preview).
-- `POST /api/learning/feedback` — запись факта исхода прогноза.
+Эти query-параметры поддерживаются в `POST /api/state`, `POST /get-ai-sports.php`,
+`GET /api/all-events`, `GET /api/events/{sport}`, `GET /api/sports`,
+`GET /api/recommendations/top`:
 
-Пример payload для feedback:
+- `premium_only` (`bool`, default: `false` для большинства endpoint, `true` для `/api/recommendations/top`)  
+  Включает жесткий режим, где остаются только premium-линии.
+- `min_edge` (`float`, default: `0.08`)  
+  Минимальный edge линии. Формула edge: `probability * coefficient - 1`.
+- `min_bookmakers_support` (`int`, default: `4`)  
+  Минимальная поддержка линии по количеству БК.
+- `max_recommendations_per_event` (`int`, default: `6`)  
+  Верхний лимит линий на событие.
+
+### `GET /health`
+
+Проверка статуса системы.
+
+### `GET /api/source-status`
+
+Служебный endpoint состояния источника данных и активных фильтров качества.
+
+Пример ответа:
 
 ```json
 {
-  "sport": "football",
-  "predicted_probability": 0.63,
-  "outcome": true,
-  "coefficient": 1.9,
-  "event_id": "match_123",
-  "line": "H2H: Team A",
-  "source": "auto_feedback_worker"
+  "status": "ok",
+  "source": "live_events_static_seed",
+  "events_total": 14,
+  "quality_filters": {
+    "premium_min_edge": 0.08,
+    "premium_min_bookmakers_support": 4,
+    "max_recommendations_per_event": 6
+  },
+  "features": {
+    "premium_lines_mode": true,
+    "edge_scoring": true,
+    "bookmakers_support": true
+  },
+  "timestamp": "2026-06-02T17:00:00+00:00"
 }
 ```
 
-## Auto feedback worker (cron)
+### `POST /api/state`
 
-Добавлен скрипт: `scripts/auto_feedback_worker.py`.
+Возвращает 1 матч (верхний по ранжированию) и его рекомендации с учетом фильтров.
 
-Что делает:
-- запрашивает события из `/api/all-events`;
-- сохраняет рекомендации в локальный state (`runtime/auto_feedback_worker_state.json`);
-- после задержки `--settle-seconds` пытается определить исход для `H2H` по score и отправляет в `/api/learning/feedback`;
-- перед отправкой делает preflight `GET /api/learning/status`, чтобы не спамить ошибками, если learning endpoint еще не задеплоен;
-- при флаге `--bootstrap-when-unresolved` может отправлять bootstrap feedback, если score-резолв недоступен.
+Новые поля рекомендаций:
 
-Базовый запуск:
+- `edge`
+- `bookmakers_support`
+- `value_score`
+- `is_premium`
+- `selection_tier`
 
-```bash
-python3 scripts/auto_feedback_worker.py \
-  --api-base-url "http://127.0.0.1:8080" \
-  --settle-seconds 7200 \
-  --max-feedback-per-run 25
-```
+Также ответ содержит:
 
-Боевой режим (без bootstrap, только подтвержденные исходы):
+- `filters` — фактически примененные фильтры
+- `features` — readiness-флаги для фронтенда
 
-```bash
-python3 scripts/auto_feedback_worker.py \
-  --api-base-url "https://prizolov-sports-dmandreyanov.amvera.io" \
-  --settle-seconds 7200 \
-  --max-feedback-per-run 25
-```
+### `POST /get-ai-sports.php`
 
-Пример cron (каждые 10 минут):
+Совместимый endpoint для виджета/прокси. Поведение аналогично `POST /api/state`.
 
-```cron
-*/10 * * * * cd /workspace && /usr/bin/python3 scripts/auto_feedback_worker.py --api-base-url "http://127.0.0.1:8080" >> /workspace/logs/auto_feedback_worker.log 2>&1
-```
+### `GET /api/all-events`
 
-## Quality filters for runtime events
+Возвращает список событий и обогащенные рекомендации.
 
-`/api/source-status` возвращает блок `quality_filters` с активными настройками фильтрации:
-- `supported_runtime_sports`
-- `min_bookmakers_per_event`
-- `min_recommendation_probability`
-- `min_recommendation_coefficient`
-- `min_recommendation_edge`
-- `max_lines_per_market`
-- `effective_min_recommendation_probability`
-- `adaptive_threshold_enabled`
-- `adaptive_threshold_min_feedback`
-- `min_event_quality_score`
-- `max_recommendations_per_event`
-- `max_upcoming_hours`
+Доп. параметр:
+- `limit` (`int`, optional) — ограничить число событий в ответе.
 
+### `GET /api/events/{sport}`
 
-## Event ranking and storefront output
+Возвращает события только указанного вида спорта (с теми же фильтрами premium-режима).
 
-`GET /api/all-events` поддерживает витринные фильтры и ранжирование:
-- `sport` — код вида спорта (например, `football`)
-- `min_quality` — минимальный `quality_score`
-- `min_probability` — минимальная вероятность top-рекомендации
-- `sort_by` — `priority | quality | probability | freshness | time | auto`
-- `policy_mode` — `auto | normal | guarded | degraded` (ручной override режима витрины)
-- `adaptive_policy` — `true/false` (включать/отключать adaptive storefront-логику для запроса)
-- `limit` — максимум событий
-- `recommendations_only` — только события с рекомендациями
-- `include_top` — включать ли плоский `top_recommendations`
-- `top_limit` — лимит top-рекомендаций
+### `GET /api/recommendations/top`
 
-Ответ включает:
-- `events` (с `display_priority`, `top_probability`, `top_recommendation`)
-- `meta` (распределение по видам спорта и средние показатели)
-- `top_recommendations` (готовый список для блока "лучшие ставки")
-- `filters.requested` / `filters.effective` (что запросил клиент и что применилось с учетом adaptive policy)
-- `storefront_policy` (режим витрины: `normal | guarded | degraded`)
-- `storefront_policy_context` (requested mode, adaptive on/off, base policy mode)
+Плоский список лучших линий по всем событиям.  
+По умолчанию `premium_only=true`, то есть endpoint ориентирован на витрину value-only premium lines.
 
-Отдельный endpoint витрины:
-- `GET /api/recommendations/top` — плоский список лучших рекомендаций
-  - параметры: `lang`, `sport`, `limit`, `min_probability`, `policy_mode`, `adaptive_policy`
+Доп. параметр:
+- `limit` (`int`, default: `20`) — ограничение числа строк рекомендаций.
 
+### `GET /api/sports`
 
-Параметры `GET /api/learning/metrics`:
-- `recent_limit` — сколько последних feedback записей вернуть
-- `recent_window_hours` — окно recent для трендов
-- `baseline_window_hours` — baseline окно для сравнения
-- `alert_min_samples` — минимальное число samples для алертов деградации
+Возвращает агрегированный список видов спорта по текущему набору отфильтрованных событий.
 
-Ответ включает блоки:
-- `quality_threshold` (базовый и эффективный порог вероятности с адаптацией по метрикам)
-- `windows` (`recent`, `baseline`, `trend_delta`)
-- `alerts` (сигналы стабильности/деградации качества)
+---
 
-
-Адаптивный порог рекомендаций (runtime):
-- `ADAPTIVE_THRESHOLD_ENABLED`
-- `ADAPTIVE_THRESHOLD_MIN_FEEDBACK`
-- `ADAPTIVE_MIN_PROBABILITY_FLOOR`
-- `ADAPTIVE_MIN_PROBABILITY_CEIL`
-
-Текущий эффективный порог доступен в `/api/source-status` через `quality_filters.effective_min_recommendation_probability`.
-
-
-Адаптивный режим витрины (storefront):
-- `STOREFRONT_ADAPTIVE_MODE_ENABLED`
-- `STOREFRONT_RECENT_WINDOW_HOURS`
-- `STOREFRONT_BASELINE_WINDOW_HOURS`
-- `STOREFRONT_ALERT_MIN_SAMPLES`
-- `STOREFRONT_DEGRADED_MIN_PROBABILITY`
-- `STOREFRONT_DEGRADED_MIN_QUALITY`
-- `STOREFRONT_DEGRADED_MAX_EVENTS`
-
-В degraded-режиме API автоматически усиливает фильтрацию и сортировку по качеству для более надежной выдачи.
-
-`GET /api/learning/metrics` также поддерживает `policy_mode` и `adaptive_policy` для preview storefront-режима в аналитике.
-
-
-Расширение линий ставок:
-- рекомендации агрегируются по нескольким букмекерам и рынкам (`h2h`, `totals`, `spreads`),
-- отбор приоритизирует линии с высокой проходимостью и высоким коэффициентом,
-- поддерживается диверсификация по рынкам (`max_lines_per_market`) и увеличенный лимит `max_recommendations_per_event`.
+OpenAPI документация доступна по `/docs` при локальном запуске.
