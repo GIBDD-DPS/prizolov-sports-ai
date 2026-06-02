@@ -2290,18 +2290,21 @@ async def get_ai_sports(
     # Основной контракт виджета /sport/: отдаём live-события из real-source (или fallback).
     if payload.get("get_all"):
         localized_events = _localize_events(events, lang)
-        prepared_events = _prepare_output_events(
-            events=localized_events,
-            sport_filter=None,
-            min_quality=0.0,
-            min_probability=0.0,
-            recommendations_only=value_only_filters["effective"]["premium_only"],
-            sort_by="priority",
-            limit=200,
-            premium_only=value_only_filters["effective"]["premium_only"],
-            premium_min_edge=value_only_filters["effective"]["min_edge"],
-            premium_min_bookmakers_support=value_only_filters["effective"]["min_bookmakers_support"],
-        )
+        prepared_events: List[Dict[str, Any]] = []
+        for event in localized_events:
+            recs, premium_recommendations_count = _apply_value_mode_to_recommendations(
+                event.get("recommendations") or [],
+                value_only_filters=value_only_filters,
+            )
+            if value_only_filters["effective"]["premium_only"] and not recs:
+                continue
+
+            enriched = dict(event)
+            enriched["recommendations"] = recs
+            enriched["recommendations_count"] = len(recs)
+            enriched["premium_recommendations_count"] = premium_recommendations_count
+            prepared_events.append(enriched)
+
         logger.info(
             "📦 Возвращаю полный список live событий: %d | lang=%s | premium_only=%s",
             len(prepared_events),
