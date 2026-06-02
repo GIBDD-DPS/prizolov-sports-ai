@@ -31,6 +31,8 @@
         <span class="pz-widget-time" id="main-time">LIVE</span>
       </div>
 
+      <div class="pz-consensus-box" id="main-consensus">Донорный консенсус: загрузка...</div>
+
       <div class="pz-recommendations" id="main-recs">
         <div class="pz-loading">🤖 Анализирую матчи...</div>
       </div>
@@ -60,6 +62,10 @@
         <div class="pz-stat-item">
           <div class="pz-stat-value" id="avg-coef">0</div>
           <div class="pz-stat-label">Средний коэф</div>
+        </div>
+        <div class="pz-stat-item">
+          <div class="pz-stat-value" id="total-donors">0</div>
+          <div class="pz-stat-label">Источников консенсуса</div>
         </div>
       </div>
       <div class="pz-note" id="stats-note">Фильтр рекомендаций: >60% и коэф. >=1.5</div>
@@ -235,6 +241,34 @@
     white-space: nowrap;
   }
 
+  .pz-consensus-box {
+    margin-bottom: 12px;
+    background: rgba(37, 99, 235, 0.13);
+    border: 1px solid rgba(59, 130, 246, 0.35);
+    border-radius: 8px;
+    color: #cde0ff;
+    font-size: 12px;
+    line-height: 1.45;
+    padding: 10px 12px;
+  }
+
+  .pz-consensus-pill {
+    display: inline-block;
+    margin-left: 6px;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    padding: 1px 7px;
+    font-size: 10px;
+    color: #bcc8df;
+    background: rgba(148, 163, 184, 0.1);
+  }
+
+  .pz-consensus-pill.ready {
+    border-color: rgba(16, 185, 129, 0.5);
+    color: #9ff0d0;
+    background: rgba(16, 185, 129, 0.15);
+  }
+
   .pz-recommendations {
     margin-bottom: 15px;
   }
@@ -385,7 +419,7 @@
   .pz-events-table {
     width: 100%;
     border-collapse: collapse;
-    min-width: 920px;
+    min-width: 1060px;
   }
 
   .pz-events-table th,
@@ -440,6 +474,7 @@
   var WINDOW_HOURS = 24;
   var MIN_PROBABILITY = 0.6;
   var MIN_COEFFICIENT = 1.5;
+  var MIN_CONSENSUS_SOURCES = 3;
   var AUTO_ROTATE_MS = 10000;
   var AUTO_REFRESH_MS = 45000;
   var INDEX_SCAN_LIMIT = 40;
@@ -487,6 +522,35 @@
 
     function isPassable(rec) {
       return asNum(rec && rec.probability, 0) > MIN_PROBABILITY && asNum(rec && rec.coefficient, 0) >= MIN_COEFFICIENT;
+    }
+
+    function normalizeConsensus(raw) {
+      if (!raw || typeof raw !== "object") return null;
+      var probability = Math.max(0, Math.min(1, asNum(raw.consensus_probability, 0)));
+      var donors = Math.max(0, Math.round(asNum(raw.donors_total, 0)));
+      var ready = Boolean(raw.ready) && donors >= MIN_CONSENSUS_SOURCES;
+      return {
+        line: raw.line || "—",
+        probability: probability,
+        coefficient: asNum(raw.consensus_coefficient, 0),
+        donors: donors,
+        agreement: Math.max(0, Math.min(1, asNum(raw.agreement_score, 0))),
+        tier: raw.confidence_tier || "low",
+        ready: ready,
+        sources: Array.isArray(raw.sources) ? raw.sources : []
+      };
+    }
+
+    function consensusLabel(consensus) {
+      if (!consensus) return "Донорный консенсус: нет данных";
+      var prob = Math.round((consensus.probability || 0) * 100);
+      var coefText = consensus.coefficient >= 1.01 ? consensus.coefficient.toFixed(2) : "—";
+      var readiness = consensus.ready ? "подтвержден" : "наблюдение";
+      return "Внешний консенсус: " + consensus.line +
+        " • " + prob + "%" +
+        " • коэф " + coefText +
+        " • доноров " + consensus.donors +
+        " • " + readiness;
     }
 
     function requestJson(method, url, body, onSuccess, onError) {
@@ -584,7 +648,7 @@
         return {
           line: r && r.line ? r.line : "Исход",
           confidence: r && r.confidence === "high" ? "high" : "med",
-          probability: Math.max(0, Math.min(1, asNum(r && r.probability, 0))),
+          probability: Math.max(0, Math.min(1, asNum(r && (r.adjusted_probability !== undefined ? r.adjusted_probability : r.probability), 0))),
           coefficient: asNum(r && r.coefficient, 1.5),
           league: r && r.league ? r.league : (event.league || "—"),
           sport: r && r.sport ? r.sport : (event.sport || "football"),
@@ -608,7 +672,8 @@
         start_at: event.start_at || "",
         is_live: Boolean(event.is_live || String(event.status || "").toUpperCase() === "LIVE"),
         allRecommendations: allRecs,
-        passableRecommendations: allRecs.filter(isPassable)
+        passableRecommendations: allRecs.filter(isPassable),
+        externalConsensus: normalizeConsensus(event.external_consensus)
       };
     }
 
@@ -623,7 +688,9 @@
         status: payload.match_info.status || "LIVE",
         time: payload.match_info.status || payload.match_info.time || "LIVE",
         is_live: String(payload.match_info.status || "").toUpperCase().indexOf("LIVE") !== -1,
-        recommendations: Array.isArray(payload.recommendations) ? payload.recommendations : []
+        start_at: payload.match_info.start_at || "",
+        recommendations: Array.isArray(payload.recommendations) ? payload.recommendations : [],
+        external_consensus: payload.external_consensus || null
       };
     }
 
@@ -687,6 +754,8 @@
       var totalRecs = 0;
       var totalCoef = 0;
       var sports = {};
+      var donorSourceIds = {};
+      var donorFallbackMax = 0;
 
       allEvents.forEach(function (event) {
         sports[event.sport || "unknown"] = true;
@@ -695,15 +764,27 @@
         recs.forEach(function (rec) {
           totalCoef += asNum(rec.coefficient, 1.5);
         });
+
+        if (event.externalConsensus) {
+          donorFallbackMax = Math.max(donorFallbackMax, asNum(event.externalConsensus.donors, 0));
+          (event.externalConsensus.sources || []).forEach(function (source) {
+            if (source && source.source_id) donorSourceIds[String(source.source_id)] = true;
+          });
+        }
       });
+
+      var donorCount = Object.keys(donorSourceIds).length;
+      if (donorCount === 0) donorCount = donorFallbackMax;
 
       if (byId("total-events")) byId("total-events").textContent = String(totalEvents);
       if (byId("total-recs")) byId("total-recs").textContent = String(totalRecs);
       if (byId("total-sports")) byId("total-sports").textContent = String(Object.keys(sports).length);
       if (byId("avg-coef")) byId("avg-coef").textContent = totalRecs > 0 ? (totalCoef / totalRecs).toFixed(2) : "0";
+      if (byId("total-donors")) byId("total-donors").textContent = String(Math.round(donorCount));
       if (byId("stats-note")) {
         var note = "Режим: " + MODES[currentMode].label +
           " • рекомендации: >60% и >=1.5" +
+          " • доноры: " + Math.round(donorCount) +
           " • обновлено: " + lastUpdatedLabel;
         if (usingCachedSnapshot) note += " • резервный кэш";
         byId("stats-note").textContent = note;
@@ -720,6 +801,20 @@
       if (byId("main-sport")) byId("main-sport").textContent = asSport(event.sport);
       if (byId("main-time")) byId("main-time").textContent = event.is_live ? "LIVE" : (event.time || "UPCOMING");
       if (byId("counter")) byId("counter").textContent = "Событие " + (currentEventIndex + 1) + " из " + allEvents.length;
+
+      var consensusEl = byId("main-consensus");
+      if (consensusEl) {
+        var consensus = event.externalConsensus;
+        if (consensus) {
+          var readyClass = consensus.ready ? "ready" : "";
+          var prob = Math.round((consensus.probability || 0) * 100);
+          consensusEl.innerHTML =
+            "<strong>" + escapeHtml(consensusLabel(consensus)) + "</strong>" +
+            "<span class="pz-consensus-pill " + readyClass + "">agreement " + Math.round((consensus.agreement || 0) * 100) + "%</span>";
+        } else {
+          consensusEl.textContent = "Донорный консенсус: нет данных по источникам";
+        }
+      }
 
       var recsEl = byId("main-recs");
       if (!recsEl) return;
@@ -753,7 +848,7 @@
       }
 
       var html = "<div class='pz-events-table-wrap'><table class='pz-events-table'><thead><tr>" +
-        "<th>Время</th><th>Вид спорта</th><th>Матч</th><th>Лига</th><th>Лучшая ставка</th><th>Проходимость</th><th>Коэф</th><th>Статус</th>" +
+        "<th>Время</th><th>Вид спорта</th><th>Матч</th><th>Лига</th><th>Лучшая ставка</th><th>Проходимость</th><th>Коэф</th><th>Консенсус доноров</th><th>Статус</th>" +
         "</tr></thead><tbody>";
 
       allEvents.forEach(function (event, idx) {
@@ -763,6 +858,13 @@
         var bestProb = best ? Math.round((best.probability || 0) * 100) : 0;
         var bestCoef = best ? asNum(best.coefficient, 0).toFixed(2) : "—";
         var bestLine = best ? escapeHtml(best.line) : "—";
+        var consensus = event.externalConsensus;
+        var consensusText = "—";
+        if (consensus) {
+          var cProb = Math.round((consensus.probability || 0) * 100);
+          var cDonors = Math.round(asNum(consensus.donors, 0));
+          consensusText = escapeHtml(consensus.line || "Исход") + " (" + cProb + "%, " + cDonors + " ист.)";
+        }
         var rowBg = idx % 2 === 0 ? "#1e1e24" : "#25252c";
         var timeText = escapeHtml(event.time || "—");
         if (event.is_live) timeText += " <span class='pz-live-pill'>LIVE</span>";
@@ -775,6 +877,7 @@
           "<td>" + bestLine + "</td>" +
           "<td><span class='pz-passability'>" + bestProb + "%</span></td>" +
           "<td>" + bestCoef + "</td>" +
+          "<td>" + consensusText + "</td>" +
           "<td>" + (bestPass ? "✅ Проходная" : "<span class='pz-no-pass'>⚠ Нет проходной</span>") + "</td>" +
         "</tr>";
       });
@@ -784,6 +887,7 @@
     }
 
     function showError(message) {
+      if (byId("main-consensus")) byId("main-consensus").textContent = "Донорный консенсус недоступен";
       if (byId("main-recs")) byId("main-recs").innerHTML = "<div class='pz-loading'>" + escapeHtml(message) + "</div>";
       if (byId("counter")) byId("counter").textContent = "Ошибка API";
       if (byId("all-events-list")) byId("all-events-list").innerHTML = "<div class='pz-loading'>" + escapeHtml(message) + "</div>";
@@ -797,6 +901,8 @@
         passable_only: "false",
         min_probability: "0",
         min_coefficient: "1",
+        include_consensus: "true",
+        min_consensus_sources: String(MIN_CONSENSUS_SOURCES),
         sort_by: "passability"
       }), null, function (payload) {
         cb(Array.isArray(payload && payload.events) ? payload.events : []);
@@ -813,7 +919,9 @@
         include_live: modeCfg.includeLive,
         passable_only: false,
         min_probability: 0,
-        min_coefficient: 1
+        min_coefficient: 1,
+        include_consensus: true,
+        min_consensus_sources: MIN_CONSENSUS_SOURCES
       }, function (payload) {
         cb(Array.isArray(payload && payload.events) ? payload.events : []);
       }, function () {
@@ -840,7 +948,9 @@
           include_live: modeCfg.includeLive,
           passable_only: false,
           min_probability: 0,
-          min_coefficient: 1
+          min_coefficient: 1,
+          include_consensus: true,
+          min_consensus_sources: MIN_CONSENSUS_SOURCES
         }, function (payload) {
           i += 1;
           var event = payloadToEvent(payload);

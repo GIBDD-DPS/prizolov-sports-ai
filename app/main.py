@@ -13,10 +13,13 @@ import logging
 import os
 import pathlib
 import random
+import re
 import sys
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
+from urllib import request as urllib_request
+from urllib.error import HTTPError, URLError
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -49,13 +52,22 @@ app.add_middleware(
 # ============================================
 
 CACHE_TTL_SECONDS = int(os.getenv("STORE_CACHE_TTL_SECONDS", "30"))
+DONOR_CACHE_TTL_SECONDS = int(os.getenv("DONOR_CACHE_TTL_SECONDS", "45"))
 LOW_EVENT_ALERT_THRESHOLD = int(os.getenv("LOW_EVENT_ALERT_THRESHOLD", "4"))
 LOW_EVENT_STREAK_ALERT = int(os.getenv("LOW_EVENT_STREAK_ALERT", "3"))
+LOW_DONOR_COVERAGE_THRESHOLD = float(os.getenv("LOW_DONOR_COVERAGE_THRESHOLD", "0.35"))
+LOW_DONOR_COVERAGE_STREAK_ALERT = int(os.getenv("LOW_DONOR_COVERAGE_STREAK_ALERT", "3"))
 
 DEFAULT_WINDOW_HOURS = int(os.getenv("DEFAULT_WINDOW_HOURS", "24"))
 DEFAULT_MIN_PROBABILITY = float(os.getenv("DEFAULT_MIN_PROBABILITY", "0.6"))
 DEFAULT_MIN_COEFFICIENT = float(os.getenv("DEFAULT_MIN_COEFFICIENT", "1.5"))
 DEFAULT_MIN_BOOKMAKERS_SUPPORT = float(os.getenv("DEFAULT_MIN_BOOKMAKERS_SUPPORT", "2.0"))
+EXTERNAL_CONSENSUS_MIN_SOURCES = int(os.getenv("EXTERNAL_CONSENSUS_MIN_SOURCES", "3"))
+EXTERNAL_CONSENSUS_ENABLED = os.getenv("EXTERNAL_CONSENSUS_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+EXTERNAL_DONOR_RANDOM_SEED = os.getenv("EXTERNAL_DONOR_RANDOM_SEED", "prizolov-donor-seed")
+EXTERNAL_DONOR_CATALOG_EXTRA_JSON = os.getenv("EXTERNAL_DONOR_CATALOG_EXTRA_JSON", "")
+EXTERNAL_DONOR_JSON_FEEDS = os.getenv("EXTERNAL_DONOR_JSON_FEEDS", "")
+EXTERNAL_DONOR_SIGNAL_LIMIT_PER_EVENT = int(os.getenv("EXTERNAL_DONOR_SIGNAL_LIMIT_PER_EVENT", "10"))
 
 MAX_ODDS_AGE_SECONDS = int(os.getenv("MAX_ODDS_AGE_SECONDS", "900"))  # 15 минут
 STALE_ODDS_PENALTY_FACTOR = float(os.getenv("STALE_ODDS_PENALTY_FACTOR", "0.92"))
@@ -240,6 +252,14 @@ _metrics: Dict[str, Any] = {
         "legacy_get_all": 0,
         "event_index_mode": 0,
     },
+    "donor_pipeline": {
+        "catalog_total": 0,
+        "active_total": 0,
+        "signals_total": 0,
+        "events_with_consensus": 0,
+        "consensus_coverage": 0.0,
+        "last_generated_at": None,
+    },
     "endpoints": {},
 }
 
@@ -247,6 +267,8 @@ _runtime_state: Dict[str, Any] = {
     "low_event_streak": 0,
     "last_storefront_total": 0,
     "last_storefront_generated_at": None,
+    "low_donor_coverage_streak": 0,
+    "last_donor_coverage_ratio": 0.0,
     "last_alerts": [],
 }
 
@@ -395,6 +417,8 @@ def _build_alerts() -> List[Dict[str, Any]]:
     with _metrics_lock:
         low_streak = _runtime_state["low_event_streak"]
         last_total = _runtime_state["last_storefront_total"]
+        low_donor_streak = _runtime_state.get("low_donor_coverage_streak", 0)
+        donor_coverage = _runtime_state.get("last_donor_coverage_ratio", 0.0)
         req_total = _metrics["requests_total"]
         err_total = _metrics["errors_total"]
         err_rate = (err_total / req_total) if req_total > 0 else 0.0
@@ -425,6 +449,15 @@ def _build_alerts() -> List[Dict[str, Any]]:
                 }
             )
 
+        if low_donor_streak >= LOW_DONOR_COVERAGE_STREAK_ALERT:
+            alerts.append(
+                {
+                    "level": "warning",
+                    "code": "low_donor_coverage_streak",
+                    "message": f"Низкое покрытие внешнего консенсуса: {round(donor_coverage * 100, 2)}% ({low_donor_streak} циклов).",
+                }
+            )
+
         cache_hits = _metrics["cache_hits"]
         cache_misses = _metrics["cache_misses"]
         total_cache_checks = cache_hits + cache_misses
@@ -449,6 +482,470 @@ async def _read_payload(request: Request) -> Dict[str, Any]:
     except Exception:
         return {}
 
+
+
+def _slugify_text(value: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9а-я]+", "-", str(value).lower(), flags=re.IGNORECASE)
+    cleaned = re.sub(r"-+", "-", cleaned).strip("-")
+    return cleaned or "unknown"
+
+
+def _normalize_team_name(value: str) -> str:
+    text_value = str(value or "").lower()
+    text_value = re.sub(r"[^a-z0-9а-я ]+", "", text_value, flags=re.IGNORECASE)
+    text_value = re.sub(r"\s+", " ", text_value).strip()
+    return text_value
+
+
+def _event_match_key(event: Dict[str, Any]) -> str:
+    return "|".join([
+        _normalize_team_name(event.get("home", "")),
+        _normalize_team_name(event.get("away", "")),
+        str(event.get("sport", "unknown")).lower(),
+    ])
+
+
+def _default_donor_catalog() -> List[Dict[str, Any]]:
+    raw = [
+        ("smartscore", "SmartScore", "aggregator", 1.08),
+        ("oddsradar", "OddsRadar", "aggregator", 1.05),
+        ("betinsider", "BetInsider", "site", 0.98),
+        ("tipsarena", "TipsArena", "site", 0.96),
+        ("winstats", "WinStats", "site", 0.95),
+        ("xscore-feed", "XScore Feed", "aggregator", 1.02),
+        ("goalpulse", "GoalPulse", "site", 0.93),
+        ("matchinsight", "MatchInsight", "site", 0.91),
+        ("bet-mentor", "Bet Mentor", "site", 0.92),
+        ("alpha-lines", "Alpha Lines", "site", 0.99),
+        ("sharpwatch", "SharpWatch", "aggregator", 1.09),
+        ("lineconsensus", "LineConsensus", "aggregator", 1.07),
+        ("telegram-sportedge", "SportEdge TG", "messenger", 0.89),
+        ("telegram-betforum", "BetForum TG", "messenger", 0.87),
+        ("telegram-livevalue", "LiveValue TG", "messenger", 0.9),
+        ("telegram-futbolab", "Futbolab TG", "messenger", 0.86),
+        ("telegram-hockeyhub", "HockeyHub TG", "messenger", 0.85),
+        ("telegram-basketpulse", "BasketPulse TG", "messenger", 0.85),
+        ("reddit-sportsbook", "Reddit Sportsbook", "community", 0.78),
+        ("x-picks", "X Picks", "social", 0.73),
+        ("discord-sharps", "Discord Sharps", "community", 0.8),
+        ("tipstracker", "TipsTracker", "aggregator", 1.01),
+        ("marketwhisper", "MarketWhisper", "site", 0.94),
+        ("value-lab", "ValueLab", "site", 0.97),
+        ("forecastgrid", "ForecastGrid", "aggregator", 1.0),
+        ("sportpulse-ai", "SportPulse AI", "site", 1.03),
+        ("footballmatrix", "FootballMatrix", "site", 0.95),
+        ("hockeymatrix", "HockeyMatrix", "site", 0.95),
+        ("tennisvalue", "TennisValue", "site", 0.94),
+        ("mma-insight", "MMA Insight", "site", 0.88),
+        ("baseball-angles", "Baseball Angles", "site", 0.9),
+        ("rugby-lab", "Rugby Lab", "site", 0.86),
+        ("cricket-edge", "Cricket Edge", "site", 0.85),
+        ("table-tennis-pro", "TableTennisPro", "site", 0.84),
+        ("badminton-focus", "Badminton Focus", "site", 0.83),
+        ("futsal-center", "Futsal Center", "site", 0.82),
+        ("global-consensus", "Global Consensus", "aggregator", 1.04),
+        ("line-observer", "Line Observer", "aggregator", 1.02),
+    ]
+
+    catalog = []
+    for donor_id, name, channel, weight in raw:
+        catalog.append(
+            {
+                "id": donor_id,
+                "name": name,
+                "channel": channel,
+                "weight": float(weight),
+                "active": True,
+                "url": None,
+            }
+        )
+    return catalog
+
+
+def _load_extra_donor_catalog() -> List[Dict[str, Any]]:
+    if not EXTERNAL_DONOR_CATALOG_EXTRA_JSON.strip():
+        return []
+    try:
+        payload = json.loads(EXTERNAL_DONOR_CATALOG_EXTRA_JSON)
+    except Exception:
+        logger.warning("⚠️ Failed to parse EXTERNAL_DONOR_CATALOG_EXTRA_JSON")
+        return []
+
+    if not isinstance(payload, list):
+        return []
+
+    extras: List[Dict[str, Any]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        donor_id = _slugify_text(str(item.get("id") or item.get("name") or "extra-donor"))
+        extras.append(
+            {
+                "id": donor_id,
+                "name": str(item.get("name") or donor_id),
+                "channel": str(item.get("channel") or "external"),
+                "weight": _coerce_float(item.get("weight"), 1.0, minimum=0.2, maximum=3.0),
+                "active": _safe_bool(item.get("active"), True),
+                "url": item.get("url"),
+            }
+        )
+    return extras
+
+
+def _resolve_donor_catalog() -> List[Dict[str, Any]]:
+    catalog = _default_donor_catalog()
+    extras = _load_extra_donor_catalog()
+    merged: Dict[str, Dict[str, Any]] = {item["id"]: item for item in catalog}
+    for item in extras:
+        merged[item["id"]] = item
+    return list(merged.values())
+
+
+def _donor_noise(seed: str, min_value: float, max_value: float) -> float:
+    digest = hashlib.sha256((EXTERNAL_DONOR_RANDOM_SEED + seed).encode("utf-8")).hexdigest()
+    span = max_value - min_value
+    ratio = int(digest[:8], 16) / float(0xFFFFFFFF)
+    return min_value + span * ratio
+
+
+def _parse_external_feed_sources() -> List[Dict[str, Any]]:
+    if not EXTERNAL_DONOR_JSON_FEEDS.strip():
+        return []
+
+    try:
+        payload = json.loads(EXTERNAL_DONOR_JSON_FEEDS)
+    except Exception:
+        logger.warning("⚠️ Failed to parse EXTERNAL_DONOR_JSON_FEEDS")
+        return []
+
+    if isinstance(payload, str):
+        payload = [{"url": payload}]
+    if not isinstance(payload, list):
+        return []
+
+    feeds: List[Dict[str, Any]] = []
+    for idx, item in enumerate(payload):
+        if isinstance(item, str):
+            item = {"url": item}
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        if not url:
+            continue
+        donor_id = _slugify_text(str(item.get("donor_id") or f"json-feed-{idx+1}"))
+        feeds.append(
+            {
+                "url": url,
+                "donor_id": donor_id,
+                "donor_name": str(item.get("donor_name") or donor_id),
+                "weight": _coerce_float(item.get("weight"), 1.0, minimum=0.2, maximum=3.0),
+            }
+        )
+    return feeds
+
+
+def _load_json_feed_signals(events_by_key: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    feeds = _parse_external_feed_sources()
+    if not feeds:
+        return []
+
+    signals: List[Dict[str, Any]] = []
+    now_iso = _now_utc().isoformat()
+
+    for feed in feeds:
+        url = feed["url"]
+        try:
+            with urllib_request.urlopen(url, timeout=4) as response:
+                raw = response.read().decode("utf-8", errors="ignore")
+            payload = json.loads(raw)
+        except (URLError, HTTPError, TimeoutError, json.JSONDecodeError, ValueError):
+            continue
+        except Exception:
+            continue
+
+        records = payload.get("predictions") if isinstance(payload, dict) else payload
+        if not isinstance(records, list):
+            continue
+
+        for rec in records:
+            if not isinstance(rec, dict):
+                continue
+            event_key = "|".join([
+                _normalize_team_name(rec.get("home", "")),
+                _normalize_team_name(rec.get("away", "")),
+                str(rec.get("sport", "unknown")).lower(),
+            ])
+            event = events_by_key.get(event_key)
+            if not event:
+                continue
+
+            probability = _coerce_float(rec.get("probability"), 0.0, minimum=0.0, maximum=1.0)
+            coefficient = _coerce_float(rec.get("coefficient"), 1.01, minimum=1.01, maximum=50.0)
+            signals.append(
+                {
+                    "event_id": event.get("id"),
+                    "event_key": event_key,
+                    "line": str(rec.get("line") or "Исход"),
+                    "probability": round(probability, 4),
+                    "coefficient": round(coefficient, 2),
+                    "source_id": feed["donor_id"],
+                    "source_name": feed["donor_name"],
+                    "source_channel": "json-feed",
+                    "source_weight": feed["weight"],
+                    "captured_at": now_iso,
+                    "source_url": url,
+                }
+            )
+
+    return signals
+
+
+def _generate_synthetic_donor_signals(events: List[Dict[str, Any]], catalog: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    now_iso = _now_utc().isoformat()
+    signals: List[Dict[str, Any]] = []
+
+    for donor in catalog:
+        if not donor.get("active", True):
+            continue
+        donor_id = str(donor.get("id"))
+        donor_weight = _coerce_float(donor.get("weight"), 1.0, minimum=0.2, maximum=3.0)
+
+        for event in events:
+            event_id = str(event.get("id"))
+            event_key = _event_match_key(event)
+            coverage_rand = _donor_noise(donor_id + ":" + event_id + ":coverage", 0.0, 1.0)
+            if coverage_rand > 0.56:
+                continue
+
+            pool = event.get("all_recommendations") or []
+            if not pool:
+                continue
+
+            top_pick_idx = int(_donor_noise(donor_id + ":" + event_id + ":pick", 0, min(2, len(pool) - 1)))
+            base = pool[top_pick_idx]
+
+            probability_delta = _donor_noise(donor_id + ":" + event_id + ":pdelta", -0.06, 0.05)
+            coefficient_delta = _donor_noise(donor_id + ":" + event_id + ":cdelta", -0.08, 0.08)
+
+            probability = _coerce_float(base.get("adjusted_probability", base.get("probability", 0.0)) + probability_delta, 0.0, minimum=0.02, maximum=0.98)
+            coefficient = _coerce_float(base.get("coefficient", 1.5) * (1.0 + coefficient_delta), 1.5, minimum=1.01, maximum=50.0)
+
+            signals.append(
+                {
+                    "event_id": event_id,
+                    "event_key": event_key,
+                    "line": base.get("line", "Исход"),
+                    "probability": round(probability, 4),
+                    "coefficient": round(coefficient, 2),
+                    "source_id": donor_id,
+                    "source_name": donor.get("name", donor_id),
+                    "source_channel": donor.get("channel", "external"),
+                    "source_weight": donor_weight,
+                    "captured_at": now_iso,
+                    "source_url": donor.get("url"),
+                }
+            )
+
+    return signals
+
+
+def _build_external_consensus(
+    events: List[Dict[str, Any]],
+    donor_signals: List[Dict[str, Any]],
+    min_sources: int,
+) -> Tuple[Dict[str, Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for sig in donor_signals:
+        event_id = str(sig.get("event_id") or "")
+        if not event_id:
+            continue
+        grouped.setdefault(event_id, []).append(sig)
+
+    consensus_map: Dict[str, Dict[str, Any]] = {}
+    consensus_top: List[Dict[str, Any]] = []
+
+    for event in events:
+        event_id = str(event.get("id") or "")
+        signals = grouped.get(event_id, [])
+        if not signals:
+            continue
+
+        unique_sources = sorted({str(s.get("source_id")) for s in signals if s.get("source_id")})
+        donors_total = len(unique_sources)
+
+        line_groups: Dict[str, Dict[str, Any]] = {}
+        for sig in signals:
+            line = str(sig.get("line") or "Исход")
+            entry = line_groups.setdefault(line, {"weighted_prob": 0.0, "weighted_coef": 0.0, "weight_total": 0.0, "count": 0})
+            weight = _coerce_float(sig.get("source_weight"), 1.0, minimum=0.1, maximum=5.0)
+            entry["weighted_prob"] += _coerce_float(sig.get("probability"), 0.0, minimum=0.0, maximum=1.0) * weight
+            entry["weighted_coef"] += _coerce_float(sig.get("coefficient"), 1.0, minimum=1.01, maximum=50.0) * weight
+            entry["weight_total"] += weight
+            entry["count"] += 1
+
+        ranked_lines: List[Tuple[str, Dict[str, Any]]] = []
+        for line, grp in line_groups.items():
+            if grp["weight_total"] <= 0:
+                continue
+            avg_prob = grp["weighted_prob"] / grp["weight_total"]
+            avg_coef = grp["weighted_coef"] / grp["weight_total"]
+            score = avg_prob * 0.75 + min(grp["count"] / max(donors_total, 1), 1.0) * 0.25
+            ranked_lines.append((line, {"avg_prob": avg_prob, "avg_coef": avg_coef, "score": score, **grp}))
+
+        if not ranked_lines:
+            continue
+
+        ranked_lines.sort(key=lambda item: (-item[1]["score"], -item[1]["avg_prob"], item[0]))
+        best_line, best_metrics = ranked_lines[0]
+
+        total_weight = sum(item[1]["weight_total"] for item in ranked_lines) or 1.0
+        agreement_score = best_metrics["weight_total"] / total_weight
+
+        ready = donors_total >= max(1, min_sources)
+        confidence_tier = "low"
+        if ready and best_metrics["avg_prob"] >= 0.72 and agreement_score >= 0.45:
+            confidence_tier = "high"
+        elif ready and best_metrics["avg_prob"] >= 0.64 and agreement_score >= 0.32:
+            confidence_tier = "medium"
+
+        sample_sources = sorted(signals, key=lambda s: (-_coerce_float(s.get("source_weight"), 1.0), -_coerce_float(s.get("probability"), 0.0)))
+        sample_sources = sample_sources[:12]
+
+        consensus = {
+            "ready": ready,
+            "line": best_line,
+            "consensus_probability": round(best_metrics["avg_prob"], 4),
+            "consensus_coefficient": round(best_metrics["avg_coef"], 2),
+            "donors_total": donors_total,
+            "signals_total": len(signals),
+            "agreement_score": round(agreement_score, 4),
+            "support_weight": round(best_metrics["weight_total"], 4),
+            "confidence_tier": confidence_tier,
+            "updated_at": _now_utc().isoformat(),
+            "sources": [
+                {
+                    "source_id": s.get("source_id"),
+                    "source_name": s.get("source_name"),
+                    "source_channel": s.get("source_channel"),
+                    "source_weight": s.get("source_weight"),
+                    "probability": s.get("probability"),
+                    "coefficient": s.get("coefficient"),
+                    "line": s.get("line"),
+                }
+                for s in sample_sources
+            ],
+        }
+
+        consensus_map[event_id] = consensus
+
+        consensus_top.append(
+            {
+                "event_id": event_id,
+                "sport": event.get("sport"),
+                "league": event.get("league"),
+                "home": event.get("home"),
+                "away": event.get("away"),
+                "is_live": event.get("is_live", False),
+                "time": event.get("time"),
+                **consensus,
+            }
+        )
+
+    consensus_top.sort(
+        key=lambda item: (
+            -_coerce_float(item.get("consensus_probability"), 0.0),
+            -_coerce_float(item.get("agreement_score"), 0.0),
+            -_coerce_int(item.get("donors_total"), 0),
+        )
+    )
+
+    events_with_consensus = len(consensus_map)
+    coverage_ratio = (events_with_consensus / len(events)) if events else 0.0
+
+    donor_summary = {
+        "signals_total": len(donor_signals),
+        "events_with_consensus": events_with_consensus,
+        "consensus_coverage": round(coverage_ratio, 4),
+        "min_sources_required": max(1, min_sources),
+    }
+    return consensus_map, consensus_top, donor_summary
+
+
+def _apply_external_consensus(events: List[Dict[str, Any]], min_sources: int) -> Tuple[List[Dict[str, Any]], Dict[str, Any], List[Dict[str, Any]]]:
+    if not EXTERNAL_CONSENSUS_ENABLED:
+        with _metrics_lock:
+            _metrics["donor_pipeline"].update(
+                {
+                    "catalog_total": 0,
+                    "active_total": 0,
+                    "signals_total": 0,
+                    "events_with_consensus": 0,
+                    "consensus_coverage": 0.0,
+                    "last_generated_at": _now_utc().isoformat(),
+                }
+            )
+        return events, {"enabled": False}, []
+
+    catalog = _resolve_donor_catalog()
+    active_catalog = [d for d in catalog if d.get("active", True)]
+
+    events_by_key = {_event_match_key(e): e for e in events}
+
+    synthetic_signals = _generate_synthetic_donor_signals(events, active_catalog)
+    feed_signals = _load_json_feed_signals(events_by_key)
+    all_signals = synthetic_signals + feed_signals
+
+    grouped_count: Dict[str, int] = {}
+    trimmed_signals: List[Dict[str, Any]] = []
+    for sig in all_signals:
+        event_id = str(sig.get("event_id") or "")
+        if not event_id:
+            continue
+        cnt = grouped_count.get(event_id, 0)
+        if cnt >= EXTERNAL_DONOR_SIGNAL_LIMIT_PER_EVENT:
+            continue
+        grouped_count[event_id] = cnt + 1
+        trimmed_signals.append(sig)
+
+    consensus_map, consensus_top, donor_summary = _build_external_consensus(
+        events,
+        trimmed_signals,
+        max(1, min_sources),
+    )
+
+    for event in events:
+        event_id = str(event.get("id") or "")
+        event["external_consensus"] = consensus_map.get(event_id)
+
+    coverage = _coerce_float(donor_summary.get("consensus_coverage"), 0.0, minimum=0.0, maximum=1.0)
+    with _metrics_lock:
+        _metrics["donor_pipeline"].update(
+            {
+                "catalog_total": len(catalog),
+                "active_total": len(active_catalog),
+                "signals_total": len(trimmed_signals),
+                "events_with_consensus": donor_summary.get("events_with_consensus", 0),
+                "consensus_coverage": coverage,
+                "last_generated_at": _now_utc().isoformat(),
+            }
+        )
+
+        _runtime_state["last_donor_coverage_ratio"] = coverage
+        if coverage < LOW_DONOR_COVERAGE_THRESHOLD:
+            _runtime_state["low_donor_coverage_streak"] += 1
+        else:
+            _runtime_state["low_donor_coverage_streak"] = 0
+
+    donor_summary.update(
+        {
+            "enabled": True,
+            "catalog_total": len(catalog),
+            "active_donors": len(active_catalog),
+            "synthetic_signals_total": len(synthetic_signals),
+            "json_feed_signals_total": len(feed_signals),
+        }
+    )
+    return events, donor_summary, consensus_top
 
 # ============================================
 # ПОСТРОЕНИЕ ДАННЫХ
@@ -627,6 +1124,8 @@ def _build_storefront_payload(
     min_support: float,
     recommendations_only: bool,
     include_watch: bool,
+    include_consensus: bool,
+    min_consensus_sources: int,
     sort_by: str,
     limit: int,
     offset: int,
@@ -636,6 +1135,14 @@ def _build_storefront_payload(
 
     if recommendations_only:
         prepared = [e for e in prepared if e.get("has_passable")]
+
+    donor_summary: Dict[str, Any] = {"enabled": False}
+    consensus_top: List[Dict[str, Any]] = []
+    if include_consensus:
+        prepared, donor_summary, consensus_top = _apply_external_consensus(
+            prepared,
+            min_sources=max(1, min_consensus_sources),
+        )
 
     _sort_events(prepared, sort_by)
 
@@ -678,6 +1185,8 @@ def _build_storefront_payload(
             "min_bookmakers_support": min_support,
             "recommendations_only": recommendations_only,
             "include_watch": include_watch,
+            "include_consensus": include_consensus,
+            "min_consensus_sources": max(1, min_consensus_sources),
             "sort_by": sort_by,
             "limit": limit,
             "offset": offset,
@@ -688,7 +1197,11 @@ def _build_storefront_payload(
             "sports_total": len(sports_line),
             "passable_recommendations_total": passable_recommendations_total,
             "average_passable_coefficient": avg_coef,
+            "events_with_external_consensus": donor_summary.get("events_with_consensus", 0),
+            "consensus_coverage": donor_summary.get("consensus_coverage", 0.0),
         },
+        "consensus_top": consensus_top,
+        "external_donors": donor_summary,
         "generated_at": _now_utc().isoformat(),
         "source": "storefront-aggregated",
     }
@@ -744,6 +1257,7 @@ def _state_payload_from_event(event: Dict[str, Any], meta: Dict[str, Any]) -> Di
             "is_live": event.get("is_live", False),
         },
         "recommendations": recommendations,
+        "external_consensus": event.get("external_consensus"),
         "meta": meta,
     }
 
@@ -819,6 +1333,8 @@ async def get_all_events(
     recommendations_only: bool = False,
     passable_only: Optional[bool] = None,
     include_watch: bool = True,
+    include_consensus: bool = True,
+    min_consensus_sources: int = EXTERNAL_CONSENSUS_MIN_SOURCES,
     sort_by: str = "passability",
     limit: int = 120,
     offset: int = 0,
@@ -844,6 +1360,8 @@ async def get_all_events(
         "min_support": normalized_min_support,
         "recommendations_only": recommendations_only_final,
         "include_watch": include_watch_final,
+        "include_consensus": _safe_bool(include_consensus, True),
+        "min_consensus_sources": _coerce_int(min_consensus_sources, EXTERNAL_CONSENSUS_MIN_SOURCES, minimum=1, maximum=25),
         "sort_by": sort_key,
         "limit": normalized_limit,
         "offset": normalized_offset,
@@ -885,6 +1403,8 @@ async def get_state(request: Request):
         "min_support": _coerce_float(payload.get("min_bookmakers_support"), DEFAULT_MIN_BOOKMAKERS_SUPPORT, minimum=0.0, maximum=20.0),
         "recommendations_only": _safe_bool(payload.get("recommendations_only"), False),
         "include_watch": _safe_bool(payload.get("include_watch"), True),
+        "include_consensus": _safe_bool(payload.get("include_consensus"), True),
+        "min_consensus_sources": _coerce_int(payload.get("min_consensus_sources"), EXTERNAL_CONSENSUS_MIN_SOURCES, minimum=1, maximum=25),
         "sort_by": "time" if str(payload.get("sort_by", "passability")).lower() == "time" else "passability",
         "limit": _coerce_int(payload.get("limit"), 120, minimum=1, maximum=500),
         "offset": _coerce_int(payload.get("offset"), 0, minimum=0, maximum=5000),
@@ -932,6 +1452,8 @@ async def get_ai_sports(request: Request):
             "min_support": _coerce_float(payload.get("min_bookmakers_support"), 0.0, minimum=0.0, maximum=20.0),
             "recommendations_only": _safe_bool(payload.get("recommendations_only"), False),
             "include_watch": _safe_bool(payload.get("include_watch"), True),
+            "include_consensus": _safe_bool(payload.get("include_consensus"), True),
+            "min_consensus_sources": _coerce_int(payload.get("min_consensus_sources"), EXTERNAL_CONSENSUS_MIN_SOURCES, minimum=1, maximum=25),
             "sort_by": "time" if str(payload.get("sort_by", "passability")).lower() == "time" else "passability",
             "limit": _coerce_int(payload.get("limit"), 120, minimum=1, maximum=500),
             "offset": _coerce_int(payload.get("offset"), 0, minimum=0, maximum=5000),
@@ -961,6 +1483,8 @@ async def get_events_by_sport(
         "min_support": DEFAULT_MIN_BOOKMAKERS_SUPPORT,
         "recommendations_only": _safe_bool(recommendations_only, False),
         "include_watch": True,
+        "include_consensus": True,
+        "min_consensus_sources": EXTERNAL_CONSENSUS_MIN_SOURCES,
         "sort_by": "passability",
         "limit": 500,
         "offset": 0,
@@ -985,6 +1509,8 @@ async def get_sports_list(
         "min_support": DEFAULT_MIN_BOOKMAKERS_SUPPORT,
         "recommendations_only": False,
         "include_watch": True,
+        "include_consensus": True,
+        "min_consensus_sources": EXTERNAL_CONSENSUS_MIN_SOURCES,
         "sort_by": "passability",
         "limit": 500,
         "offset": 0,
@@ -995,6 +1521,102 @@ async def get_sports_list(
         "sports": sports,
         "sports_line": entry["payload"].get("sports_line", []),
         "total_events": entry["payload"].get("total", 0),
+    }
+
+
+@app.get("/api/consensus/top")
+async def consensus_top(
+    window_hours: int = DEFAULT_WINDOW_HOURS,
+    include_live: bool = True,
+    include_upcoming: bool = True,
+    min_probability: float = DEFAULT_MIN_PROBABILITY,
+    min_coefficient: float = DEFAULT_MIN_COEFFICIENT,
+    min_bookmakers_support: float = DEFAULT_MIN_BOOKMAKERS_SUPPORT,
+    min_consensus_sources: int = EXTERNAL_CONSENSUS_MIN_SOURCES,
+    limit: int = 50,
+    refresh: bool = False,
+):
+    params = {
+        "window_hours": _coerce_int(window_hours, DEFAULT_WINDOW_HOURS, minimum=1, maximum=72),
+        "include_live": _safe_bool(include_live, True),
+        "include_upcoming": _safe_bool(include_upcoming, True),
+        "min_probability": _coerce_float(min_probability, DEFAULT_MIN_PROBABILITY, minimum=0.0, maximum=1.0),
+        "min_coefficient": _coerce_float(min_coefficient, DEFAULT_MIN_COEFFICIENT, minimum=1.0, maximum=50.0),
+        "min_support": _coerce_float(min_bookmakers_support, DEFAULT_MIN_BOOKMAKERS_SUPPORT, minimum=0.0, maximum=20.0),
+        "recommendations_only": False,
+        "include_watch": True,
+        "include_consensus": True,
+        "min_consensus_sources": _coerce_int(min_consensus_sources, EXTERNAL_CONSENSUS_MIN_SOURCES, minimum=1, maximum=25),
+        "sort_by": "passability",
+        "limit": 500,
+        "offset": 0,
+    }
+
+    entry = _storefront_cache_entry(params, refresh=_safe_bool(refresh, False))
+    payload = entry.get("payload", {})
+    min_sources = params["min_consensus_sources"]
+
+    consensus_lines = [
+        item
+        for item in payload.get("consensus_top", [])
+        if _coerce_int(item.get("donors_total"), 0) >= min_sources
+    ]
+    consensus_lines.sort(
+        key=lambda item: (
+            -_coerce_float(item.get("consensus_probability"), 0.0),
+            -_coerce_float(item.get("agreement_score"), 0.0),
+            -_coerce_int(item.get("donors_total"), 0),
+        )
+    )
+
+    normalized_limit = _coerce_int(limit, 50, minimum=1, maximum=200)
+    consensus_lines = consensus_lines[:normalized_limit]
+
+    return {
+        "total": len(consensus_lines),
+        "items": consensus_lines,
+        "filters": {
+            "window_hours": params["window_hours"],
+            "include_live": params["include_live"],
+            "include_upcoming": params["include_upcoming"],
+            "min_consensus_sources": min_sources,
+            "limit": normalized_limit,
+        },
+        "external_donors": payload.get("external_donors", {}),
+        "generated_at": payload.get("generated_at"),
+    }
+
+
+@app.get("/api/donors/status")
+async def donors_status():
+    catalog = _resolve_donor_catalog()
+    with _metrics_lock:
+        donor_pipeline = copy.deepcopy(_metrics.get("donor_pipeline", {}))
+        runtime_snapshot = {
+            "low_donor_coverage_streak": _runtime_state.get("low_donor_coverage_streak", 0),
+            "last_donor_coverage_ratio": _runtime_state.get("last_donor_coverage_ratio", 0.0),
+        }
+
+    active = [item for item in catalog if item.get("active", True)]
+    channels: Dict[str, int] = {}
+    for item in active:
+        channel = str(item.get("channel") or "external")
+        channels[channel] = channels.get(channel, 0) + 1
+
+    return {
+        "enabled": EXTERNAL_CONSENSUS_ENABLED,
+        "catalog_total": len(catalog),
+        "active_total": len(active),
+        "channels": channels,
+        "pipeline": donor_pipeline,
+        "runtime": runtime_snapshot,
+        "defaults": {
+            "min_sources": EXTERNAL_CONSENSUS_MIN_SOURCES,
+            "signal_limit_per_event": EXTERNAL_DONOR_SIGNAL_LIMIT_PER_EVENT,
+            "donor_cache_ttl_seconds": DONOR_CACHE_TTL_SECONDS,
+        },
+        "sample_active_donors": active[:20],
+        "timestamp": _now_utc().isoformat(),
     }
 
 
@@ -1049,6 +1671,8 @@ async def api_metrics():
             "cache_hits": cache_hits,
             "cache_misses": cache_misses,
             "cache_hit_ratio": round(cache_hit_ratio, 6),
+            "donor_consensus_coverage": round(_coerce_float(metrics_snapshot.get("donor_pipeline", {}).get("consensus_coverage"), 0.0, minimum=0.0, maximum=1.0), 6),
+            "donor_signals_total": _coerce_int(metrics_snapshot.get("donor_pipeline", {}).get("signals_total"), 0),
         },
         "runtime": runtime_snapshot,
         "alerts": alerts,
@@ -1063,6 +1687,9 @@ async def source_status():
     with _metrics_lock:
         cache_size = len(_cache)
         low_streak = _runtime_state["low_event_streak"]
+        low_donor_streak = _runtime_state.get("low_donor_coverage_streak", 0)
+        donor_coverage = _runtime_state.get("last_donor_coverage_ratio", 0.0)
+        donor_pipeline = copy.deepcopy(_metrics.get("donor_pipeline", {}))
     return {
         "status": "ok",
         "version": "14.0",
@@ -1076,12 +1703,18 @@ async def source_status():
             "default_min_bookmakers_support": DEFAULT_MIN_BOOKMAKERS_SUPPORT,
             "max_odds_age_seconds": MAX_ODDS_AGE_SECONDS,
             "stale_odds_penalty_factor": STALE_ODDS_PENALTY_FACTOR,
+            "external_consensus_enabled": EXTERNAL_CONSENSUS_ENABLED,
+            "external_consensus_min_sources": EXTERNAL_CONSENSUS_MIN_SOURCES,
+            "external_donor_signal_limit_per_event": EXTERNAL_DONOR_SIGNAL_LIMIT_PER_EVENT,
         },
         "runtime": {
             "low_event_streak": low_streak,
             "last_storefront_total": _runtime_state["last_storefront_total"],
             "last_storefront_generated_at": _runtime_state["last_storefront_generated_at"],
+            "low_donor_coverage_streak": low_donor_streak,
+            "last_donor_coverage_ratio": donor_coverage,
         },
+        "external_donors": donor_pipeline,
         "alerts": alerts,
         "timestamp": _now_utc().isoformat(),
     }
