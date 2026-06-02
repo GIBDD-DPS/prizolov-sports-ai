@@ -343,6 +343,14 @@ ADAPTIVE_THRESHOLD_MIN_FEEDBACK = max(1, int(os.environ.get("ADAPTIVE_THRESHOLD_
 ADAPTIVE_MIN_PROBABILITY_FLOOR = min(0.8, max(0.01, float(os.environ.get("ADAPTIVE_MIN_PROBABILITY_FLOOR", "0.40"))))
 ADAPTIVE_MIN_PROBABILITY_CEIL = min(0.95, max(ADAPTIVE_MIN_PROBABILITY_FLOOR, float(os.environ.get("ADAPTIVE_MIN_PROBABILITY_CEIL", "0.72"))))
 
+STOREFRONT_ADAPTIVE_MODE_ENABLED = os.environ.get("STOREFRONT_ADAPTIVE_MODE_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+STOREFRONT_RECENT_WINDOW_HOURS = max(1, int(os.environ.get("STOREFRONT_RECENT_WINDOW_HOURS", "24")))
+STOREFRONT_BASELINE_WINDOW_HOURS = max(STOREFRONT_RECENT_WINDOW_HOURS + 1, int(os.environ.get("STOREFRONT_BASELINE_WINDOW_HOURS", "168")))
+STOREFRONT_ALERT_MIN_SAMPLES = max(1, int(os.environ.get("STOREFRONT_ALERT_MIN_SAMPLES", "10")))
+STOREFRONT_DEGRADED_MIN_PROBABILITY = min(0.95, max(0.01, float(os.environ.get("STOREFRONT_DEGRADED_MIN_PROBABILITY", "0.62"))))
+STOREFRONT_DEGRADED_MIN_QUALITY = min(100.0, max(0.0, float(os.environ.get("STOREFRONT_DEGRADED_MIN_QUALITY", "55"))))
+STOREFRONT_DEGRADED_MAX_EVENTS = max(1, int(os.environ.get("STOREFRONT_DEGRADED_MAX_EVENTS", "25")))
+
 
 def _normalize_lang(lang: Optional[str]) -> str:
     val = str(lang or "ru").strip().lower()
@@ -459,7 +467,7 @@ def _build_recommendation_reason(event: Dict[str, Any], recommendation: Dict[str
 
 def _normalize_sort_by(sort_by: Optional[str]) -> str:
     normalized = str(sort_by or "priority").strip().lower()
-    if normalized in {"priority", "quality", "probability", "freshness", "time"}:
+    if normalized in {"priority", "quality", "probability", "freshness", "time", "auto"}:
         return normalized
     return "priority"
 
@@ -1158,6 +1166,139 @@ def _compute_adaptive_min_probability(status: Optional[Dict[str, Any]] = None) -
 
 
 
+
+def _compute_storefront_policy(
+    status: Dict[str, Any],
+    window_metrics: Dict[str, Any],
+    alerts: List[Dict[str, Any]],
+    threshold_guidance: Dict[str, Any],
+) -> Dict[str, Any]:
+    base_policy = {
+        "mode": "normal",
+        "recommended_sort_by": "priority",
+        "recommendations_only": False,
+        "enforced_min_probability": 0.0,
+        "enforced_min_quality": 0.0,
+        "max_events": 200,
+        "trigger_codes": [],
+        "reason": "default",
+    }
+
+    if not STOREFRONT_ADAPTIVE_MODE_ENABLED:
+        base_policy["reason"] = "adaptive_mode_disabled"
+        return base_policy
+
+    trigger_codes = [str(alert.get("code")) for alert in alerts if isinstance(alert, dict)]
+    severe_codes = {"brier_high", "brier_degrading", "calibration_gap", "roi_negative", "roi_drop"}
+    has_severe_signal = any(code in severe_codes for code in trigger_codes)
+
+    recent = (window_metrics or {}).get("recent") or {}
+    recent_samples = max(0, _safe_int(recent.get("samples"), 0))
+    threshold_effective = _safe_float(threshold_guidance.get("effective_min_probability"), MIN_RECOMMENDATION_PROBABILITY)
+    threshold_delta = _safe_float(threshold_guidance.get("delta"), 0.0)
+
+    if recent_samples < STOREFRONT_ALERT_MIN_SAMPLES:
+        base_policy["reason"] = "insufficient_samples"
+        base_policy["trigger_codes"] = trigger_codes
+        return base_policy
+
+    if has_severe_signal or threshold_delta >= 0.03:
+        enforced_prob = max(STOREFRONT_DEGRADED_MIN_PROBABILITY, threshold_effective)
+        return {
+            "mode": "degraded",
+            "recommended_sort_by": "quality",
+            "recommendations_only": True,
+            "enforced_min_probability": round(_clamp(enforced_prob, 0.01, 0.99), 4),
+            "enforced_min_quality": round(_clamp(STOREFRONT_DEGRADED_MIN_QUALITY, 0.0, 100.0), 2),
+            "max_events": max(1, min(200, STOREFRONT_DEGRADED_MAX_EVENTS)),
+            "trigger_codes": trigger_codes,
+            "reason": "quality_guard_mode",
+        }
+
+    if threshold_delta >= 0.015:
+        enforced_prob = max(0.55, threshold_effective)
+        return {
+            "mode": "guarded",
+            "recommended_sort_by": "quality",
+            "recommendations_only": False,
+            "enforced_min_probability": round(_clamp(enforced_prob, 0.01, 0.99), 4),
+            "enforced_min_quality": round(_clamp(50.0, 0.0, 100.0), 2),
+            "max_events": 120,
+            "trigger_codes": trigger_codes,
+            "reason": "adaptive_threshold_guard",
+        }
+
+    base_policy["reason"] = "stable_metrics"
+    base_policy["trigger_codes"] = trigger_codes
+    return base_policy
+
+
+def _build_storefront_context(status: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    learning_status = status or _get_self_learning_status()
+    recent_feedback = _get_recent_feedback(limit=SELF_LEARNING_HISTORY_LIMIT)
+    windows = _compute_learning_windows(
+        recent_feedback=recent_feedback,
+        recent_window_hours=STOREFRONT_RECENT_WINDOW_HOURS,
+        baseline_window_hours=STOREFRONT_BASELINE_WINDOW_HOURS,
+    )
+    alerts = _build_learning_alerts(windows, min_samples=STOREFRONT_ALERT_MIN_SAMPLES)
+    threshold_guidance = _compute_adaptive_min_probability(learning_status)
+    policy = _compute_storefront_policy(
+        status=learning_status,
+        window_metrics=windows,
+        alerts=alerts,
+        threshold_guidance=threshold_guidance,
+    )
+    return {
+        "windows": windows,
+        "alerts": alerts,
+        "threshold": threshold_guidance,
+        "policy": policy,
+    }
+
+
+def _resolve_storefront_effective_filters(
+    sort_by: str,
+    min_quality: float,
+    min_probability: float,
+    recommendations_only: bool,
+    limit: int,
+    storefront_policy: Dict[str, Any],
+) -> Dict[str, Any]:
+    requested_sort = _normalize_sort_by(sort_by)
+    policy_sort = _normalize_sort_by(storefront_policy.get("recommended_sort_by", "priority"))
+    effective_sort = policy_sort if requested_sort == "auto" else requested_sort
+    if effective_sort == "auto":
+        effective_sort = "priority"
+
+    requested_min_quality = _clamp(_safe_float(min_quality, 0.0), 0.0, 100.0)
+    requested_min_probability = _clamp(_safe_float(min_probability, 0.0), 0.0, 0.99)
+
+    policy_min_quality = _clamp(_safe_float(storefront_policy.get("enforced_min_quality"), 0.0), 0.0, 100.0)
+    policy_min_probability = _clamp(_safe_float(storefront_policy.get("enforced_min_probability"), 0.0), 0.0, 0.99)
+
+    requested_limit = max(1, min(200, _safe_int(limit, 40)))
+    policy_limit = max(1, min(200, _safe_int(storefront_policy.get("max_events"), 200)))
+
+    return {
+        "requested": {
+            "sort_by": requested_sort,
+            "min_quality": requested_min_quality,
+            "min_probability": requested_min_probability,
+            "recommendations_only": bool(recommendations_only),
+            "limit": requested_limit,
+        },
+        "effective": {
+            "sort_by": effective_sort,
+            "min_quality": max(requested_min_quality, policy_min_quality),
+            "min_probability": max(requested_min_probability, policy_min_probability),
+            "recommendations_only": bool(recommendations_only) or bool(storefront_policy.get("recommendations_only", False)),
+            "limit": min(requested_limit, policy_limit),
+        },
+    }
+
+
+
 def _get_self_learning_status() -> Dict[str, Any]:
     with SELF_LEARNING_LOCK:
         total_feedback = max(0, _safe_int(SELF_LEARNING_STATE.get("total_feedback"), 0))
@@ -1745,22 +1886,35 @@ async def get_all_events(
     selected_lang = _normalize_lang(lang)
     events = await _get_runtime_events()
     localized_events = _localize_events(events, selected_lang)
-    prepared_events = _prepare_output_events(
-        events=localized_events,
-        sport_filter=sport,
+
+    storefront_context = _build_storefront_context()
+    storefront_policy = storefront_context.get("policy", {})
+    filter_ctx = _resolve_storefront_effective_filters(
+        sort_by=sort_by,
         min_quality=min_quality,
         min_probability=min_probability,
         recommendations_only=recommendations_only,
-        sort_by=sort_by,
         limit=limit,
+        storefront_policy=storefront_policy,
+    )
+    effective_filters = filter_ctx["effective"]
+
+    prepared_events = _prepare_output_events(
+        events=localized_events,
+        sport_filter=sport,
+        min_quality=effective_filters["min_quality"],
+        min_probability=effective_filters["min_probability"],
+        recommendations_only=effective_filters["recommendations_only"],
+        sort_by=effective_filters["sort_by"],
+        limit=effective_filters["limit"],
     )
 
     top_recommendations = []
     if include_top:
         top_recommendations = _collect_top_recommendations(
             prepared_events,
-            limit=top_limit,
-            min_probability=min_probability,
+            limit=min(max(1, _safe_int(top_limit, 10)), max(1, _safe_int(effective_filters["limit"], 10))),
+            min_probability=effective_filters["min_probability"],
         )
 
     return {
@@ -1769,12 +1923,9 @@ async def get_all_events(
         "language": selected_lang,
         "filters": {
             "sport": sport,
-            "min_quality": min_quality,
-            "min_probability": min_probability,
-            "sort_by": _normalize_sort_by(sort_by),
-            "limit": limit,
-            "recommendations_only": recommendations_only,
+            **filter_ctx,
         },
+        "storefront_policy": storefront_policy,
         "meta": _build_events_meta(prepared_events, len(localized_events)),
         "events": prepared_events,
         "top_recommendations": top_recommendations,
@@ -1793,28 +1944,42 @@ async def get_events_by_sport(
     selected_lang = _normalize_lang(lang)
     events = await _get_runtime_events()
     localized_events = _localize_events(events, selected_lang)
-    prepared_events = _prepare_output_events(
-        events=localized_events,
-        sport_filter=sport,
+
+    storefront_context = _build_storefront_context()
+    storefront_policy = storefront_context.get("policy", {})
+    filter_ctx = _resolve_storefront_effective_filters(
+        sort_by=sort_by,
         min_quality=0.0,
         min_probability=min_probability,
         recommendations_only=False,
-        sort_by=sort_by,
         limit=limit,
+        storefront_policy=storefront_policy,
+    )
+    effective_filters = filter_ctx["effective"]
+
+    prepared_events = _prepare_output_events(
+        events=localized_events,
+        sport_filter=sport,
+        min_quality=effective_filters["min_quality"],
+        min_probability=effective_filters["min_probability"],
+        recommendations_only=effective_filters["recommendations_only"],
+        sort_by=effective_filters["sort_by"],
+        limit=effective_filters["limit"],
     )
 
     return {
         "sport": sport,
         "language": selected_lang,
         "total": len(prepared_events),
-        "filters": {
-            "min_probability": min_probability,
-            "sort_by": _normalize_sort_by(sort_by),
-            "limit": limit,
-        },
+        "filters": filter_ctx,
+        "storefront_policy": storefront_policy,
         "meta": _build_events_meta(prepared_events, len(localized_events)),
         "events": prepared_events,
-        "top_recommendations": _collect_top_recommendations(prepared_events, limit=10, min_probability=min_probability),
+        "top_recommendations": _collect_top_recommendations(
+            prepared_events,
+            limit=min(10, max(1, _safe_int(effective_filters["limit"], 10))),
+            min_probability=effective_filters["min_probability"],
+        ),
     }
 
 
@@ -1829,30 +1994,41 @@ async def get_top_recommendations(
     selected_lang = _normalize_lang(lang)
     events = await _get_runtime_events()
     localized_events = _localize_events(events, selected_lang)
-    prepared_events = _prepare_output_events(
-        events=localized_events,
-        sport_filter=sport,
+
+    storefront_context = _build_storefront_context()
+    storefront_policy = storefront_context.get("policy", {})
+    filter_ctx = _resolve_storefront_effective_filters(
+        sort_by="priority",
         min_quality=0.0,
         min_probability=min_probability,
         recommendations_only=True,
-        sort_by="priority",
         limit=200,
+        storefront_policy=storefront_policy,
+    )
+    effective_filters = filter_ctx["effective"]
+
+    prepared_events = _prepare_output_events(
+        events=localized_events,
+        sport_filter=sport,
+        min_quality=effective_filters["min_quality"],
+        min_probability=effective_filters["min_probability"],
+        recommendations_only=effective_filters["recommendations_only"],
+        sort_by=effective_filters["sort_by"],
+        limit=effective_filters["limit"],
     )
 
     recommendations = _collect_top_recommendations(
         prepared_events,
-        limit=limit,
-        min_probability=min_probability,
+        limit=min(max(1, _safe_int(limit, 10)), max(1, _safe_int(effective_filters["limit"], 10))),
+        min_probability=effective_filters["min_probability"],
     )
 
     return {
         "language": selected_lang,
         "sport": sport,
         "total": len(recommendations),
-        "filters": {
-            "min_probability": min_probability,
-            "limit": limit,
-        },
+        "filters": filter_ctx,
+        "storefront_policy": storefront_policy,
         "recommendations": recommendations,
     }
 
@@ -1927,6 +2103,7 @@ async def source_status(refresh: bool = False):
             "sports_with_feedback": len(learning_status.get("sports", {})),
             "summary": learning_status.get("summary", {}),
         },
+        "storefront_policy": _build_storefront_context(status=learning_status).get("policy", {}),
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
 
@@ -1955,10 +2132,17 @@ async def get_learning_metrics(
     alerts = _build_learning_alerts(windows, min_samples=alert_min_samples)
 
     threshold_guidance = _compute_adaptive_min_probability(status)
+    storefront_policy = _compute_storefront_policy(
+        status=status,
+        window_metrics=windows,
+        alerts=alerts,
+        threshold_guidance=threshold_guidance,
+    )
 
     return {
         "status": status,
         "quality_threshold": threshold_guidance,
+        "storefront_policy": storefront_policy,
         "windows": windows,
         "alerts": alerts,
         "recent_feedback": _get_recent_feedback(limit=recent_limit),

@@ -100,6 +100,9 @@ python3 scripts/auto_feedback_worker.py \
 - `supported_runtime_sports`
 - `min_bookmakers_per_event`
 - `min_recommendation_probability`
+- `effective_min_recommendation_probability`
+- `adaptive_threshold_enabled`
+- `adaptive_threshold_min_feedback`
 - `min_event_quality_score`
 - `max_recommendations_per_event`
 - `max_upcoming_hours`
@@ -111,7 +114,7 @@ python3 scripts/auto_feedback_worker.py \
 - `sport` — код вида спорта (например, `football`)
 - `min_quality` — минимальный `quality_score`
 - `min_probability` — минимальная вероятность top-рекомендации
-- `sort_by` — `priority | quality | probability | freshness | time`
+- `sort_by` — `priority | quality | probability | freshness | time | auto`
 - `limit` — максимум событий
 - `recommendations_only` — только события с рекомендациями
 - `include_top` — включать ли плоский `top_recommendations`
@@ -121,6 +124,8 @@ python3 scripts/auto_feedback_worker.py \
 - `events` (с `display_priority`, `top_probability`, `top_recommendation`)
 - `meta` (распределение по видам спорта и средние показатели)
 - `top_recommendations` (готовый список для блока "лучшие ставки")
+- `filters.requested` / `filters.effective` (что запросил клиент и что применилось с учетом adaptive policy)
+- `storefront_policy` (режим витрины: `normal | guarded | degraded`)
 
 Отдельный endpoint витрины:
 - `GET /api/recommendations/top` — плоский список лучших рекомендаций
@@ -146,3 +151,15 @@ python3 scripts/auto_feedback_worker.py \
 - `ADAPTIVE_MIN_PROBABILITY_CEIL`
 
 Текущий эффективный порог доступен в `/api/source-status` через `quality_filters.effective_min_recommendation_probability`.
+
+
+Адаптивный режим витрины (storefront):
+- `STOREFRONT_ADAPTIVE_MODE_ENABLED`
+- `STOREFRONT_RECENT_WINDOW_HOURS`
+- `STOREFRONT_BASELINE_WINDOW_HOURS`
+- `STOREFRONT_ALERT_MIN_SAMPLES`
+- `STOREFRONT_DEGRADED_MIN_PROBABILITY`
+- `STOREFRONT_DEGRADED_MIN_QUALITY`
+- `STOREFRONT_DEGRADED_MAX_EVENTS`
+
+В degraded-режиме API автоматически усиливает фильтрацию и сортировку по качеству для более надежной выдачи.

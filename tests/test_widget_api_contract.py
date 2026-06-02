@@ -133,6 +133,8 @@ class TestWidgetApiContract(unittest.TestCase):
 
         self.assertIn("self_learning", payload)
         self.assertIn("enabled", payload["self_learning"])
+        self.assertIn("storefront_policy", payload)
+        self.assertIn("mode", payload["storefront_policy"])
 
     def test_all_events_supports_filters_and_top_recommendations(self):
         response = self.client.get(
@@ -144,13 +146,18 @@ class TestWidgetApiContract(unittest.TestCase):
         self.assertIn("filters", payload)
         self.assertIn("meta", payload)
         self.assertIn("top_recommendations", payload)
+        self.assertIn("storefront_policy", payload)
+        self.assertIn("requested", payload["filters"])
+        self.assertIn("effective", payload["filters"])
         self.assertLessEqual(payload["total"], 3)
+
+        effective_min_probability = payload["filters"]["effective"].get("min_probability", 0.0)
 
         for event in payload.get("events", []):
             self.assertEqual(event.get("sport_code"), "football")
             top_probability = event.get("top_probability")
             if top_probability is not None:
-                self.assertGreaterEqual(float(top_probability), 0.6)
+                self.assertGreaterEqual(float(top_probability), float(effective_min_probability))
 
     def test_top_recommendations_endpoint(self):
         response = self.client.get("/api/recommendations/top?lang=en&limit=5&min_probability=0.5")
@@ -158,13 +165,18 @@ class TestWidgetApiContract(unittest.TestCase):
 
         payload = response.json()
         self.assertIn("recommendations", payload)
+        self.assertIn("storefront_policy", payload)
+        self.assertIn("filters", payload)
+        self.assertIn("effective", payload["filters"])
         self.assertLessEqual(payload.get("total", 0), 5)
+
+        effective_min_probability = payload["filters"]["effective"].get("min_probability", 0.0)
 
         for rec in payload.get("recommendations", []):
             self.assertIn("event_id", rec)
             self.assertIn("line", rec)
             self.assertIn("probability", rec)
-            self.assertGreaterEqual(float(rec["probability"]), 0.5)
+            self.assertGreaterEqual(float(rec["probability"]), float(effective_min_probability))
 
 
     def test_learning_metrics_endpoint_returns_summary_and_recent_feedback(self):
