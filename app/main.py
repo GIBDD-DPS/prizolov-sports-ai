@@ -374,6 +374,7 @@ def _localize_event(event: Dict[str, Any], lang: str) -> Dict[str, Any]:
         base_probability = _normalize_probability(rec_local.get("probability", 0.5))
         adjusted_probability = _apply_learning_to_probability(base_probability, learning_meta["factor"])
 
+        coefficient = _safe_float(rec_local.get("coefficient"), 1.5)
         rec_local["sport_code"] = sport_code
         rec_local["sport_ru"] = labels["ru"]
         rec_local["sport_en"] = labels["en"]
@@ -383,15 +384,242 @@ def _localize_event(event: Dict[str, Any], lang: str) -> Dict[str, Any]:
         rec_local["learning_factor"] = learning_meta["factor"]
         rec_local["learning_feedback_count"] = learning_meta["feedback_count"]
         rec_local["confidence"] = _probability_to_confidence(adjusted_probability)
+        rec_local["value_score"] = rec_local.get("value_score", _recommendation_strength(adjusted_probability, coefficient))
+        rec_local["reasoning"] = rec_local.get("reasoning") or _build_recommendation_reason(localized, rec_local)
         recs.append(rec_local)
 
+    recs.sort(
+        key=lambda rec: (
+            _safe_float(rec.get("value_score"), 0.0),
+            _safe_float(rec.get("probability"), 0.0),
+            _safe_float(rec.get("coefficient"), 0.0),
+        ),
+        reverse=True,
+    )
+
+    top_recommendation = recs[0] if recs else None
+    top_probability = _safe_float(top_recommendation.get("probability"), 0.0) if top_recommendation else 0.0
+    quality_score = _safe_float(localized.get("quality_score"), 55.0 if recs else 0.0)
+
     localized["recommendations"] = recs
+    localized["recommendations_count"] = len(recs)
+    localized["top_probability"] = round(top_probability, 4) if top_recommendation else None
+    localized["top_value_score"] = round(_safe_float(top_recommendation.get("value_score"), 0.0), 4) if top_recommendation else None
+    localized["display_priority"] = round((quality_score * 0.65) + (top_probability * 100.0 * 0.35), 2)
+    localized["top_recommendation"] = (
+        {
+            "line": top_recommendation.get("line"),
+            "probability": top_recommendation.get("probability"),
+            "coefficient": top_recommendation.get("coefficient"),
+            "confidence": top_recommendation.get("confidence"),
+            "reasoning": top_recommendation.get("reasoning"),
+        }
+        if top_recommendation
+        else None
+    )
+
     return localized
 
 
 def _localize_events(events: List[Dict[str, Any]], lang: str) -> List[Dict[str, Any]]:
     selected_lang = _normalize_lang(lang)
     return [_localize_event(event, selected_lang) for event in events]
+
+
+def _build_recommendation_reason(event: Dict[str, Any], recommendation: Dict[str, Any]) -> str:
+    parts: List[str] = []
+    market = str(recommendation.get("market") or "").strip().upper()
+    if market:
+        parts.append(f"Market: {market}")
+
+    quality_score = _safe_float(event.get("quality_score"), 0.0)
+    if quality_score > 0:
+        parts.append(f"Quality {quality_score:.1f}")
+
+    freshness = str(event.get("freshness") or "").strip().lower()
+    if freshness:
+        parts.append(f"Freshness: {freshness}")
+
+    probability = _safe_float(recommendation.get("probability"), 0.0)
+    parts.append(f"Prob {probability:.2f}")
+    return " | ".join(parts)
+
+
+def _normalize_sort_by(sort_by: Optional[str]) -> str:
+    normalized = str(sort_by or "priority").strip().lower()
+    if normalized in {"priority", "quality", "probability", "freshness", "time"}:
+        return normalized
+    return "priority"
+
+
+def _event_sort_key(event: Dict[str, Any], sort_by: str) -> Any:
+    status_weight = 0 if str(event.get("status", "")).upper() == "LIVE" else 1
+    quality_score = _safe_float(event.get("quality_score"), 0.0)
+    top_probability = _safe_float(event.get("top_probability"), 0.0)
+    display_priority = _safe_float(event.get("display_priority"), 0.0)
+    freshness_seconds = event.get("freshness_seconds")
+    freshness_value = _safe_int(freshness_seconds, 10**9) if freshness_seconds is not None else 10**9
+
+    if sort_by == "quality":
+        return (status_weight, -quality_score, -top_probability, -display_priority)
+    if sort_by == "probability":
+        return (status_weight, -top_probability, -quality_score, -display_priority)
+    if sort_by == "freshness":
+        return (status_weight, freshness_value, -quality_score, -top_probability)
+    if sort_by == "time":
+        return (status_weight, str(event.get("time") or ""), -display_priority)
+    return (status_weight, -display_priority, -quality_score, -top_probability)
+
+
+def _prepare_output_events(
+    events: List[Dict[str, Any]],
+    sport_filter: Optional[str] = None,
+    min_quality: float = 0.0,
+    min_probability: float = 0.0,
+    recommendations_only: bool = False,
+    sort_by: str = "priority",
+    limit: int = 40,
+) -> List[Dict[str, Any]]:
+    normalized_sport_filter = str(sport_filter or "").strip().lower()
+    min_quality_clamped = _clamp(_safe_float(min_quality, 0.0), 0.0, 100.0)
+    min_probability_clamped = _clamp(_safe_float(min_probability, 0.0), 0.0, 0.99)
+    normalized_sort_by = _normalize_sort_by(sort_by)
+
+    filtered: List[Dict[str, Any]] = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+
+        event_sport_code = str(event.get("sport_code") or event.get("sport") or "").strip().lower()
+        if normalized_sport_filter and event_sport_code != normalized_sport_filter:
+            continue
+
+        recs_raw = event.get("recommendations") or []
+        recs = [rec for rec in recs_raw if isinstance(rec, dict)]
+        if min_probability_clamped > 0:
+            recs = [rec for rec in recs if _safe_float(rec.get("probability"), 0.0) >= min_probability_clamped]
+
+        if recommendations_only and not recs:
+            continue
+
+        quality_score = _safe_float(event.get("quality_score"), 0.0)
+        if quality_score < min_quality_clamped:
+            continue
+
+        enriched = dict(event)
+        enriched["recommendations"] = recs
+        enriched["recommendations_count"] = len(recs)
+
+        top_recommendation = recs[0] if recs else None
+        top_probability = _safe_float(top_recommendation.get("probability"), 0.0) if top_recommendation else 0.0
+        top_value = _safe_float(top_recommendation.get("value_score"), 0.0) if top_recommendation else 0.0
+
+        enriched["top_probability"] = round(top_probability, 4) if top_recommendation else None
+        enriched["top_value_score"] = round(top_value, 4) if top_recommendation else None
+        enriched["display_priority"] = round(
+            (max(quality_score, _safe_float(event.get("quality_score"), 55.0 if recs else 0.0)) * 0.65)
+            + (top_probability * 100.0 * 0.35),
+            2,
+        )
+        enriched["top_recommendation"] = (
+            {
+                "line": top_recommendation.get("line"),
+                "probability": top_recommendation.get("probability"),
+                "coefficient": top_recommendation.get("coefficient"),
+                "confidence": top_recommendation.get("confidence"),
+                "reasoning": top_recommendation.get("reasoning"),
+            }
+            if top_recommendation
+            else None
+        )
+        filtered.append(enriched)
+
+    filtered.sort(key=lambda event: _event_sort_key(event, normalized_sort_by))
+    max_limit = max(1, min(200, _safe_int(limit, 40)))
+    return filtered[:max_limit]
+
+
+def _build_events_meta(events: List[Dict[str, Any]], total_before_filters: int) -> Dict[str, Any]:
+    sports_distribution: Dict[str, int] = {}
+    live_count = 0
+    quality_sum = 0.0
+    quality_count = 0
+    probability_sum = 0.0
+    probability_count = 0
+
+    for event in events:
+        sport_code = str(event.get("sport_code") or event.get("sport") or "other").lower()
+        sports_distribution[sport_code] = sports_distribution.get(sport_code, 0) + 1
+
+        if str(event.get("status", "")).upper() == "LIVE":
+            live_count += 1
+
+        quality = event.get("quality_score")
+        if quality is not None:
+            quality_sum += _safe_float(quality, 0.0)
+            quality_count += 1
+
+        top_probability = event.get("top_probability")
+        if top_probability is not None:
+            probability_sum += _safe_float(top_probability, 0.0)
+            probability_count += 1
+
+    return {
+        "total_before_filters": total_before_filters,
+        "returned_events": len(events),
+        "live_events": live_count,
+        "sports_distribution": sports_distribution,
+        "avg_quality_score": round(quality_sum / quality_count, 2) if quality_count else None,
+        "avg_top_probability": round(probability_sum / probability_count, 4) if probability_count else None,
+    }
+
+
+def _collect_top_recommendations(
+    events: List[Dict[str, Any]],
+    limit: int = 10,
+    min_probability: float = 0.0,
+) -> List[Dict[str, Any]]:
+    min_probability_clamped = _clamp(_safe_float(min_probability, 0.0), 0.0, 0.99)
+    candidates: List[Dict[str, Any]] = []
+
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        for rec in (event.get("recommendations") or []):
+            if not isinstance(rec, dict):
+                continue
+            probability = _safe_float(rec.get("probability"), 0.0)
+            if probability < min_probability_clamped:
+                continue
+            candidates.append(
+                {
+                    "event_id": event.get("id"),
+                    "league": event.get("league"),
+                    "home": event.get("home"),
+                    "away": event.get("away"),
+                    "sport": event.get("sport"),
+                    "sport_code": event.get("sport_code"),
+                    "line": rec.get("line"),
+                    "probability": rec.get("probability"),
+                    "coefficient": rec.get("coefficient"),
+                    "confidence": rec.get("confidence"),
+                    "value_score": rec.get("value_score"),
+                    "reasoning": rec.get("reasoning"),
+                    "display_priority": event.get("display_priority"),
+                    "quality_score": event.get("quality_score"),
+                }
+            )
+
+    candidates.sort(
+        key=lambda rec: (
+            _safe_float(rec.get("value_score"), 0.0),
+            _safe_float(rec.get("probability"), 0.0),
+            _safe_float(rec.get("display_priority"), 0.0),
+        ),
+        reverse=True,
+    )
+    max_limit = max(1, min(100, _safe_int(limit, 10)))
+    return candidates[:max_limit]
 
 
 def _default_learning_sport_state() -> Dict[str, Any]:
@@ -1092,30 +1320,130 @@ async def get_ai_sports(request: Request = None):
 
 
 @app.get("/api/all-events")
-async def get_all_events(lang: str = "ru"):
-    """Получить все live события"""
+async def get_all_events(
+    lang: str = "ru",
+    sport: Optional[str] = None,
+    min_quality: float = 0.0,
+    min_probability: float = 0.0,
+    sort_by: str = "priority",
+    limit: int = 40,
+    recommendations_only: bool = False,
+    include_top: bool = True,
+    top_limit: int = 10,
+):
+    """Получить все live события с фильтрами и ранжированием."""
     selected_lang = _normalize_lang(lang)
     events = await _get_runtime_events()
     localized_events = _localize_events(events, selected_lang)
+    prepared_events = _prepare_output_events(
+        events=localized_events,
+        sport_filter=sport,
+        min_quality=min_quality,
+        min_probability=min_probability,
+        recommendations_only=recommendations_only,
+        sort_by=sort_by,
+        limit=limit,
+    )
+
+    top_recommendations = []
+    if include_top:
+        top_recommendations = _collect_top_recommendations(
+            prepared_events,
+            limit=top_limit,
+            min_probability=min_probability,
+        )
+
     return {
-        "total": len(localized_events),
+        "total": len(prepared_events),
+        "total_before_filters": len(localized_events),
         "language": selected_lang,
-        "events": localized_events,
+        "filters": {
+            "sport": sport,
+            "min_quality": min_quality,
+            "min_probability": min_probability,
+            "sort_by": _normalize_sort_by(sort_by),
+            "limit": limit,
+            "recommendations_only": recommendations_only,
+        },
+        "meta": _build_events_meta(prepared_events, len(localized_events)),
+        "events": prepared_events,
+        "top_recommendations": top_recommendations,
     }
 
 
 @app.get("/api/events/{sport}")
-async def get_events_by_sport(sport: str, lang: str = "ru"):
-    """Получить события по виду спорта"""
+async def get_events_by_sport(
+    sport: str,
+    lang: str = "ru",
+    min_probability: float = 0.0,
+    sort_by: str = "priority",
+    limit: int = 30,
+):
+    """Получить события по виду спорта."""
     selected_lang = _normalize_lang(lang)
     events = await _get_runtime_events()
-    matches = get_matches_by_sport(sport.lower(), events)
-    localized_matches = _localize_events(matches, selected_lang)
+    localized_events = _localize_events(events, selected_lang)
+    prepared_events = _prepare_output_events(
+        events=localized_events,
+        sport_filter=sport,
+        min_quality=0.0,
+        min_probability=min_probability,
+        recommendations_only=False,
+        sort_by=sort_by,
+        limit=limit,
+    )
+
     return {
         "sport": sport,
         "language": selected_lang,
-        "total": len(localized_matches),
-        "events": localized_matches,
+        "total": len(prepared_events),
+        "filters": {
+            "min_probability": min_probability,
+            "sort_by": _normalize_sort_by(sort_by),
+            "limit": limit,
+        },
+        "meta": _build_events_meta(prepared_events, len(localized_events)),
+        "events": prepared_events,
+        "top_recommendations": _collect_top_recommendations(prepared_events, limit=10, min_probability=min_probability),
+    }
+
+
+@app.get("/api/recommendations/top")
+async def get_top_recommendations(
+    lang: str = "ru",
+    sport: Optional[str] = None,
+    limit: int = 10,
+    min_probability: float = 0.0,
+):
+    """Плоский список лучших рекомендаций для витрины."""
+    selected_lang = _normalize_lang(lang)
+    events = await _get_runtime_events()
+    localized_events = _localize_events(events, selected_lang)
+    prepared_events = _prepare_output_events(
+        events=localized_events,
+        sport_filter=sport,
+        min_quality=0.0,
+        min_probability=min_probability,
+        recommendations_only=True,
+        sort_by="priority",
+        limit=200,
+    )
+
+    recommendations = _collect_top_recommendations(
+        prepared_events,
+        limit=limit,
+        min_probability=min_probability,
+    )
+
+    return {
+        "language": selected_lang,
+        "sport": sport,
+        "total": len(recommendations),
+        "filters": {
+            "min_probability": min_probability,
+            "limit": limit,
+        },
+        "recommendations": recommendations,
     }
 
 

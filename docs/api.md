@@ -98,3 +98,25 @@ python3 scripts/auto_feedback_worker.py \
 - `min_event_quality_score`
 - `max_recommendations_per_event`
 - `max_upcoming_hours`
+
+
+## Event ranking and storefront output
+
+`GET /api/all-events` поддерживает витринные фильтры и ранжирование:
+- `sport` — код вида спорта (например, `football`)
+- `min_quality` — минимальный `quality_score`
+- `min_probability` — минимальная вероятность top-рекомендации
+- `sort_by` — `priority | quality | probability | freshness | time`
+- `limit` — максимум событий
+- `recommendations_only` — только события с рекомендациями
+- `include_top` — включать ли плоский `top_recommendations`
+- `top_limit` — лимит top-рекомендаций
+
+Ответ включает:
+- `events` (с `display_priority`, `top_probability`, `top_recommendation`)
+- `meta` (распределение по видам спорта и средние показатели)
+- `top_recommendations` (готовый список для блока "лучшие ставки")
+
+Отдельный endpoint витрины:
+- `GET /api/recommendations/top` — плоский список лучших рекомендаций
+  - параметры: `lang`, `sport`, `limit`, `min_probability`

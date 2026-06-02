@@ -132,6 +132,38 @@ class TestWidgetApiContract(unittest.TestCase):
         self.assertIn("self_learning", payload)
         self.assertIn("enabled", payload["self_learning"])
 
+    def test_all_events_supports_filters_and_top_recommendations(self):
+        response = self.client.get(
+            "/api/all-events?lang=en&sport=football&min_probability=0.6&sort_by=priority&limit=3"
+        )
+        self.assertEqual(response.status_code, 200)
+
+        payload = response.json()
+        self.assertIn("filters", payload)
+        self.assertIn("meta", payload)
+        self.assertIn("top_recommendations", payload)
+        self.assertLessEqual(payload["total"], 3)
+
+        for event in payload.get("events", []):
+            self.assertEqual(event.get("sport_code"), "football")
+            top_probability = event.get("top_probability")
+            if top_probability is not None:
+                self.assertGreaterEqual(float(top_probability), 0.6)
+
+    def test_top_recommendations_endpoint(self):
+        response = self.client.get("/api/recommendations/top?lang=en&limit=5&min_probability=0.5")
+        self.assertEqual(response.status_code, 200)
+
+        payload = response.json()
+        self.assertIn("recommendations", payload)
+        self.assertLessEqual(payload.get("total", 0), 5)
+
+        for rec in payload.get("recommendations", []):
+            self.assertIn("event_id", rec)
+            self.assertIn("line", rec)
+            self.assertIn("probability", rec)
+            self.assertGreaterEqual(float(rec["probability"]), 0.5)
+
 
 if __name__ == "__main__":
     unittest.main()
