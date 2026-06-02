@@ -810,7 +810,7 @@
           var prob = Math.round((consensus.probability || 0) * 100);
           consensusEl.innerHTML =
             "<strong>" + escapeHtml(consensusLabel(consensus)) + "</strong>" +
-            "<span class="pz-consensus-pill " + readyClass + "">agreement " + Math.round((consensus.agreement || 0) * 100) + "%</span>";
+            "<span class='pz-consensus-pill " + readyClass + "'>agreement " + Math.round((consensus.agreement || 0) * 100) + "%</span>";
         } else {
           consensusEl.textContent = "Донорный консенсус: нет данных по источникам";
         }
