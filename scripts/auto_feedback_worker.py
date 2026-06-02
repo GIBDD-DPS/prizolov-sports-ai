@@ -141,6 +141,7 @@ def _post_feedback(
     timeout: float,
     metadata: Optional[Dict[str, Any]] = None,
     coefficient: Optional[float] = None,
+    closing_coefficient: Optional[float] = None,
 ) -> Dict[str, Any]:
     url = f"{api_base_url.rstrip('/')}/api/learning/feedback"
     payload = {
@@ -150,6 +151,8 @@ def _post_feedback(
     }
     if coefficient is not None and coefficient > 1.0:
         payload["coefficient"] = coefficient
+    if closing_coefficient is not None and closing_coefficient > 1.0:
+        payload["closing_coefficient"] = closing_coefficient
     if isinstance(metadata, dict):
         if metadata.get("event_id"):
             payload["event_id"] = metadata.get("event_id")
@@ -275,6 +278,8 @@ def _collect_pending_predictions(
                 "away": event.get("away"),
                 "score": event.get("score"),
                 "coefficient": rec.get("coefficient"),
+                "opening_coefficient": rec.get("coefficient"),
+                "latest_coefficient": rec.get("coefficient"),
                 "predicted_probability": probability,
                 "first_seen_at": now_iso,
                 "last_seen_at": now_iso,
@@ -283,6 +288,28 @@ def _collect_pending_predictions(
 
     stats["total_pending_created"] = _safe_int(stats.get("total_pending_created"), 0) + created
     return created
+
+
+
+
+def _extract_recommendation_coefficient(event: Dict[str, Any], line: str) -> Optional[float]:
+    recommendations = event.get("recommendations")
+    if not isinstance(recommendations, list):
+        return None
+
+    target = str(line or "").strip()
+    if not target:
+        return None
+
+    for rec in recommendations:
+        if not isinstance(rec, dict):
+            continue
+        if str(rec.get("line") or "").strip() != target:
+            continue
+        coefficient = _safe_float(rec.get("coefficient"), 0.0)
+        if coefficient > 1.0:
+            return coefficient
+    return None
 
 
 def _refresh_pending_scores(state: Dict[str, Any], events_payload: Dict[str, Any]) -> None:
@@ -305,6 +332,9 @@ def _refresh_pending_scores(state: Dict[str, Any], events_payload: Dict[str, Any
         current_event = events_by_id.get(event_id)
         if current_event:
             item["score"] = current_event.get("score")
+            latest_coefficient = _extract_recommendation_coefficient(current_event, str(item.get("line") or ""))
+            if latest_coefficient is not None:
+                item["latest_coefficient"] = latest_coefficient
             item["last_seen_at"] = now_iso
 
 
@@ -412,12 +442,15 @@ def _process_pending_feedback(
             "source": "auto_feedback_worker",
         }
 
-        coefficient = prediction.get("coefficient")
+        opening_coefficient = prediction.get("opening_coefficient", prediction.get("coefficient"))
+        latest_coefficient = prediction.get("latest_coefficient")
         extra_payload: Dict[str, Any] = {}
-        if coefficient is not None:
-            coefficient_value = _safe_float(coefficient, 0.0)
-            if coefficient_value > 1.0:
-                extra_payload["coefficient"] = coefficient_value
+        opening_value = _safe_float(opening_coefficient, 0.0)
+        closing_value = _safe_float(latest_coefficient, 0.0)
+        if opening_value > 1.0:
+            extra_payload["coefficient"] = opening_value
+        if closing_value > 1.0:
+            extra_payload["closing_coefficient"] = closing_value
 
         try:
             response = _post_feedback(
@@ -439,7 +472,7 @@ def _process_pending_feedback(
             logger.warning("Не удалось отправить feedback: %s", exc)
             continue
 
-        sent[key] = {
+        sent_entry = {
             "status": "sent",
             "sent_at": _utcnow_iso(),
             "sport": sport,
@@ -447,8 +480,13 @@ def _process_pending_feedback(
             "predicted_probability": probability,
             "outcome": bool(outcome),
             "outcome_source": outcome_source,
+            "opening_coefficient": opening_value if opening_value > 1.0 else None,
+            "closing_coefficient": closing_value if closing_value > 1.0 else None,
             "api_response_ok": bool(response.get("ok", False)),
         }
+        if opening_value > 1.0 and closing_value > 1.0:
+            sent_entry["clv_delta"] = round(opening_value - closing_value, 5)
+        sent[key] = sent_entry
         to_delete.append(key)
         sent_now += 1
 

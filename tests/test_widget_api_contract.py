@@ -132,10 +132,17 @@ class TestWidgetApiContract(unittest.TestCase):
         self.assertIn("min_recommendation_coefficient", quality)
         self.assertIn("min_recommendation_edge", quality)
         self.assertIn("max_lines_per_market", quality)
+        self.assertIn("max_correlated_lines_per_event", quality)
+        self.assertIn("max_top_recommendations_per_event", quality)
+        self.assertIn("max_bookmaker_odds_age_seconds", quality)
+        self.assertIn("bookmaker_weight_default", quality)
         self.assertIn("adaptive_threshold_enabled", quality)
         self.assertIn("value_only_premium_enabled", quality)
         self.assertIn("value_only_premium_min_edge", quality)
         self.assertIn("value_only_premium_min_bookmakers_support", quality)
+        self.assertIn("self_learning_decay_enabled", quality)
+        self.assertIn("self_learning_decay_half_life_hours", quality)
+        self.assertIn("clv_alert_negative_threshold", quality)
 
         self.assertIn("self_learning", payload)
         self.assertIn("enabled", payload["self_learning"])
@@ -191,6 +198,8 @@ class TestWidgetApiContract(unittest.TestCase):
             self.assertIn("event_id", rec)
             self.assertIn("line", rec)
             self.assertIn("probability", rec)
+            self.assertIn("weighted_bookmakers_support", rec)
+            self.assertIn("edge", rec)
             self.assertGreaterEqual(float(rec["probability"]), float(effective_min_probability))
 
     def test_value_only_premium_mode_filters_lines(self):
@@ -213,8 +222,10 @@ class TestWidgetApiContract(unittest.TestCase):
         for event in payload.get("events", []):
             for rec in event.get("recommendations", []):
                 self.assertTrue(rec.get("is_premium", False))
+                self.assertIn("weighted_bookmakers_support", rec)
+                self.assertIn("no_vig_probability", rec)
                 self.assertGreaterEqual(float(rec.get("edge", 0.0)), min_edge)
-                self.assertGreaterEqual(int(rec.get("bookmakers_support", 0)), min_support)
+                self.assertGreaterEqual(float(rec.get("weighted_bookmakers_support", 0.0)), float(min_support))
 
     def test_state_and_widget_support_value_only_flags(self):
         state_response = self.client.post(
@@ -256,6 +267,7 @@ class TestWidgetApiContract(unittest.TestCase):
                 "predicted_probability": 0.62,
                 "outcome": True,
                 "coefficient": 1.9,
+                "closing_coefficient": 1.75,
                 "event_id": "test_event_1",
                 "line": "H2H: Team A",
                 "source": "unit_test",
@@ -283,6 +295,9 @@ class TestWidgetApiContract(unittest.TestCase):
         self.assertIn("global_brier_score", summary)
         self.assertIn("global_calibration_gap", summary)
         self.assertIn("global_roi_count", summary)
+        self.assertIn("global_clv_avg", summary)
+        self.assertIn("weighted_global_brier_score", summary)
+        self.assertIn("weighted_global_clv_avg", summary)
 
         threshold = payload["quality_threshold"]
         self.assertIn("effective_min_probability", threshold)
@@ -295,6 +310,7 @@ class TestWidgetApiContract(unittest.TestCase):
         self.assertIn("recent", windows)
         self.assertIn("baseline", windows)
         self.assertIn("trend_delta", windows)
+        self.assertIn("clv_avg", windows["recent"])
         self.assertGreaterEqual(windows["recent"].get("samples", 0), 1)
 
         self.assertGreaterEqual(len(payload["alerts"]), 1)
@@ -304,6 +320,8 @@ class TestWidgetApiContract(unittest.TestCase):
         self.assertIn("sport", first)
         self.assertIn("predicted_probability", first)
         self.assertIn("brier_score", first)
+        self.assertIn("clv_delta", first)
+        self.assertIn("closing_coefficient", first)
 
 
     def test_recommendation_extraction_expands_lines_with_quality_constraints(self):
@@ -394,6 +412,9 @@ class TestWidgetApiContract(unittest.TestCase):
             self.assertGreaterEqual(float(rec.get("coefficient", 0.0)), 1.3)
             self.assertIn("selection_tier", rec)
             self.assertIn("bookmakers_support", rec)
+            self.assertIn("weighted_bookmakers_support", rec)
+            self.assertIn("no_vig_probability", rec)
+            self.assertIn("market_overround", rec)
             markets.add(rec.get("market"))
             if float(rec.get("coefficient", 0.0)) >= float(MIN_RECOMMENDATION_COEFFICIENT):
                 strong_lines += 1

@@ -311,11 +311,42 @@ SPORT_LABELS: Dict[str, Dict[str, str]] = {
 }
 
 
+def _load_json_dict_env(env_name: str, default: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    raw = os.environ.get(env_name)
+    if not raw:
+        return dict(default or {})
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        logger.warning("⚠️ Некорректный JSON в %s, используется fallback", env_name)
+        return dict(default or {})
+    if not isinstance(parsed, dict):
+        logger.warning("⚠️ %s должен быть JSON-объектом, используется fallback", env_name)
+        return dict(default or {})
+    return parsed
+
+
+def _coerce_float(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _coerce_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
 SELF_LEARNING_ENABLED = os.environ.get("SELF_LEARNING_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
 SELF_LEARNING_STATE_PATH = os.environ.get("SELF_LEARNING_STATE_PATH", "runtime/self_learning_state.json")
 SELF_LEARNING_MIN_FEEDBACK = int(os.environ.get("SELF_LEARNING_MIN_FEEDBACK", "8"))
 SELF_LEARNING_MAX_FACTOR_SHIFT = float(os.environ.get("SELF_LEARNING_MAX_FACTOR_SHIFT", "0.25"))
 SELF_LEARNING_HISTORY_LIMIT = max(20, int(os.environ.get("SELF_LEARNING_HISTORY_LIMIT", "300")))
+SELF_LEARNING_DECAY_ENABLED = os.environ.get("SELF_LEARNING_DECAY_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+SELF_LEARNING_DECAY_HALF_LIFE_HOURS = max(1.0, float(os.environ.get("SELF_LEARNING_DECAY_HALF_LIFE_HOURS", "168")))
 SELF_LEARNING_STATE: Dict[str, Any] = {
     "updated_at": None,
     "total_feedback": 0,
@@ -338,8 +369,19 @@ MIN_RECOMMENDATION_COEFFICIENT = max(1.01, float(os.environ.get("MIN_RECOMMENDAT
 MIN_RECOMMENDATION_EDGE = max(-0.15, min(0.3, float(os.environ.get("MIN_RECOMMENDATION_EDGE", "0.015"))))
 MAX_RECOMMENDATIONS_PER_EVENT = max(1, int(os.environ.get("MAX_RECOMMENDATIONS_PER_EVENT", "6")))
 MAX_LINES_PER_MARKET = max(1, int(os.environ.get("MAX_LINES_PER_MARKET", "3")))
+MAX_CORRELATED_LINES_PER_EVENT = max(1, int(os.environ.get("MAX_CORRELATED_LINES_PER_EVENT", "2")))
+MAX_TOP_RECOMMENDATIONS_PER_EVENT = max(1, int(os.environ.get("MAX_TOP_RECOMMENDATIONS_PER_EVENT", "2")))
 REAL_EVENTS_MAX_UPCOMING_HOURS = max(1, int(os.environ.get("REAL_EVENTS_MAX_UPCOMING_HOURS", "72")))
 MIN_EVENT_QUALITY_SCORE = min(100.0, max(0.0, float(os.environ.get("MIN_EVENT_QUALITY_SCORE", "42"))))
+MAX_BOOKMAKER_ODDS_AGE_SECONDS = max(60, int(os.environ.get("MAX_BOOKMAKER_ODDS_AGE_SECONDS", "900")))
+BOOKMAKER_WEIGHT_DEFAULT = max(0.1, float(os.environ.get("BOOKMAKER_WEIGHT_DEFAULT", "1.0")))
+BOOKMAKER_WEIGHT_OVERRIDES = {
+    str(name).strip().lower(): max(0.1, _coerce_float(weight, BOOKMAKER_WEIGHT_DEFAULT))
+    for name, weight in _load_json_dict_env("BOOKMAKER_WEIGHT_OVERRIDES", {}).items()
+    if str(name).strip()
+}
+SPORT_MARKET_THRESHOLD_OVERRIDES = _load_json_dict_env("SPORT_MARKET_THRESHOLD_OVERRIDES", {})
+CLV_ALERT_NEGATIVE_THRESHOLD = min(0.0, max(-0.2, float(os.environ.get("CLV_ALERT_NEGATIVE_THRESHOLD", "-0.05"))))
 
 ADAPTIVE_THRESHOLD_ENABLED = os.environ.get("ADAPTIVE_THRESHOLD_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
 ADAPTIVE_THRESHOLD_MIN_FEEDBACK = max(1, int(os.environ.get("ADAPTIVE_THRESHOLD_MIN_FEEDBACK", "20")))
@@ -359,6 +401,7 @@ VALUE_ONLY_PREMIUM_MIN_BOOKMAKERS_SUPPORT = max(
     1,
     int(os.environ.get("VALUE_ONLY_PREMIUM_MIN_BOOKMAKERS_SUPPORT", str(max(2, MIN_BOOKMAKERS_PER_EVENT)))),
 )
+
 
 
 def _normalize_lang(lang: Optional[str]) -> str:
@@ -512,6 +555,13 @@ def _build_readiness_flags() -> Dict[str, Any]:
         "value_only_premium_lines": VALUE_ONLY_PREMIUM_ENABLED,
         "edge_scoring": True,
         "bookmakers_support": True,
+        "weighted_bookmaker_support": True,
+        "no_vig_probability": True,
+        "stale_odds_guard": True,
+        "sport_market_adaptive_thresholds": True,
+        "time_decay_learning": SELF_LEARNING_DECAY_ENABLED,
+        "clv_tracking": True,
+        "correlation_guard": True,
     }
 
 
@@ -552,13 +602,21 @@ def _enrich_recommendation_for_value_mode(
     coefficient = _safe_float(rec.get("coefficient"), 0.0)
     edge = _safe_float(rec.get("edge"), (probability * coefficient) - 1.0)
     bookmakers_support = max(1, _safe_int(rec.get("bookmakers_support"), 1))
+    weighted_bookmakers_support = max(
+        float(bookmakers_support),
+        _safe_float(rec.get("weighted_bookmakers_support"), float(bookmakers_support)),
+    )
+    support_for_premium = max(float(bookmakers_support), weighted_bookmakers_support)
 
     rec["probability"] = round(probability, 4)
     rec["coefficient"] = round(coefficient, 2) if coefficient else coefficient
     rec["edge"] = round(edge, 5)
     rec["bookmakers_support"] = bookmakers_support
+    rec["weighted_bookmakers_support"] = round(weighted_bookmakers_support, 3)
+    rec["no_vig_probability"] = round(_safe_float(rec.get("no_vig_probability"), probability), 5)
+    rec["market_overround"] = rec.get("market_overround")
     rec["value_score"] = round(_safe_float(rec.get("value_score"), _recommendation_strength(probability, coefficient)), 4)
-    rec["is_premium"] = edge >= premium_min_edge and bookmakers_support >= premium_min_bookmakers_support
+    rec["is_premium"] = edge >= premium_min_edge and support_for_premium >= float(premium_min_bookmakers_support)
     if not rec.get("selection_tier"):
         rec["selection_tier"] = "strict" if rec["is_premium"] else "relaxed"
     return rec
@@ -593,7 +651,7 @@ def _apply_value_mode_to_recommendations(
             _safe_float(rec.get("value_score"), 0.0),
             _safe_float(rec.get("edge"), 0.0),
             _safe_float(rec.get("probability"), 0.0),
-            _safe_float(rec.get("bookmakers_support"), 0.0),
+            _safe_float(rec.get("weighted_bookmakers_support"), _safe_float(rec.get("bookmakers_support"), 0.0)),
         ),
         reverse=True,
     )
@@ -679,6 +737,9 @@ def _prepare_output_events(
                 "reasoning": top_recommendation.get("reasoning"),
                 "edge": top_recommendation.get("edge"),
                 "bookmakers_support": top_recommendation.get("bookmakers_support"),
+                "weighted_bookmakers_support": top_recommendation.get("weighted_bookmakers_support"),
+                "no_vig_probability": top_recommendation.get("no_vig_probability"),
+                "market_overround": top_recommendation.get("market_overround"),
                 "is_premium": top_recommendation.get("is_premium"),
             }
             if top_recommendation
@@ -771,6 +832,7 @@ def _collect_top_recommendations(
                     "value_score": rec.get("value_score"),
                     "edge": rec.get("edge"),
                     "bookmakers_support": rec.get("bookmakers_support"),
+                    "weighted_bookmakers_support": rec.get("weighted_bookmakers_support"),
                     "is_premium": rec.get("is_premium", False),
                     "selection_tier": rec.get("selection_tier"),
                     "reasoning": rec.get("reasoning"),
@@ -785,13 +847,27 @@ def _collect_top_recommendations(
             _safe_float(rec.get("value_score"), 0.0),
             _safe_float(rec.get("edge"), 0.0),
             _safe_float(rec.get("probability"), 0.0),
-            _safe_float(rec.get("bookmakers_support"), 0.0),
+            _safe_float(rec.get("weighted_bookmakers_support"), _safe_float(rec.get("bookmakers_support"), 0.0)),
             _safe_float(rec.get("display_priority"), 0.0),
         ),
         reverse=True,
     )
+
     max_limit = max(1, min(100, _safe_int(limit, 10)))
-    return candidates[:max_limit]
+    per_event_cap = max(1, MAX_TOP_RECOMMENDATIONS_PER_EVENT)
+
+    selected: List[Dict[str, Any]] = []
+    event_counts: Dict[str, int] = {}
+    for rec in candidates:
+        event_id = str(rec.get("event_id") or "unknown")
+        if event_counts.get(event_id, 0) >= per_event_cap:
+            continue
+        selected.append(rec)
+        event_counts[event_id] = event_counts.get(event_id, 0) + 1
+        if len(selected) >= max_limit:
+            break
+
+    return selected
 
 
 
@@ -803,8 +879,19 @@ def _default_learning_sport_state() -> Dict[str, Any]:
         "sum_brier_score": 0.0,
         "sum_roi": 0.0,
         "roi_count": 0,
+        "sum_clv": 0.0,
+        "clv_count": 0,
+        "weighted_feedback": 0.0,
+        "weighted_hits": 0.0,
+        "weighted_sum_predicted_probability": 0.0,
+        "weighted_sum_brier_score": 0.0,
+        "weighted_sum_roi": 0.0,
+        "weighted_roi_weight": 0.0,
+        "weighted_sum_clv": 0.0,
+        "weighted_clv_weight": 0.0,
         "last_updated": None,
     }
+
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -887,13 +974,42 @@ def _load_self_learning_state() -> None:
             if not isinstance(stats, dict):
                 continue
             sport_code = _normalize_sport_key(str(sport_key))
+
+            feedback_count = max(0, _safe_int(stats.get("feedback_count"), 0))
+            hits = max(0, _safe_int(stats.get("hits"), 0))
+            sum_pred = max(0.0, _safe_float(stats.get("sum_predicted_probability"), 0.0))
+            sum_brier = max(0.0, _safe_float(stats.get("sum_brier_score"), 0.0))
+            sum_roi = _safe_float(stats.get("sum_roi"), 0.0)
+            roi_count = max(0, _safe_int(stats.get("roi_count"), 0))
+            sum_clv = _safe_float(stats.get("sum_clv"), 0.0)
+            clv_count = max(0, _safe_int(stats.get("clv_count"), 0))
+
+            weighted_feedback = max(0.0, _safe_float(stats.get("weighted_feedback"), float(feedback_count)))
+            weighted_hits = max(0.0, _safe_float(stats.get("weighted_hits"), float(hits)))
+            weighted_sum_pred = max(0.0, _safe_float(stats.get("weighted_sum_predicted_probability"), sum_pred))
+            weighted_sum_brier = max(0.0, _safe_float(stats.get("weighted_sum_brier_score"), sum_brier))
+            weighted_sum_roi = _safe_float(stats.get("weighted_sum_roi"), sum_roi)
+            weighted_roi_weight = max(0.0, _safe_float(stats.get("weighted_roi_weight"), float(roi_count)))
+            weighted_sum_clv = _safe_float(stats.get("weighted_sum_clv"), sum_clv)
+            weighted_clv_weight = max(0.0, _safe_float(stats.get("weighted_clv_weight"), float(clv_count)))
+
             normalized_sports[sport_code] = {
-                "feedback_count": max(0, _safe_int(stats.get("feedback_count"), 0)),
-                "hits": max(0, _safe_int(stats.get("hits"), 0)),
-                "sum_predicted_probability": max(0.0, _safe_float(stats.get("sum_predicted_probability"), 0.0)),
-                "sum_brier_score": max(0.0, _safe_float(stats.get("sum_brier_score"), 0.0)),
-                "sum_roi": _safe_float(stats.get("sum_roi"), 0.0),
-                "roi_count": max(0, _safe_int(stats.get("roi_count"), 0)),
+                "feedback_count": feedback_count,
+                "hits": hits,
+                "sum_predicted_probability": sum_pred,
+                "sum_brier_score": sum_brier,
+                "sum_roi": sum_roi,
+                "roi_count": roi_count,
+                "sum_clv": sum_clv,
+                "clv_count": clv_count,
+                "weighted_feedback": weighted_feedback,
+                "weighted_hits": weighted_hits,
+                "weighted_sum_predicted_probability": weighted_sum_pred,
+                "weighted_sum_brier_score": weighted_sum_brier,
+                "weighted_sum_roi": weighted_sum_roi,
+                "weighted_roi_weight": weighted_roi_weight,
+                "weighted_sum_clv": weighted_sum_clv,
+                "weighted_clv_weight": weighted_clv_weight,
                 "last_updated": stats.get("last_updated"),
             }
 
@@ -911,6 +1027,7 @@ def _load_self_learning_state() -> None:
         SELF_LEARNING_STATE["recent_feedback"] = normalized_recent_feedback
 
 
+
 def _ensure_learning_stats_locked(sport_code: str) -> Dict[str, Any]:
     sport_stats = SELF_LEARNING_STATE.setdefault("sports", {}).get(sport_code)
     if not isinstance(sport_stats, dict):
@@ -920,14 +1037,18 @@ def _ensure_learning_stats_locked(sport_code: str) -> Dict[str, Any]:
 
 
 def _compute_learning_factor_from_stats(stats: Dict[str, Any]) -> float:
-    feedback_count = max(0, _safe_int(stats.get("feedback_count"), 0))
-    if feedback_count < SELF_LEARNING_MIN_FEEDBACK:
+    feedback_weight = max(0.0, _safe_float(stats.get("weighted_feedback"), _safe_float(stats.get("feedback_count"), 0.0)))
+    if feedback_weight < SELF_LEARNING_MIN_FEEDBACK:
         return 1.0
 
-    hits = max(0.0, _safe_float(stats.get("hits"), 0.0))
-    sum_pred = max(0.0, _safe_float(stats.get("sum_predicted_probability"), 0.0))
-    avg_pred = _clamp(sum_pred / max(1, feedback_count), 0.05, 0.95)
-    observed_hit_rate = (hits + 1.5) / (feedback_count + 3.0)
+    hits_weight = max(0.0, _safe_float(stats.get("weighted_hits"), _safe_float(stats.get("hits"), 0.0)))
+    sum_pred_weight = max(
+        0.0,
+        _safe_float(stats.get("weighted_sum_predicted_probability"), _safe_float(stats.get("sum_predicted_probability"), 0.0)),
+    )
+
+    avg_pred = _clamp(sum_pred_weight / max(1e-9, feedback_weight), 0.05, 0.95)
+    observed_hit_rate = (hits_weight + 1.5) / (feedback_weight + 3.0)
 
     raw_factor = observed_hit_rate / max(0.05, avg_pred)
     min_factor = 1.0 - SELF_LEARNING_MAX_FACTOR_SHIFT
@@ -945,6 +1066,17 @@ def _get_learning_meta(sport_code: str) -> Dict[str, Any]:
         sum_brier = max(0.0, _safe_float(stats.get("sum_brier_score"), 0.0))
         sum_roi = _safe_float(stats.get("sum_roi"), 0.0)
         roi_count = max(0, _safe_int(stats.get("roi_count"), 0))
+        sum_clv = _safe_float(stats.get("sum_clv"), 0.0)
+        clv_count = max(0, _safe_int(stats.get("clv_count"), 0))
+
+        weighted_feedback = max(0.0, _safe_float(stats.get("weighted_feedback"), float(feedback_count)))
+        weighted_hits = max(0.0, _safe_float(stats.get("weighted_hits"), float(hits)))
+        weighted_sum_pred = max(0.0, _safe_float(stats.get("weighted_sum_predicted_probability"), sum_pred))
+        weighted_sum_brier = max(0.0, _safe_float(stats.get("weighted_sum_brier_score"), sum_brier))
+        weighted_sum_roi = _safe_float(stats.get("weighted_sum_roi"), sum_roi)
+        weighted_roi_weight = max(0.0, _safe_float(stats.get("weighted_roi_weight"), float(roi_count)))
+        weighted_sum_clv = _safe_float(stats.get("weighted_sum_clv"), sum_clv)
+        weighted_clv_weight = max(0.0, _safe_float(stats.get("weighted_clv_weight"), float(clv_count)))
 
     factor = _compute_learning_factor_from_stats(stats)
     avg_pred = round(sum_pred / feedback_count, 4) if feedback_count else None
@@ -952,6 +1084,18 @@ def _get_learning_meta(sport_code: str) -> Dict[str, Any]:
     brier_score = round(sum_brier / feedback_count, 5) if feedback_count else None
     calibration_gap = round((hit_rate - avg_pred), 5) if (hit_rate is not None and avg_pred is not None) else None
     roi_avg = round(sum_roi / roi_count, 5) if roi_count else None
+    clv_avg = round(sum_clv / clv_count, 5) if clv_count else None
+
+    weighted_hit_rate = round(weighted_hits / weighted_feedback, 5) if weighted_feedback else None
+    weighted_avg_pred = round(weighted_sum_pred / weighted_feedback, 5) if weighted_feedback else None
+    weighted_brier = round(weighted_sum_brier / weighted_feedback, 6) if weighted_feedback else None
+    weighted_roi = round(weighted_sum_roi / weighted_roi_weight, 6) if weighted_roi_weight else None
+    weighted_clv = round(weighted_sum_clv / weighted_clv_weight, 6) if weighted_clv_weight else None
+    weighted_calibration_gap = (
+        round(weighted_hit_rate - weighted_avg_pred, 6)
+        if weighted_hit_rate is not None and weighted_avg_pred is not None
+        else None
+    )
 
     return {
         "sport_code": normalized_sport,
@@ -964,7 +1108,17 @@ def _get_learning_meta(sport_code: str) -> Dict[str, Any]:
         "calibration_gap": calibration_gap,
         "roi_avg": roi_avg,
         "roi_count": roi_count,
+        "clv_avg": clv_avg,
+        "clv_count": clv_count,
+        "weighted_feedback": round(weighted_feedback, 5),
+        "weighted_hit_rate": weighted_hit_rate,
+        "weighted_avg_predicted_probability": weighted_avg_pred,
+        "weighted_brier_score": weighted_brier,
+        "weighted_calibration_gap": weighted_calibration_gap,
+        "weighted_roi_avg": weighted_roi,
+        "weighted_clv_avg": weighted_clv,
     }
+
 
 
 def _apply_learning_to_probability(probability: float, factor: float) -> float:
@@ -992,28 +1146,74 @@ def _record_learning_feedback(
     predicted_probability: float,
     outcome: bool,
     coefficient: Optional[float] = None,
+    closing_coefficient: Optional[float] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     normalized_sport = _normalize_sport_key(sport_code)
-    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    now_dt = datetime.datetime.now(datetime.timezone.utc)
+    now_iso = now_dt.isoformat()
     probability = _normalize_probability(predicted_probability)
     actual = 1.0 if outcome else 0.0
     brier = (probability - actual) ** 2
 
-    coefficient_value = _safe_float(coefficient, 0.0)
+    opening_coefficient = _safe_float(coefficient, 0.0)
+    closing_coefficient_value = _safe_float(closing_coefficient, 0.0)
+
     roi_value: Optional[float] = None
-    if coefficient_value > 1.0:
-        roi_value = (coefficient_value - 1.0) if outcome else -1.0
+    if opening_coefficient > 1.0:
+        roi_value = (opening_coefficient - 1.0) if outcome else -1.0
+
+    clv_delta: Optional[float] = None
+    if opening_coefficient > 1.0 and closing_coefficient_value > 1.0:
+        # Положительное значение означает, что взяли лучший коэффициент до закрытия.
+        clv_delta = opening_coefficient - closing_coefficient_value
+
+    sample_weight = 1.0
 
     with SELF_LEARNING_LOCK:
         stats = _ensure_learning_stats_locked(normalized_sport)
+
+        if SELF_LEARNING_DECAY_ENABLED:
+            last_updated_dt = _parse_iso_datetime(stats.get("last_updated"))
+            if last_updated_dt is not None:
+                if last_updated_dt.tzinfo is None:
+                    last_updated_dt = last_updated_dt.replace(tzinfo=datetime.timezone.utc)
+                elapsed_hours = max(0.0, (now_dt - last_updated_dt).total_seconds() / 3600.0)
+                decay_factor = 0.5 ** (elapsed_hours / max(1.0, SELF_LEARNING_DECAY_HALF_LIFE_HOURS))
+                for field in [
+                    "weighted_feedback",
+                    "weighted_hits",
+                    "weighted_sum_predicted_probability",
+                    "weighted_sum_brier_score",
+                    "weighted_sum_roi",
+                    "weighted_roi_weight",
+                    "weighted_sum_clv",
+                    "weighted_clv_weight",
+                ]:
+                    stats[field] = _safe_float(stats.get(field), 0.0) * decay_factor
+
         stats["feedback_count"] = max(0, _safe_int(stats.get("feedback_count"), 0)) + 1
         stats["hits"] = max(0, _safe_int(stats.get("hits"), 0)) + (1 if outcome else 0)
         stats["sum_predicted_probability"] = max(0.0, _safe_float(stats.get("sum_predicted_probability"), 0.0)) + probability
         stats["sum_brier_score"] = max(0.0, _safe_float(stats.get("sum_brier_score"), 0.0)) + brier
+
+        stats["weighted_feedback"] = max(0.0, _safe_float(stats.get("weighted_feedback"), 0.0)) + sample_weight
+        stats["weighted_hits"] = max(0.0, _safe_float(stats.get("weighted_hits"), 0.0)) + (sample_weight if outcome else 0.0)
+        stats["weighted_sum_predicted_probability"] = max(0.0, _safe_float(stats.get("weighted_sum_predicted_probability"), 0.0)) + (probability * sample_weight)
+        stats["weighted_sum_brier_score"] = max(0.0, _safe_float(stats.get("weighted_sum_brier_score"), 0.0)) + (brier * sample_weight)
+
         if roi_value is not None:
             stats["sum_roi"] = _safe_float(stats.get("sum_roi"), 0.0) + roi_value
             stats["roi_count"] = max(0, _safe_int(stats.get("roi_count"), 0)) + 1
+            stats["weighted_sum_roi"] = _safe_float(stats.get("weighted_sum_roi"), 0.0) + (roi_value * sample_weight)
+            stats["weighted_roi_weight"] = max(0.0, _safe_float(stats.get("weighted_roi_weight"), 0.0)) + sample_weight
+
+        if clv_delta is not None:
+            stats["sum_clv"] = _safe_float(stats.get("sum_clv"), 0.0) + clv_delta
+            stats["clv_count"] = max(0, _safe_int(stats.get("clv_count"), 0)) + 1
+            stats["weighted_sum_clv"] = _safe_float(stats.get("weighted_sum_clv"), 0.0) + (clv_delta * sample_weight)
+            stats["weighted_clv_weight"] = max(0.0, _safe_float(stats.get("weighted_clv_weight"), 0.0)) + sample_weight
+
         stats["last_updated"] = now_iso
 
         recent_feedback = SELF_LEARNING_STATE.setdefault("recent_feedback", [])
@@ -1027,11 +1227,17 @@ def _record_learning_feedback(
             "predicted_probability": round(probability, 4),
             "outcome": bool(outcome),
             "brier_score": round(brier, 6),
+            "sample_weight": round(sample_weight, 6),
         }
-        if coefficient_value > 1.0:
-            entry["coefficient"] = round(coefficient_value, 4)
+        if opening_coefficient > 1.0:
+            entry["coefficient"] = round(opening_coefficient, 4)
         if roi_value is not None:
             entry["roi"] = round(roi_value, 5)
+        if closing_coefficient_value > 1.0:
+            entry["closing_coefficient"] = round(closing_coefficient_value, 4)
+        if clv_delta is not None:
+            entry["clv_delta"] = round(clv_delta, 5)
+
         if isinstance(metadata, dict):
             if metadata.get("event_id"):
                 entry["event_id"] = metadata.get("event_id")
@@ -1052,6 +1258,7 @@ def _record_learning_feedback(
     return _get_learning_meta(normalized_sport)
 
 
+
 def _get_recent_feedback(limit: int = 20) -> List[Dict[str, Any]]:
     max_limit = max(1, min(200, _safe_int(limit, 20)))
     with SELF_LEARNING_LOCK:
@@ -1069,6 +1276,8 @@ def _compute_feedback_metrics(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
     sum_brier = 0.0
     sum_roi = 0.0
     roi_count = 0
+    sum_clv = 0.0
+    clv_count = 0
 
     for entry in entries:
         if not isinstance(entry, dict):
@@ -1086,6 +1295,10 @@ def _compute_feedback_metrics(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
             sum_roi += _safe_float(entry.get("roi"), 0.0)
             roi_count += 1
 
+        if entry.get("clv_delta") is not None:
+            sum_clv += _safe_float(entry.get("clv_delta"), 0.0)
+            clv_count += 1
+
     if samples == 0:
         return {
             "samples": 0,
@@ -1095,6 +1308,8 @@ def _compute_feedback_metrics(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
             "calibration_gap": None,
             "roi_avg": None,
             "roi_count": 0,
+            "clv_avg": None,
+            "clv_count": 0,
         }
 
     hit_rate = hits / samples
@@ -1102,6 +1317,7 @@ def _compute_feedback_metrics(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
     brier_score = sum_brier / samples
     calibration_gap = hit_rate - avg_pred
     roi_avg = (sum_roi / roi_count) if roi_count else None
+    clv_avg = (sum_clv / clv_count) if clv_count else None
 
     return {
         "samples": samples,
@@ -1111,7 +1327,10 @@ def _compute_feedback_metrics(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
         "calibration_gap": round(calibration_gap, 6),
         "roi_avg": round(roi_avg, 6) if roi_avg is not None else None,
         "roi_count": roi_count,
+        "clv_avg": round(clv_avg, 6) if clv_avg is not None else None,
+        "clv_count": clv_count,
     }
+
 
 
 def _compute_learning_windows(
@@ -1147,7 +1366,7 @@ def _compute_learning_windows(
     baseline_metrics = _compute_feedback_metrics(baseline_entries)
 
     trend: Dict[str, Optional[float]] = {}
-    for key in ["hit_rate", "avg_predicted_probability", "brier_score", "calibration_gap", "roi_avg"]:
+    for key in ["hit_rate", "avg_predicted_probability", "brier_score", "calibration_gap", "roi_avg", "clv_avg"]:
         recent_val = recent_metrics.get(key)
         baseline_val = baseline_metrics.get(key)
         if recent_val is None or baseline_val is None:
@@ -1232,6 +1451,25 @@ def _build_learning_alerts(window_metrics: Dict[str, Any], min_samples: int = 10
             }
         )
 
+    recent_clv = recent.get("clv_avg")
+    baseline_clv = baseline.get("clv_avg")
+    if recent_clv is not None and _safe_float(recent_clv) < CLV_ALERT_NEGATIVE_THRESHOLD:
+        alerts.append(
+            {
+                "severity": "med",
+                "code": "clv_negative",
+                "message": f"CLV отрицателен в recent окне: {recent_clv}",
+            }
+        )
+    elif recent_clv is not None and baseline_clv is not None and (_safe_float(recent_clv) - _safe_float(baseline_clv)) < -0.03:
+        alerts.append(
+            {
+                "severity": "med",
+                "code": "clv_drop",
+                "message": f"CLV снизился относительно baseline: {recent_clv} vs {baseline_clv}",
+            }
+        )
+
     if not alerts:
         alerts.append(
             {
@@ -1276,6 +1514,7 @@ def _compute_adaptive_min_probability(status: Optional[Dict[str, Any]] = None) -
     calibration_gap = summary.get("global_calibration_gap")
     roi = summary.get("global_roi_avg")
     hit_rate = summary.get("global_hit_rate")
+    clv = summary.get("global_clv_avg")
 
     threshold = base_threshold
     adjustments: List[Dict[str, Any]] = []
@@ -1318,6 +1557,15 @@ def _compute_adaptive_min_probability(status: Optional[Dict[str, Any]] = None) -
         elif hit_value > 0.62:
             threshold -= 0.01
             adjustments.append({"metric": "hit_rate", "delta": -0.01, "value": round(hit_value, 6), "rule": "high_hit_rate"})
+
+    if clv is not None:
+        clv_value = _safe_float(clv)
+        if clv_value < CLV_ALERT_NEGATIVE_THRESHOLD:
+            threshold += 0.015
+            adjustments.append({"metric": "clv", "delta": 0.015, "value": round(clv_value, 6), "rule": "negative_clv"})
+        elif clv_value > 0.04:
+            threshold -= 0.008
+            adjustments.append({"metric": "clv", "delta": -0.008, "value": round(clv_value, 6), "rule": "positive_clv"})
 
     effective = _clamp(threshold, ADAPTIVE_MIN_PROBABILITY_FLOOR, ADAPTIVE_MIN_PROBABILITY_CEIL)
     return {
@@ -1551,6 +1799,17 @@ def _get_self_learning_status() -> Dict[str, Any]:
     total_sum_brier = 0.0
     total_sum_roi = 0.0
     total_roi_count = 0
+    total_sum_clv = 0.0
+    total_clv_count = 0
+
+    total_weighted_feedback = 0.0
+    total_weighted_hits = 0.0
+    total_weighted_sum_pred = 0.0
+    total_weighted_sum_brier = 0.0
+    total_weighted_sum_roi = 0.0
+    total_weighted_roi_weight = 0.0
+    total_weighted_sum_clv = 0.0
+    total_weighted_clv_weight = 0.0
 
     for sport_code in sorted(sports_raw.keys()):
         meta = _get_learning_meta(sport_code)
@@ -1562,6 +1821,17 @@ def _get_self_learning_status() -> Dict[str, Any]:
         total_sum_brier += max(0.0, _safe_float(stats.get("sum_brier_score"), 0.0))
         total_sum_roi += _safe_float(stats.get("sum_roi"), 0.0)
         total_roi_count += max(0, _safe_int(stats.get("roi_count"), 0))
+        total_sum_clv += _safe_float(stats.get("sum_clv"), 0.0)
+        total_clv_count += max(0, _safe_int(stats.get("clv_count"), 0))
+
+        total_weighted_feedback += max(0.0, _safe_float(stats.get("weighted_feedback"), _safe_float(stats.get("feedback_count"), 0.0)))
+        total_weighted_hits += max(0.0, _safe_float(stats.get("weighted_hits"), _safe_float(stats.get("hits"), 0.0)))
+        total_weighted_sum_pred += max(0.0, _safe_float(stats.get("weighted_sum_predicted_probability"), _safe_float(stats.get("sum_predicted_probability"), 0.0)))
+        total_weighted_sum_brier += max(0.0, _safe_float(stats.get("weighted_sum_brier_score"), _safe_float(stats.get("sum_brier_score"), 0.0)))
+        total_weighted_sum_roi += _safe_float(stats.get("weighted_sum_roi"), _safe_float(stats.get("sum_roi"), 0.0))
+        total_weighted_roi_weight += max(0.0, _safe_float(stats.get("weighted_roi_weight"), _safe_float(stats.get("roi_count"), 0.0)))
+        total_weighted_sum_clv += _safe_float(stats.get("weighted_sum_clv"), _safe_float(stats.get("sum_clv"), 0.0))
+        total_weighted_clv_weight += max(0.0, _safe_float(stats.get("weighted_clv_weight"), _safe_float(stats.get("clv_count"), 0.0)))
 
     global_hit_rate = round(total_hits / total_feedback, 4) if total_feedback else None
     global_avg_predicted = round(total_sum_pred / total_feedback, 4) if total_feedback else None
@@ -1572,6 +1842,18 @@ def _get_self_learning_status() -> Dict[str, Any]:
         else None
     )
     global_roi_avg = round(total_sum_roi / total_roi_count, 6) if total_roi_count else None
+    global_clv_avg = round(total_sum_clv / total_clv_count, 6) if total_clv_count else None
+
+    weighted_global_hit_rate = round(total_weighted_hits / total_weighted_feedback, 6) if total_weighted_feedback else None
+    weighted_global_avg_predicted = round(total_weighted_sum_pred / total_weighted_feedback, 6) if total_weighted_feedback else None
+    weighted_global_brier = round(total_weighted_sum_brier / total_weighted_feedback, 6) if total_weighted_feedback else None
+    weighted_global_calibration_gap = (
+        round(weighted_global_hit_rate - weighted_global_avg_predicted, 6)
+        if weighted_global_hit_rate is not None and weighted_global_avg_predicted is not None
+        else None
+    )
+    weighted_global_roi_avg = round(total_weighted_sum_roi / total_weighted_roi_weight, 6) if total_weighted_roi_weight else None
+    weighted_global_clv_avg = round(total_weighted_sum_clv / total_weighted_clv_weight, 6) if total_weighted_clv_weight else None
 
     return {
         "enabled": SELF_LEARNING_ENABLED,
@@ -1579,6 +1861,8 @@ def _get_self_learning_status() -> Dict[str, Any]:
         "max_factor_shift": SELF_LEARNING_MAX_FACTOR_SHIFT,
         "history_limit": SELF_LEARNING_HISTORY_LIMIT,
         "state_path": SELF_LEARNING_STATE_PATH,
+        "decay_enabled": SELF_LEARNING_DECAY_ENABLED,
+        "decay_half_life_hours": SELF_LEARNING_DECAY_HALF_LIFE_HOURS,
         "total_feedback": total_feedback,
         "updated_at": updated_at,
         "summary": {
@@ -1588,9 +1872,19 @@ def _get_self_learning_status() -> Dict[str, Any]:
             "global_calibration_gap": global_calibration_gap,
             "global_roi_avg": global_roi_avg,
             "global_roi_count": total_roi_count,
+            "global_clv_avg": global_clv_avg,
+            "global_clv_count": total_clv_count,
+            "weighted_global_hit_rate": weighted_global_hit_rate,
+            "weighted_global_avg_predicted_probability": weighted_global_avg_predicted,
+            "weighted_global_brier_score": weighted_global_brier,
+            "weighted_global_calibration_gap": weighted_global_calibration_gap,
+            "weighted_global_roi_avg": weighted_global_roi_avg,
+            "weighted_global_clv_avg": weighted_global_clv_avg,
+            "weighted_feedback": round(total_weighted_feedback, 6),
         },
         "sports": sports,
     }
+
 
 
 def _resolve_odds_api_key() -> Optional[str]:
@@ -1639,27 +1933,162 @@ def _format_event_time(commence_time: Optional[str]) -> str:
 
 
 def _compute_probabilities(outcomes: List[Dict[str, Any]]) -> Dict[str, float]:
-    valid = []
+    valid: List[Dict[str, Any]] = []
     for outcome in outcomes:
+        if not isinstance(outcome, dict):
+            continue
         try:
             price = float(outcome.get("price"))
         except (TypeError, ValueError):
             continue
-        if price > 1.0:
-            valid.append((outcome.get("name") or "Исход", price))
+        if price <= 1.0:
+            continue
+
+        key = _normalize_outcome_key(str(outcome.get("name") or "Исход"), outcome.get("point"))
+        valid.append({"key": key, "price": price})
 
     if not valid:
         return {}
 
-    inv_values = [(name, 1.0 / price) for name, price in valid]
-    inv_sum = sum(val for _, val in inv_values)
+    inv_values = [{"key": item["key"], "inv": 1.0 / item["price"]} for item in valid]
+    inv_sum = sum(item["inv"] for item in inv_values)
     if inv_sum <= 0:
-        return {name: 0.0 for name, _ in valid}
+        return {item["key"]: 0.0 for item in valid}
 
-    probs: Dict[str, float] = {}
-    for name, inv in inv_values:
-        probs[name] = round(min(0.99, max(0.01, inv / inv_sum)), 4)
-    return probs
+    probabilities: Dict[str, float] = {}
+    for item in inv_values:
+        probabilities[item["key"]] = round(min(0.99, max(0.01, item["inv"] / inv_sum)), 4)
+    return probabilities
+
+
+def _compute_market_overround(outcomes: List[Dict[str, Any]]) -> Optional[float]:
+    inv_sum = 0.0
+    valid_count = 0
+    for outcome in outcomes:
+        if not isinstance(outcome, dict):
+            continue
+        try:
+            price = float(outcome.get("price"))
+        except (TypeError, ValueError):
+            continue
+        if price <= 1.0:
+            continue
+        inv_sum += 1.0 / price
+        valid_count += 1
+
+    if valid_count == 0:
+        return None
+    return round(inv_sum - 1.0, 6)
+
+
+def _parse_bookmaker_age_seconds(bookmaker: Dict[str, Any], now_utc: Optional[datetime.datetime]) -> Optional[int]:
+    if not isinstance(bookmaker, dict):
+        return None
+    now_ref = now_utc or datetime.datetime.now(datetime.timezone.utc)
+    updated = _parse_iso_datetime(bookmaker.get("last_update"))
+    if not updated:
+        return None
+    if updated.tzinfo is None:
+        updated = updated.replace(tzinfo=datetime.timezone.utc)
+    return max(0, int((now_ref - updated).total_seconds()))
+
+
+def _is_bookmaker_fresh(bookmaker: Dict[str, Any], now_utc: Optional[datetime.datetime]) -> bool:
+    age_seconds = _parse_bookmaker_age_seconds(bookmaker, now_utc)
+    if age_seconds is None:
+        return True
+    return age_seconds <= MAX_BOOKMAKER_ODDS_AGE_SECONDS
+
+
+def _get_bookmaker_weight(bookmaker_name: str) -> float:
+    normalized = str(bookmaker_name or "").strip().lower()
+    if not normalized:
+        return BOOKMAKER_WEIGHT_DEFAULT
+    return max(0.1, _safe_float(BOOKMAKER_WEIGHT_OVERRIDES.get(normalized), BOOKMAKER_WEIGHT_DEFAULT))
+
+
+def _resolve_market_threshold_overrides(sport: str, market: str) -> Dict[str, float]:
+    sport_key = str(sport or "other").strip().lower()
+    market_key = str(market or "h2h").strip().lower()
+
+    base: Dict[str, Any] = {}
+    nested = SPORT_MARKET_THRESHOLD_OVERRIDES.get(sport_key)
+    if isinstance(nested, dict):
+        market_nested = nested.get(market_key)
+        if isinstance(market_nested, dict):
+            base.update(market_nested)
+
+    direct = SPORT_MARKET_THRESHOLD_OVERRIDES.get(f"{sport_key}:{market_key}")
+    if isinstance(direct, dict):
+        base.update(direct)
+
+    return {
+        "min_probability_delta": _safe_float(base.get("min_probability_delta"), 0.0),
+        "min_coefficient_delta": _safe_float(base.get("min_coefficient_delta"), 0.0),
+        "min_edge_delta": _safe_float(base.get("min_edge_delta"), 0.0),
+    }
+
+
+def _resolve_thresholds_for_sport_market(
+    sport: str,
+    market: str,
+    min_probability_threshold: float,
+) -> Dict[str, float]:
+    strict_probability = max(min_probability_threshold, MIN_RECOMMENDATION_PROBABILITY)
+    strict_coeff = max(1.01, MIN_RECOMMENDATION_COEFFICIENT)
+    strict_edge = MIN_RECOMMENDATION_EDGE
+
+    learning_meta = _get_learning_meta(sport)
+    brier = learning_meta.get("brier_score")
+    roi = learning_meta.get("roi_avg")
+    clv_avg = learning_meta.get("clv_avg")
+
+    if brier is not None:
+        brier_value = _safe_float(brier)
+        if brier_value > 0.24:
+            strict_probability += 0.025
+            strict_edge += 0.01
+        elif brier_value < 0.17:
+            strict_probability -= 0.01
+
+    if roi is not None:
+        roi_value = _safe_float(roi)
+        if roi_value < -0.1:
+            strict_probability += 0.015
+            strict_edge += 0.01
+        elif roi_value > 0.1:
+            strict_probability -= 0.01
+
+    if clv_avg is not None:
+        clv_value = _safe_float(clv_avg)
+        if clv_value < CLV_ALERT_NEGATIVE_THRESHOLD:
+            strict_probability += 0.01
+            strict_edge += 0.005
+        elif clv_value > 0.03:
+            strict_probability -= 0.005
+
+    overrides = _resolve_market_threshold_overrides(sport, market)
+    strict_probability += overrides["min_probability_delta"]
+    strict_coeff += overrides["min_coefficient_delta"]
+    strict_edge += overrides["min_edge_delta"]
+
+    strict_probability = _clamp(strict_probability, 0.01, 0.99)
+    strict_coeff = max(1.01, strict_coeff)
+    strict_edge = _clamp(strict_edge, -0.25, 0.5)
+
+    relaxed_probability = _clamp(max(min_probability_threshold, strict_probability - 0.03), 0.01, 0.99)
+    relaxed_coeff = max(1.2, strict_coeff - 0.2)
+    relaxed_edge = _clamp(strict_edge - 0.05, -0.25, 0.5)
+
+    return {
+        "strict_probability": round(strict_probability, 5),
+        "strict_coefficient": round(strict_coeff, 5),
+        "strict_edge": round(strict_edge, 5),
+        "relaxed_probability": round(relaxed_probability, 5),
+        "relaxed_coefficient": round(relaxed_coeff, 5),
+        "relaxed_edge": round(relaxed_edge, 5),
+    }
+
 
 
 def _extract_bookmaker_count(event: Dict[str, Any]) -> int:
@@ -1789,7 +2218,8 @@ def _build_candidate_from_group(
 ) -> Optional[Dict[str, Any]]:
     probabilities = group.get("probabilities") or []
     odds = group.get("odds") or []
-    bookmakers = group.get("bookmakers") or set()
+    bookmaker_weights = group.get("bookmaker_weights") or {}
+    overrounds = group.get("overrounds") or []
 
     if not probabilities or not odds:
         return None
@@ -1806,13 +2236,25 @@ def _build_candidate_from_group(
     if edge < min_edge_threshold:
         return None
 
-    coverage = len(bookmakers) if isinstance(bookmakers, set) else len(list(bookmakers))
+    if isinstance(bookmaker_weights, dict):
+        coverage = len(bookmaker_weights)
+        weighted_support = sum(max(0.1, _safe_float(weight, BOOKMAKER_WEIGHT_DEFAULT)) for weight in bookmaker_weights.values())
+    else:
+        coverage = len(list(bookmaker_weights))
+        weighted_support = float(coverage)
+
+    if coverage < MIN_BOOKMAKERS_PER_EVENT:
+        return None
+
     market_key = str(group.get("market") or "h2h")
     line = _build_recommendation_line(market_key, str(group.get("outcome_name") or "Исход"), group.get("point"))
 
     score = _recommendation_strength(avg_probability, best_coefficient)
-    # Лёгкий бонус за подтверждение нескольких букмекеров.
-    score += min(0.08, coverage * 0.01)
+    score += min(0.12, weighted_support * 0.015)
+
+    average_overround = None
+    if overrounds:
+        average_overround = round(sum(overrounds) / len(overrounds), 6)
 
     return {
         "league": league,
@@ -1827,28 +2269,53 @@ def _build_candidate_from_group(
         "market": market_key,
         "bookmaker": "consensus",
         "bookmakers_support": coverage,
+        "weighted_bookmakers_support": round(weighted_support, 3),
         "edge": round(edge, 5),
         "value_score": round(score, 4),
         "selection_tier": tier,
+        "no_vig_probability": round(min(0.99, max(0.01, avg_probability)), 5),
+        "market_overround": average_overround,
     }
+
+
+
+def _recommendation_correlation_bucket(candidate: Dict[str, Any]) -> str:
+    market = str(candidate.get("market") or "other").strip().lower()
+    line = str(candidate.get("line") or "").strip().lower()
+
+    side = "other"
+    if any(token in line for token in ["over", "больше"]):
+        side = "over"
+    elif any(token in line for token in ["under", "меньше"]):
+        side = "under"
+    elif any(token in line for token in ["home", "победа 1", " team a"]):
+        side = "home"
+    elif any(token in line for token in ["away", "победа 2", " team b"]):
+        side = "away"
+    elif "draw" in line or "ничья" in line:
+        side = "draw"
+
+    return f"{market}:{side}"
 
 
 def _pick_diversified_recommendations(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not candidates:
         return []
 
-    # Сначала сортируем по ценности и вероятности, потом добираем с диверсификацией рынков.
     ordered = sorted(
         candidates,
         key=lambda item: (
             _safe_float(item.get("value_score"), 0.0),
+            _safe_float(item.get("edge"), 0.0),
             _safe_float(item.get("probability"), 0.0),
+            _safe_float(item.get("weighted_bookmakers_support"), _safe_float(item.get("bookmakers_support"), 0.0)),
             _safe_float(item.get("coefficient"), 0.0),
         ),
         reverse=True,
     )
 
     market_counts: Dict[str, int] = {}
+    correlation_counts: Dict[str, int] = {}
     selected: List[Dict[str, Any]] = []
 
     for candidate in ordered:
@@ -1856,12 +2323,16 @@ def _pick_diversified_recommendations(candidates: List[Dict[str, Any]]) -> List[
         if market_counts.get(market, 0) >= MAX_LINES_PER_MARKET:
             continue
 
+        correlation_bucket = _recommendation_correlation_bucket(candidate)
+        if correlation_counts.get(correlation_bucket, 0) >= MAX_CORRELATED_LINES_PER_EVENT:
+            continue
+
         selected.append(candidate)
         market_counts[market] = market_counts.get(market, 0) + 1
+        correlation_counts[correlation_bucket] = correlation_counts.get(correlation_bucket, 0) + 1
         if len(selected) >= MAX_RECOMMENDATIONS_PER_EVENT:
             break
 
-    # Если из-за диверсификации выбрали меньше, чем нужно — добираем лучшими оставшимися.
     if len(selected) < MAX_RECOMMENDATIONS_PER_EVENT:
         selected_keys = {
             (
@@ -1882,7 +2353,16 @@ def _pick_diversified_recommendations(candidates: List[Dict[str, Any]]) -> List[
     return selected
 
 
-def _extract_recommendations(event: Dict[str, Any], league: str, sport: str, home: str, away: str, min_probability_threshold: float) -> List[Dict[str, Any]]:
+
+def _extract_recommendations(
+    event: Dict[str, Any],
+    league: str,
+    sport: str,
+    home: str,
+    away: str,
+    min_probability_threshold: float,
+    now_utc: Optional[datetime.datetime] = None,
+) -> List[Dict[str, Any]]:
     recommendations: List[Dict[str, Any]] = []
     bookmakers = event.get("bookmakers") or []
 
@@ -1894,7 +2374,11 @@ def _extract_recommendations(event: Dict[str, Any], league: str, sport: str, hom
     for bookmaker in bookmakers:
         if not isinstance(bookmaker, dict):
             continue
+        if not _is_bookmaker_fresh(bookmaker, now_utc):
+            continue
+
         bookmaker_name = str(bookmaker.get("title") or bookmaker.get("key") or "bookmaker")
+        bookmaker_weight = _get_bookmaker_weight(bookmaker_name)
 
         for market in bookmaker.get("markets") or []:
             if not isinstance(market, dict):
@@ -1908,6 +2392,8 @@ def _extract_recommendations(event: Dict[str, Any], league: str, sport: str, hom
                 continue
 
             probabilities = _compute_probabilities(outcomes)
+            market_overround = _compute_market_overround(outcomes)
+
             for outcome in outcomes:
                 if not isinstance(outcome, dict):
                     continue
@@ -1921,7 +2407,8 @@ def _extract_recommendations(event: Dict[str, Any], league: str, sport: str, hom
 
                 outcome_name = str(outcome.get("name") or "Исход")
                 point = outcome.get("point")
-                probability = probabilities.get(outcome_name, round(min(0.99, 1.0 / price), 4))
+                probability_key = _normalize_outcome_key(outcome_name, point)
+                probability = probabilities.get(probability_key, round(min(0.99, 1.0 / price), 4))
                 probability = max(0.01, min(0.99, probability))
 
                 line_key = f"{market_key}:{_normalize_outcome_key(outcome_name, point)}"
@@ -1933,13 +2420,16 @@ def _extract_recommendations(event: Dict[str, Any], league: str, sport: str, hom
                         "point": point,
                         "probabilities": [],
                         "odds": [],
-                        "bookmakers": set(),
+                        "bookmaker_weights": {},
+                        "overrounds": [],
                     },
                 )
 
                 group["probabilities"].append(probability)
                 group["odds"].append(price)
-                group["bookmakers"].add(bookmaker_name)
+                group["bookmaker_weights"][bookmaker_name] = bookmaker_weight
+                if market_overround is not None:
+                    group["overrounds"].append(market_overround)
 
     if not grouped_lines:
         return recommendations
@@ -1947,24 +2437,23 @@ def _extract_recommendations(event: Dict[str, Any], league: str, sport: str, hom
     strict_candidates: List[Dict[str, Any]] = []
     relaxed_candidates: List[Dict[str, Any]] = []
 
-    strict_probability = max(min_probability_threshold, MIN_RECOMMENDATION_PROBABILITY)
-    strict_coeff = max(1.01, MIN_RECOMMENDATION_COEFFICIENT)
-    strict_edge = MIN_RECOMMENDATION_EDGE
-
-    relaxed_probability = max(min_probability_threshold, strict_probability - 0.03)
-    relaxed_coeff = max(1.30, strict_coeff - 0.20)
-    relaxed_edge = max(-0.06, strict_edge - 0.04)
-
     for group in grouped_lines.values():
+        market_key = str(group.get("market") or "h2h")
+        thresholds = _resolve_thresholds_for_sport_market(
+            sport=sport,
+            market=market_key,
+            min_probability_threshold=min_probability_threshold,
+        )
+
         strict_candidate = _build_candidate_from_group(
             group,
             league,
             sport,
             home,
             away,
-            min_probability_threshold=strict_probability,
-            min_coefficient_threshold=strict_coeff,
-            min_edge_threshold=strict_edge,
+            min_probability_threshold=thresholds["strict_probability"],
+            min_coefficient_threshold=thresholds["strict_coefficient"],
+            min_edge_threshold=thresholds["strict_edge"],
             tier="strict",
         )
         if strict_candidate:
@@ -1977,9 +2466,9 @@ def _extract_recommendations(event: Dict[str, Any], league: str, sport: str, hom
             sport,
             home,
             away,
-            min_probability_threshold=relaxed_probability,
-            min_coefficient_threshold=relaxed_coeff,
-            min_edge_threshold=relaxed_edge,
+            min_probability_threshold=thresholds["relaxed_probability"],
+            min_coefficient_threshold=thresholds["relaxed_coefficient"],
+            min_edge_threshold=thresholds["relaxed_edge"],
             tier="relaxed",
         )
         if relaxed_candidate:
@@ -1999,6 +2488,7 @@ def _extract_recommendations(event: Dict[str, Any], league: str, sport: str, hom
             existing_keys.add(key)
 
     return _pick_diversified_recommendations(candidates)
+
 
 
 def _transform_odds_event(event: Dict[str, Any], now_utc: datetime.datetime, min_probability_threshold: float) -> Optional[Dict[str, Any]]:
@@ -2021,7 +2511,15 @@ def _transform_odds_event(event: Dict[str, Any], now_utc: datetime.datetime, min
     if commence_dt and commence_dt <= now_utc:
         status = "LIVE"
 
-    recommendations = _extract_recommendations(event, league, sport, home, away, min_probability_threshold=min_probability_threshold)
+    recommendations = _extract_recommendations(
+        event,
+        league,
+        sport,
+        home,
+        away,
+        min_probability_threshold=min_probability_threshold,
+        now_utc=now_utc,
+    )
     if not recommendations:
         return None
 
@@ -2622,6 +3120,12 @@ async def source_status(refresh: bool = False):
             "min_recommendation_coefficient": MIN_RECOMMENDATION_COEFFICIENT,
             "min_recommendation_edge": MIN_RECOMMENDATION_EDGE,
             "max_lines_per_market": MAX_LINES_PER_MARKET,
+            "max_correlated_lines_per_event": MAX_CORRELATED_LINES_PER_EVENT,
+            "max_top_recommendations_per_event": MAX_TOP_RECOMMENDATIONS_PER_EVENT,
+            "max_bookmaker_odds_age_seconds": MAX_BOOKMAKER_ODDS_AGE_SECONDS,
+            "bookmaker_weight_default": BOOKMAKER_WEIGHT_DEFAULT,
+            "bookmaker_weight_overrides_count": len(BOOKMAKER_WEIGHT_OVERRIDES),
+            "sport_market_threshold_overrides_count": len(SPORT_MARKET_THRESHOLD_OVERRIDES),
             "effective_min_recommendation_probability": REAL_SOURCE_STATUS.get("adaptive_min_probability") or MIN_RECOMMENDATION_PROBABILITY,
             "adaptive_threshold_enabled": ADAPTIVE_THRESHOLD_ENABLED,
             "adaptive_threshold_min_feedback": ADAPTIVE_THRESHOLD_MIN_FEEDBACK,
@@ -2633,6 +3137,9 @@ async def source_status(refresh: bool = False):
             "value_only_premium_enabled": VALUE_ONLY_PREMIUM_ENABLED,
             "value_only_premium_min_edge": VALUE_ONLY_PREMIUM_MIN_EDGE,
             "value_only_premium_min_bookmakers_support": VALUE_ONLY_PREMIUM_MIN_BOOKMAKERS_SUPPORT,
+            "self_learning_decay_enabled": SELF_LEARNING_DECAY_ENABLED,
+            "self_learning_decay_half_life_hours": SELF_LEARNING_DECAY_HALF_LIFE_HOURS,
+            "clv_alert_negative_threshold": CLV_ALERT_NEGATIVE_THRESHOLD,
         },
         "self_learning": {
             "enabled": SELF_LEARNING_ENABLED,
@@ -2731,6 +3238,14 @@ async def post_learning_feedback(request: Request = None):
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="invalid_coefficient")
 
+    closing_coefficient: Optional[float] = None
+    closing_coefficient_raw = payload.get("closing_coefficient")
+    if closing_coefficient_raw is not None:
+        try:
+            closing_coefficient = float(closing_coefficient_raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="invalid_closing_coefficient")
+
     metadata = {
         "event_id": payload.get("event_id"),
         "line": payload.get("line"),
@@ -2742,6 +3257,7 @@ async def post_learning_feedback(request: Request = None):
         predicted_probability=predicted_probability,
         outcome=outcome,
         coefficient=coefficient,
+        closing_coefficient=closing_coefficient,
         metadata=metadata,
     )
     return {
@@ -2855,6 +3371,9 @@ def _build_state_response(
             "coefficient": rec.get("coefficient", 1.5),
             "edge": rec.get("edge"),
             "bookmakers_support": rec.get("bookmakers_support"),
+            "weighted_bookmakers_support": rec.get("weighted_bookmakers_support"),
+            "no_vig_probability": rec.get("no_vig_probability"),
+            "market_overround": rec.get("market_overround"),
             "is_premium": rec.get("is_premium", False),
             "selection_tier": rec.get("selection_tier"),
             "value_score": rec.get("value_score"),

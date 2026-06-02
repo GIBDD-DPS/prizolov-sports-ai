@@ -53,6 +53,7 @@ GET /models/status — статус загруженных моделей
   "predicted_probability": 0.63,
   "outcome": true,
   "coefficient": 1.9,
+  "closing_coefficient": 1.82,
   "event_id": "match_123",
   "line": "H2H: Team A",
   "source": "auto_feedback_worker"
@@ -67,6 +68,7 @@ GET /models/status — статус загруженных моделей
 - запрашивает события из `/api/all-events`;
 - сохраняет рекомендации в локальный state (`runtime/auto_feedback_worker_state.json`);
 - после задержки `--settle-seconds` пытается определить исход для `H2H` по score и отправляет в `/api/learning/feedback`;
+- для CLV отправляет пару `coefficient` (opening) + `closing_coefficient` (последняя доступная линия);
 - перед отправкой делает preflight `GET /api/learning/status`, чтобы не спамить ошибками, если learning endpoint еще не задеплоен;
 - при флаге `--bootstrap-when-unresolved` может отправлять bootstrap feedback, если score-резолв недоступен.
 
@@ -103,6 +105,12 @@ python3 scripts/auto_feedback_worker.py \
 - `min_recommendation_coefficient`
 - `min_recommendation_edge`
 - `max_lines_per_market`
+- `max_correlated_lines_per_event`
+- `max_top_recommendations_per_event`
+- `max_bookmaker_odds_age_seconds`
+- `bookmaker_weight_default`
+- `bookmaker_weight_overrides_count`
+- `sport_market_threshold_overrides_count`
 - `effective_min_recommendation_probability`
 - `adaptive_threshold_enabled`
 - `adaptive_threshold_min_feedback`
@@ -112,6 +120,9 @@ python3 scripts/auto_feedback_worker.py \
 - `value_only_premium_enabled`
 - `value_only_premium_min_edge`
 - `value_only_premium_min_bookmakers_support`
+- `self_learning_decay_enabled`
+- `self_learning_decay_half_life_hours`
+- `clv_alert_negative_threshold`
 
 
 ## Event ranking and storefront output
@@ -133,6 +144,7 @@ python3 scripts/auto_feedback_worker.py \
 
 Ответ включает:
 - `events` (с `display_priority`, `top_probability`, `top_recommendation`)
+  - рекомендации включают `weighted_bookmakers_support`, `no_vig_probability`, `market_overround`
 - `meta` (распределение по видам спорта и средние показатели)
 - `top_recommendations` (готовый список для блока "лучшие ставки")
 - `filters.requested` / `filters.effective` (что запросил клиент и что применилось с учетом adaptive policy)
@@ -144,7 +156,7 @@ python3 scripts/auto_feedback_worker.py \
 Отдельный endpoint витрины:
 - `GET /api/recommendations/top` — плоский список лучших рекомендаций
   - параметры: `lang`, `sport`, `limit`, `min_probability`, `policy_mode`, `adaptive_policy`, `premium_only`, `premium_min_edge`, `premium_min_bookmakers_support`
-  - каждая рекомендация включает `edge`, `bookmakers_support`, `is_premium`, `selection_tier`
+  - каждая рекомендация включает `edge`, `bookmakers_support`, `weighted_bookmakers_support`, `no_vig_probability`, `market_overround`, `is_premium`, `selection_tier`
 
 
 Value-only premium lines режим:
@@ -152,6 +164,16 @@ Value-only premium lines режим:
 - включается через `premium_only=true`
 - настраивается параметрами `premium_min_edge` и `premium_min_bookmakers_support`
 - в ответах возвращаются `filters.value_only` и `readiness_flags` для безопасного frontend-rollout
+
+
+Быстрые/средние/продвинутые улучшения в рантайме:
+- no-vig вероятности считаются на уровне маркетов (учет overround)
+- stale-guard отбрасывает устаревшие котировки (`max_bookmaker_odds_age_seconds`)
+- поддержка букмекеров учитывает веса (`weighted_bookmakers_support`)
+- пороги рекомендаций адаптируются по спорту/рынку (`SPORT_MARKET_THRESHOLD_OVERRIDES`)
+- self-learning поддерживает time-decay веса (`SELF_LEARNING_DECAY_*`)
+- CLV (opening vs closing) собирается и попадает в learning/metrics
+- correlation-guard ограничивает число сильно связанных линий на событие
 
 
 Параметры `GET /api/learning/metrics`:
@@ -162,8 +184,8 @@ Value-only premium lines режим:
 
 Ответ включает блоки:
 - `quality_threshold` (базовый и эффективный порог вероятности с адаптацией по метрикам)
-- `windows` (`recent`, `baseline`, `trend_delta`)
-- `alerts` (сигналы стабильности/деградации качества)
+- `windows` (`recent`, `baseline`, `trend_delta`) включая `clv_avg`
+- `alerts` (сигналы стабильности/деградации качества, включая CLV)
 
 
 Адаптивный порог рекомендаций (runtime):
