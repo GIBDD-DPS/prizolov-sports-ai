@@ -217,3 +217,33 @@ Value-only premium lines режим:
 - рекомендации агрегируются по нескольким букмекерам и рынкам (`h2h`, `totals`, `spreads`),
 - отбор приоритизирует линии с высокой проходимостью и высоким коэффициентом,
 - поддерживается диверсификация по рынкам (`max_lines_per_market`) и увеличенный лимит `max_recommendations_per_event`.
+
+
+## External donor consensus (real connectors)
+
+### New endpoints
+
+- `GET /api/consensus/top` - top consensus picks from external donors.
+- `GET /api/donors/status` - donor catalog/connectors health and runtime stats.
+
+### Storefront integration
+
+`GET /api/all-events` now supports and returns donor consensus fields:
+
+Query params:
+- `include_consensus` (bool, default `true`)
+- `min_consensus_sources` (int, default from env)
+
+Response additions:
+- `events[].external_consensus`
+- `consensus_top[]`
+- `external_donors` summary
+
+### Connector env variables
+
+- `EXTERNAL_DONOR_JSON_FEEDS` - JSON feeds with structured predictions
+- `EXTERNAL_DONOR_RSS_FEEDS` - RSS/Atom feeds
+- `EXTERNAL_DONOR_TEXT_FEEDS` - plain-text or JSON message feeds
+- `EXTERNAL_DONOR_ENABLE_SYNTHETIC` - keep synthetic fallback on/off
+- `EXTERNAL_DONOR_HTTP_TIMEOUT_SECONDS`, `EXTERNAL_DONOR_HTTP_MAX_BODY_BYTES`
+- `EXTERNAL_DONOR_RSS_ITEM_LIMIT`, `EXTERNAL_DONOR_TEXT_ITEM_LIMIT`

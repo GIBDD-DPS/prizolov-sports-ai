@@ -53,3 +53,30 @@ bash scripts/quality_profile_presets.sh balanced > runtime/quality_profile.env
 ```bash
 bash scripts/quality_profile_presets.sh balanced
 ```
+
+
+## External donor connectors (production)
+
+For larger donor coverage, configure feed lists in env (JSON arrays):
+
+- `EXTERNAL_DONOR_JSON_FEEDS`
+- `EXTERNAL_DONOR_RSS_FEEDS`
+- `EXTERNAL_DONOR_TEXT_FEEDS`
+
+Recommended baseline:
+
+```env
+EXTERNAL_CONSENSUS_ENABLED=true
+EXTERNAL_CONSENSUS_MIN_SOURCES=3
+EXTERNAL_DONOR_ENABLE_SYNTHETIC=true
+EXTERNAL_DONOR_SIGNAL_LIMIT_PER_EVENT=10
+EXTERNAL_DONOR_HTTP_TIMEOUT_SECONDS=5
+EXTERNAL_DONOR_HTTP_MAX_BODY_BYTES=850000
+EXTERNAL_DONOR_RSS_ITEM_LIMIT=50
+EXTERNAL_DONOR_TEXT_ITEM_LIMIT=60
+```
+
+After deploy, verify:
+- `GET /api/donors/status`
+- `GET /api/source-status` (quality + external donor runtime)
+- `GET /api/consensus/top`

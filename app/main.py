@@ -8,6 +8,7 @@
 import copy
 import datetime
 import hashlib
+import html
 import json
 import logging
 import os
@@ -17,6 +18,7 @@ import re
 import sys
 import threading
 import time
+import xml.etree.ElementTree as ET
 from typing import Any, Dict, List, Optional, Tuple
 from urllib import request as urllib_request
 from urllib.error import HTTPError, URLError
@@ -67,6 +69,13 @@ EXTERNAL_CONSENSUS_ENABLED = os.getenv("EXTERNAL_CONSENSUS_ENABLED", "true").str
 EXTERNAL_DONOR_RANDOM_SEED = os.getenv("EXTERNAL_DONOR_RANDOM_SEED", "prizolov-donor-seed")
 EXTERNAL_DONOR_CATALOG_EXTRA_JSON = os.getenv("EXTERNAL_DONOR_CATALOG_EXTRA_JSON", "")
 EXTERNAL_DONOR_JSON_FEEDS = os.getenv("EXTERNAL_DONOR_JSON_FEEDS", "")
+EXTERNAL_DONOR_RSS_FEEDS = os.getenv("EXTERNAL_DONOR_RSS_FEEDS", "")
+EXTERNAL_DONOR_TEXT_FEEDS = os.getenv("EXTERNAL_DONOR_TEXT_FEEDS", "")
+EXTERNAL_DONOR_HTTP_TIMEOUT_SECONDS = int(os.getenv("EXTERNAL_DONOR_HTTP_TIMEOUT_SECONDS", "5"))
+EXTERNAL_DONOR_HTTP_MAX_BODY_BYTES = int(os.getenv("EXTERNAL_DONOR_HTTP_MAX_BODY_BYTES", "850000"))
+EXTERNAL_DONOR_RSS_ITEM_LIMIT = int(os.getenv("EXTERNAL_DONOR_RSS_ITEM_LIMIT", "50"))
+EXTERNAL_DONOR_TEXT_ITEM_LIMIT = int(os.getenv("EXTERNAL_DONOR_TEXT_ITEM_LIMIT", "60"))
+EXTERNAL_DONOR_ENABLE_SYNTHETIC = os.getenv("EXTERNAL_DONOR_ENABLE_SYNTHETIC", "true").strip().lower() in {"1", "true", "yes", "on"}
 EXTERNAL_DONOR_SIGNAL_LIMIT_PER_EVENT = int(os.getenv("EXTERNAL_DONOR_SIGNAL_LIMIT_PER_EVENT", "10"))
 
 MAX_ODDS_AGE_SECONDS = int(os.getenv("MAX_ODDS_AGE_SECONDS", "900"))  # 15 минут
@@ -608,14 +617,14 @@ def _donor_noise(seed: str, min_value: float, max_value: float) -> float:
     return min_value + span * ratio
 
 
-def _parse_external_feed_sources() -> List[Dict[str, Any]]:
-    if not EXTERNAL_DONOR_JSON_FEEDS.strip():
+def _parse_feed_sources_env(raw_env: str, fallback_prefix: str, channel: str) -> List[Dict[str, Any]]:
+    if not raw_env.strip():
         return []
 
     try:
-        payload = json.loads(EXTERNAL_DONOR_JSON_FEEDS)
+        payload = json.loads(raw_env)
     except Exception:
-        logger.warning("⚠️ Failed to parse EXTERNAL_DONOR_JSON_FEEDS")
+        logger.warning(f"⚠️ Failed to parse {fallback_prefix} feed configuration")
         return []
 
     if isinstance(payload, str):
@@ -629,19 +638,210 @@ def _parse_external_feed_sources() -> List[Dict[str, Any]]:
             item = {"url": item}
         if not isinstance(item, dict):
             continue
+
         url = str(item.get("url") or "").strip()
         if not url:
             continue
-        donor_id = _slugify_text(str(item.get("donor_id") or f"json-feed-{idx+1}"))
+
+        donor_id = _slugify_text(str(item.get("donor_id") or f"{fallback_prefix}-{idx+1}"))
         feeds.append(
             {
                 "url": url,
                 "donor_id": donor_id,
                 "donor_name": str(item.get("donor_name") or donor_id),
+                "channel": str(item.get("channel") or channel),
                 "weight": _coerce_float(item.get("weight"), 1.0, minimum=0.2, maximum=3.0),
+                "sport": str(item.get("sport") or "").strip().lower() or None,
             }
         )
     return feeds
+
+
+def _parse_external_feed_sources() -> List[Dict[str, Any]]:
+    return _parse_feed_sources_env(EXTERNAL_DONOR_JSON_FEEDS, "json-feed", "json-feed")
+
+
+def _parse_external_rss_sources() -> List[Dict[str, Any]]:
+    return _parse_feed_sources_env(EXTERNAL_DONOR_RSS_FEEDS, "rss-feed", "rss")
+
+
+def _parse_external_text_sources() -> List[Dict[str, Any]]:
+    return _parse_feed_sources_env(EXTERNAL_DONOR_TEXT_FEEDS, "text-feed", "text-feed")
+
+
+def _fetch_external_feed_content(url: str) -> Optional[str]:
+    try:
+        req = urllib_request.Request(
+            url,
+            headers={
+                "User-Agent": "PrizolovDonorCollector/1.0",
+                "Accept": "application/json, application/rss+xml, application/xml, text/plain, */*",
+            },
+        )
+        with urllib_request.urlopen(req, timeout=EXTERNAL_DONOR_HTTP_TIMEOUT_SECONDS) as response:
+            payload = response.read(EXTERNAL_DONOR_HTTP_MAX_BODY_BYTES + 1)
+            if len(payload) > EXTERNAL_DONOR_HTTP_MAX_BODY_BYTES:
+                payload = payload[:EXTERNAL_DONOR_HTTP_MAX_BODY_BYTES]
+            charset = None
+            try:
+                charset = response.headers.get_content_charset()
+            except Exception:
+                charset = None
+        return payload.decode(charset or "utf-8", errors="ignore")
+    except (URLError, HTTPError, TimeoutError, ValueError):
+        return None
+    except Exception:
+        return None
+
+
+def _build_event_lookup(events_by_key: Dict[str, Dict[str, Any]]) -> List[Tuple[str, Dict[str, Any], str, str, str]]:
+    lookup: List[Tuple[str, Dict[str, Any], str, str, str]] = []
+    for key, event in events_by_key.items():
+        home_norm = _normalize_team_name(event.get("home", ""))
+        away_norm = _normalize_team_name(event.get("away", ""))
+        sport_norm = str(event.get("sport", "")).strip().lower()
+        if home_norm and away_norm:
+            lookup.append((key, event, home_norm, away_norm, sport_norm))
+    return lookup
+
+
+def _best_event_match_for_text(
+    text: str,
+    event_lookup: List[Tuple[str, Dict[str, Any], str, str, str]],
+    sport_hint: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    norm_text = _normalize_team_name(text)
+    if not norm_text:
+        return None, None
+
+    best_key: Optional[str] = None
+    best_event: Optional[Dict[str, Any]] = None
+    best_score = -1.0
+    sport_hint_norm = str(sport_hint or "").strip().lower()
+
+    for key, event, home_norm, away_norm, sport_norm in event_lookup:
+        score = 0.0
+        if home_norm in norm_text:
+            score += 1.0
+        if away_norm in norm_text:
+            score += 1.0
+        if score < 2.0:
+            continue
+        if sport_hint_norm and sport_norm and sport_norm == sport_hint_norm:
+            score += 0.25
+        if score > best_score:
+            best_score = score
+            best_key = key
+            best_event = event
+
+    return best_key, best_event
+
+
+def _extract_probability_from_text(text: str) -> Optional[float]:
+    patterns = [
+        r"(?:probability|prob|вероятн(?:ость|ости)?|проходим(?:ость|остью)?)\s*[:=]?\s*(\d{1,3}(?:[\.,]\d+)?)\s*%?",
+        r"(\d{1,3}(?:[\.,]\d+)?)\s*%",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        raw = match.group(1).replace(",", ".")
+        try:
+            value = float(raw)
+        except ValueError:
+            continue
+        if value > 1.0:
+            value /= 100.0
+        return _coerce_float(value, 0.0, minimum=0.01, maximum=0.99)
+    return None
+
+
+def _extract_coefficient_from_text(text: str) -> Optional[float]:
+    patterns = [
+        r"(?:odds?|коэф(?:фициент)?)\s*[:=]?\s*(\d{1,2}(?:[\.,]\d{1,2})?)",
+        r"(?:k|к)\s*[:=]\s*(\d{1,2}(?:[\.,]\d{1,2})?)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        raw = match.group(1).replace(",", ".")
+        try:
+            value = float(raw)
+        except ValueError:
+            continue
+        return _coerce_float(value, 1.5, minimum=1.01, maximum=50.0)
+    return None
+
+
+def _extract_line_from_text(text: str) -> Optional[str]:
+    probes = [
+        "тотал больше",
+        "тотал меньше",
+        "обе забьют",
+        "победа 1",
+        "победа 2",
+        "фора",
+        "double chance",
+        "moneyline",
+        "draw no bet",
+    ]
+    text_norm = text.lower()
+    for probe in probes:
+        idx = text_norm.find(probe)
+        if idx == -1:
+            continue
+        snippet = text[idx: idx + 96].strip()
+        snippet = re.split(r"[\n\r\|]", snippet)[0].strip()
+        if snippet:
+            return snippet[:96]
+
+    pieces = [part.strip() for part in re.split(r"[\n\r]+", text) if part.strip()]
+    if pieces:
+        return pieces[0][:96]
+    return None
+
+
+def _event_fallback_pick(event: Dict[str, Any], donor_seed: str) -> Tuple[str, float, float]:
+    rec_pool = event.get("all_recommendations") or event.get("recommendations") or []
+    if rec_pool:
+        idx = int(_donor_noise(donor_seed + ":pick", 0, max(0, len(rec_pool) - 1)))
+        rec = rec_pool[idx]
+        line = str(rec.get("line") or "Исход")
+        prob = _coerce_float(rec.get("adjusted_probability", rec.get("probability", 0.62)), 0.62, minimum=0.02, maximum=0.99)
+        coef = _coerce_float(rec.get("coefficient"), 1.7, minimum=1.01, maximum=50.0)
+        return line, prob, coef
+    return "Исход", 0.62, 1.7
+
+
+def _build_external_signal(
+    *,
+    event: Dict[str, Any],
+    event_key: str,
+    line: str,
+    probability: float,
+    coefficient: float,
+    source_id: str,
+    source_name: str,
+    source_channel: str,
+    source_weight: float,
+    source_url: Optional[str],
+    captured_at: str,
+) -> Dict[str, Any]:
+    return {
+        "event_id": event.get("id"),
+        "event_key": event_key,
+        "line": line,
+        "probability": round(_coerce_float(probability, 0.0, minimum=0.0, maximum=1.0), 4),
+        "coefficient": round(_coerce_float(coefficient, 1.01, minimum=1.01, maximum=50.0), 2),
+        "source_id": source_id,
+        "source_name": source_name,
+        "source_channel": source_channel,
+        "source_weight": _coerce_float(source_weight, 1.0, minimum=0.1, maximum=5.0),
+        "captured_at": captured_at,
+        "source_url": source_url,
+    }
 
 
 def _load_json_feed_signals(events_by_key: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -649,52 +849,212 @@ def _load_json_feed_signals(events_by_key: Dict[str, Dict[str, Any]]) -> List[Di
     if not feeds:
         return []
 
+    event_lookup = _build_event_lookup(events_by_key)
     signals: List[Dict[str, Any]] = []
     now_iso = _now_utc().isoformat()
 
     for feed in feeds:
-        url = feed["url"]
-        try:
-            with urllib_request.urlopen(url, timeout=4) as response:
-                raw = response.read().decode("utf-8", errors="ignore")
-            payload = json.loads(raw)
-        except (URLError, HTTPError, TimeoutError, json.JSONDecodeError, ValueError):
+        raw = _fetch_external_feed_content(feed["url"])
+        if not raw:
             continue
+
+        try:
+            payload = json.loads(raw)
         except Exception:
             continue
 
-        records = payload.get("predictions") if isinstance(payload, dict) else payload
+        if isinstance(payload, dict):
+            records = payload.get("predictions") or payload.get("items") or payload.get("data") or payload.get("messages") or []
+        else:
+            records = payload
         if not isinstance(records, list):
             continue
 
-        for rec in records:
+        for rec in records[:EXTERNAL_DONOR_TEXT_ITEM_LIMIT]:
             if not isinstance(rec, dict):
                 continue
-            event_key = "|".join([
-                _normalize_team_name(rec.get("home", "")),
-                _normalize_team_name(rec.get("away", "")),
-                str(rec.get("sport", "unknown")).lower(),
-            ])
+
+            event_key = "|".join(
+                [
+                    _normalize_team_name(rec.get("home", "")),
+                    _normalize_team_name(rec.get("away", "")),
+                    str(rec.get("sport", feed.get("sport") or "unknown")).lower(),
+                ]
+            )
             event = events_by_key.get(event_key)
-            if not event:
+
+            if event is None:
+                rec_text = " ".join(
+                    [
+                        str(rec.get("title") or ""),
+                        str(rec.get("text") or ""),
+                        str(rec.get("description") or ""),
+                    ]
+                )
+                event_key, event = _best_event_match_for_text(rec_text, event_lookup, sport_hint=rec.get("sport") or feed.get("sport"))
+                if event is None or event_key is None:
+                    continue
+
+            line_fb, prob_fb, coef_fb = _event_fallback_pick(event, f"{feed['donor_id']}:{event.get('id')}")
+            line = str(rec.get("line") or rec.get("market") or rec.get("tip") or _extract_line_from_text(str(rec.get("text") or "")) or line_fb)
+            probability = _coerce_float(
+                rec.get("probability", rec.get("prob", rec.get("passability", _extract_probability_from_text(str(rec.get("text") or "")) or prob_fb))),
+                prob_fb,
+                minimum=0.02,
+                maximum=0.99,
+            )
+            coefficient = _coerce_float(
+                rec.get("coefficient", rec.get("odds", _extract_coefficient_from_text(str(rec.get("text") or "")) or coef_fb)),
+                coef_fb,
+                minimum=1.01,
+                maximum=50.0,
+            )
+
+            signals.append(
+                _build_external_signal(
+                    event=event,
+                    event_key=event_key,
+                    line=line,
+                    probability=probability,
+                    coefficient=coefficient,
+                    source_id=str(rec.get("source_id") or feed["donor_id"]),
+                    source_name=str(rec.get("source_name") or feed["donor_name"]),
+                    source_channel=str(rec.get("source_channel") or feed["channel"]),
+                    source_weight=_coerce_float(rec.get("source_weight"), feed["weight"], minimum=0.2, maximum=3.0),
+                    source_url=str(rec.get("source_url") or feed["url"]),
+                    captured_at=now_iso,
+                )
+            )
+
+    return signals
+
+
+def _load_rss_feed_signals(events_by_key: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    feeds = _parse_external_rss_sources()
+    if not feeds:
+        return []
+
+    event_lookup = _build_event_lookup(events_by_key)
+    signals: List[Dict[str, Any]] = []
+    now_iso = _now_utc().isoformat()
+
+    atom_ns = "{http://www.w3.org/2005/Atom}"
+    for feed in feeds:
+        raw = _fetch_external_feed_content(feed["url"])
+        if not raw:
+            continue
+
+        try:
+            root = ET.fromstring(raw)
+        except ET.ParseError:
+            continue
+
+        items = list(root.findall(".//item"))
+        if not items:
+            items = list(root.findall(f".//{atom_ns}entry"))
+
+        for item in items[:EXTERNAL_DONOR_RSS_ITEM_LIMIT]:
+            title = item.findtext("title") or item.findtext(f"{atom_ns}title") or ""
+            description = (
+                item.findtext("description")
+                or item.findtext("summary")
+                or item.findtext(f"{atom_ns}summary")
+                or item.findtext(f"{atom_ns}content")
+                or ""
+            )
+            link = item.findtext("link") or item.findtext(f"{atom_ns}link") or feed["url"]
+
+            text_blob = html.unescape(f"{title} {description}")
+            event_key, event = _best_event_match_for_text(text_blob, event_lookup, sport_hint=feed.get("sport"))
+            if event is None or event_key is None:
                 continue
 
-            probability = _coerce_float(rec.get("probability"), 0.0, minimum=0.0, maximum=1.0)
-            coefficient = _coerce_float(rec.get("coefficient"), 1.01, minimum=1.01, maximum=50.0)
+            line_fb, prob_fb, coef_fb = _event_fallback_pick(event, f"rss:{feed['donor_id']}:{event.get('id')}")
+            line = _extract_line_from_text(text_blob) or line_fb
+            probability = _extract_probability_from_text(text_blob) or prob_fb
+            coefficient = _extract_coefficient_from_text(text_blob) or coef_fb
+
             signals.append(
-                {
-                    "event_id": event.get("id"),
-                    "event_key": event_key,
-                    "line": str(rec.get("line") or "Исход"),
-                    "probability": round(probability, 4),
-                    "coefficient": round(coefficient, 2),
-                    "source_id": feed["donor_id"],
-                    "source_name": feed["donor_name"],
-                    "source_channel": "json-feed",
-                    "source_weight": feed["weight"],
-                    "captured_at": now_iso,
-                    "source_url": url,
-                }
+                _build_external_signal(
+                    event=event,
+                    event_key=event_key,
+                    line=line,
+                    probability=probability,
+                    coefficient=coefficient,
+                    source_id=feed["donor_id"],
+                    source_name=feed["donor_name"],
+                    source_channel=feed["channel"],
+                    source_weight=feed["weight"],
+                    source_url=link,
+                    captured_at=now_iso,
+                )
+            )
+
+    return signals
+
+
+def _load_text_feed_signals(events_by_key: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    feeds = _parse_external_text_sources()
+    if not feeds:
+        return []
+
+    event_lookup = _build_event_lookup(events_by_key)
+    signals: List[Dict[str, Any]] = []
+    now_iso = _now_utc().isoformat()
+
+    for feed in feeds:
+        raw = _fetch_external_feed_content(feed["url"])
+        if not raw:
+            continue
+
+        blocks: List[str] = []
+        try:
+            payload = json.loads(raw)
+            if isinstance(payload, dict):
+                payload = payload.get("messages") or payload.get("items") or payload.get("data") or []
+            if isinstance(payload, list):
+                for item in payload[:EXTERNAL_DONOR_TEXT_ITEM_LIMIT]:
+                    if isinstance(item, dict):
+                        blocks.append(
+                            " ".join(
+                                [
+                                    str(item.get("title") or ""),
+                                    str(item.get("text") or ""),
+                                    str(item.get("description") or ""),
+                                ]
+                            )
+                        )
+                    elif isinstance(item, str):
+                        blocks.append(item)
+        except Exception:
+            parts = [part.strip() for part in re.split(r"\n\s*\n", raw) if part.strip()]
+            blocks.extend(parts[:EXTERNAL_DONOR_TEXT_ITEM_LIMIT])
+
+        for block in blocks[:EXTERNAL_DONOR_TEXT_ITEM_LIMIT]:
+            text_blob = html.unescape(str(block))
+            event_key, event = _best_event_match_for_text(text_blob, event_lookup, sport_hint=feed.get("sport"))
+            if event is None or event_key is None:
+                continue
+
+            line_fb, prob_fb, coef_fb = _event_fallback_pick(event, f"text:{feed['donor_id']}:{event.get('id')}")
+            line = _extract_line_from_text(text_blob) or line_fb
+            probability = _extract_probability_from_text(text_blob) or prob_fb
+            coefficient = _extract_coefficient_from_text(text_blob) or coef_fb
+
+            signals.append(
+                _build_external_signal(
+                    event=event,
+                    event_key=event_key,
+                    line=line,
+                    probability=probability,
+                    coefficient=coefficient,
+                    source_id=feed["donor_id"],
+                    source_name=feed["donor_name"],
+                    source_channel=feed["channel"],
+                    source_weight=feed["weight"],
+                    source_url=feed["url"],
+                    captured_at=now_iso,
+                )
             )
 
     return signals
@@ -891,9 +1251,14 @@ def _apply_external_consensus(events: List[Dict[str, Any]], min_sources: int) ->
 
     events_by_key = {_event_match_key(e): e for e in events}
 
-    synthetic_signals = _generate_synthetic_donor_signals(events, active_catalog)
-    feed_signals = _load_json_feed_signals(events_by_key)
-    all_signals = synthetic_signals + feed_signals
+    synthetic_signals: List[Dict[str, Any]] = []
+    if EXTERNAL_DONOR_ENABLE_SYNTHETIC:
+        synthetic_signals = _generate_synthetic_donor_signals(events, active_catalog)
+
+    json_feed_signals = _load_json_feed_signals(events_by_key)
+    rss_feed_signals = _load_rss_feed_signals(events_by_key)
+    text_feed_signals = _load_text_feed_signals(events_by_key)
+    all_signals = synthetic_signals + json_feed_signals + rss_feed_signals + text_feed_signals
 
     grouped_count: Dict[str, int] = {}
     trimmed_signals: List[Dict[str, Any]] = []
@@ -941,8 +1306,12 @@ def _apply_external_consensus(events: List[Dict[str, Any]], min_sources: int) ->
             "enabled": True,
             "catalog_total": len(catalog),
             "active_donors": len(active_catalog),
+            "synthetic_enabled": EXTERNAL_DONOR_ENABLE_SYNTHETIC,
             "synthetic_signals_total": len(synthetic_signals),
-            "json_feed_signals_total": len(feed_signals),
+            "json_feed_signals_total": len(json_feed_signals),
+            "rss_feed_signals_total": len(rss_feed_signals),
+            "text_feed_signals_total": len(text_feed_signals),
+            "real_feed_signals_total": len(json_feed_signals) + len(rss_feed_signals) + len(text_feed_signals),
         }
     )
     return events, donor_summary, consensus_top
@@ -1590,6 +1959,9 @@ async def consensus_top(
 @app.get("/api/donors/status")
 async def donors_status():
     catalog = _resolve_donor_catalog()
+    json_feeds = _parse_external_feed_sources()
+    rss_feeds = _parse_external_rss_sources()
+    text_feeds = _parse_external_text_sources()
     with _metrics_lock:
         donor_pipeline = copy.deepcopy(_metrics.get("donor_pipeline", {}))
         runtime_snapshot = {
@@ -1614,6 +1986,16 @@ async def donors_status():
             "min_sources": EXTERNAL_CONSENSUS_MIN_SOURCES,
             "signal_limit_per_event": EXTERNAL_DONOR_SIGNAL_LIMIT_PER_EVENT,
             "donor_cache_ttl_seconds": DONOR_CACHE_TTL_SECONDS,
+            "synthetic_enabled": EXTERNAL_DONOR_ENABLE_SYNTHETIC,
+            "http_timeout_seconds": EXTERNAL_DONOR_HTTP_TIMEOUT_SECONDS,
+            "http_max_body_bytes": EXTERNAL_DONOR_HTTP_MAX_BODY_BYTES,
+            "rss_item_limit": EXTERNAL_DONOR_RSS_ITEM_LIMIT,
+            "text_item_limit": EXTERNAL_DONOR_TEXT_ITEM_LIMIT,
+        },
+        "configured_feeds": {
+            "json": len(json_feeds),
+            "rss": len(rss_feeds),
+            "text": len(text_feeds),
         },
         "sample_active_donors": active[:20],
         "timestamp": _now_utc().isoformat(),
@@ -1706,6 +2088,11 @@ async def source_status():
             "external_consensus_enabled": EXTERNAL_CONSENSUS_ENABLED,
             "external_consensus_min_sources": EXTERNAL_CONSENSUS_MIN_SOURCES,
             "external_donor_signal_limit_per_event": EXTERNAL_DONOR_SIGNAL_LIMIT_PER_EVENT,
+            "external_donor_synthetic_enabled": EXTERNAL_DONOR_ENABLE_SYNTHETIC,
+            "external_donor_http_timeout_seconds": EXTERNAL_DONOR_HTTP_TIMEOUT_SECONDS,
+            "external_donor_http_max_body_bytes": EXTERNAL_DONOR_HTTP_MAX_BODY_BYTES,
+            "external_donor_rss_item_limit": EXTERNAL_DONOR_RSS_ITEM_LIMIT,
+            "external_donor_text_item_limit": EXTERNAL_DONOR_TEXT_ITEM_LIMIT,
         },
         "runtime": {
             "low_event_streak": low_streak,
