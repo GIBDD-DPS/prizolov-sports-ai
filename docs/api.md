@@ -62,6 +62,7 @@ GET /models/status — статус загруженных моделей
 - запрашивает события из `/api/all-events`;
 - сохраняет рекомендации в локальный state (`runtime/auto_feedback_worker_state.json`);
 - после задержки `--settle-seconds` пытается определить исход для `H2H` по score и отправляет в `/api/learning/feedback`;
+- перед отправкой делает preflight `GET /api/learning/status`, чтобы не спамить ошибками, если learning endpoint еще не задеплоен;
 - при флаге `--bootstrap-when-unresolved` может отправлять bootstrap feedback, если score-резолв недоступен.
 
 Базовый запуск:

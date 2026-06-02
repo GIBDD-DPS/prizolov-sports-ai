@@ -149,6 +149,29 @@ def _post_feedback(
     return _http_json(url, method="POST", payload=payload, timeout=timeout)
 
 
+def _is_learning_api_available(api_base_url: str, timeout: float) -> bool:
+    url = f"{api_base_url.rstrip('/')}/api/learning/status"
+    try:
+        _http_json(url, method="GET", timeout=timeout)
+        return True
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            logger.warning(
+                "Learning API endpoint not found on target (%s). "
+                "Deploy backend with /api/learning/* before production feedback mode.",
+                api_base_url,
+            )
+            return False
+        logger.warning("Learning API preflight HTTP error: %s", exc)
+        return False
+    except urllib.error.URLError as exc:
+        logger.warning("Learning API preflight network error: %s", exc)
+        return False
+    except Exception as exc:
+        logger.warning("Learning API preflight failed: %s", exc)
+        return False
+
+
 def _normalize_sport(sport: Any) -> str:
     raw = str(sport or "other").strip().lower()
     if not raw:
@@ -303,6 +326,7 @@ def _process_pending_feedback(
     bootstrap_when_unresolved: bool,
     expire_pending_seconds: int,
     dry_run: bool,
+    feedback_api_enabled: bool,
 ) -> Dict[str, int]:
     now = _utcnow()
     stats = state.setdefault("stats", {})
@@ -312,6 +336,7 @@ def _process_pending_feedback(
     sent_now = 0
     skipped_unresolved = 0
     expired = 0
+    blocked_api = 0
 
     to_delete = []
     pending_items = sorted(
@@ -365,6 +390,10 @@ def _process_pending_feedback(
             sent_now += 1
             continue
 
+        if not feedback_api_enabled:
+            blocked_api += 1
+            continue
+
         try:
             response = _post_feedback(
                 api_base_url=api_base_url,
@@ -405,6 +434,7 @@ def _process_pending_feedback(
         "sent_now": sent_now,
         "skipped_unresolved": skipped_unresolved,
         "expired": expired,
+        "blocked_api": blocked_api,
     }
 
 
@@ -485,6 +515,13 @@ def main() -> int:
     )
     _refresh_pending_scores(state, events_payload)
 
+    feedback_api_enabled = True
+    if not args.dry_run:
+        feedback_api_enabled = _is_learning_api_available(
+            api_base_url=args.api_base_url,
+            timeout=args.request_timeout,
+        )
+
     processing = _process_pending_feedback(
         state=state,
         api_base_url=args.api_base_url,
@@ -494,17 +531,19 @@ def main() -> int:
         bootstrap_when_unresolved=args.bootstrap_when_unresolved,
         expire_pending_seconds=max(1, args.expire_pending_seconds),
         dry_run=args.dry_run,
+        feedback_api_enabled=feedback_api_enabled,
     )
     pruned = _prune_sent(state, retention_days=max(1, args.retention_days))
 
     _save_state(state_path, state)
 
     logger.info(
-        "Готово: new_pending=%d sent_now=%d unresolved=%d expired=%d pending_total=%d sent_total=%d pruned=%d",
+        "Готово: new_pending=%d sent_now=%d unresolved=%d expired=%d blocked_api=%d pending_total=%d sent_total=%d pruned=%d",
         created,
         processing["sent_now"],
         processing["skipped_unresolved"],
         processing["expired"],
+        processing["blocked_api"],
         len(state.get("pending", {})),
         len(state.get("sent", {})),
         pruned,
