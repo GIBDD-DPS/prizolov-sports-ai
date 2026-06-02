@@ -310,10 +310,12 @@ SELF_LEARNING_ENABLED = os.environ.get("SELF_LEARNING_ENABLED", "1").strip().low
 SELF_LEARNING_STATE_PATH = os.environ.get("SELF_LEARNING_STATE_PATH", "runtime/self_learning_state.json")
 SELF_LEARNING_MIN_FEEDBACK = int(os.environ.get("SELF_LEARNING_MIN_FEEDBACK", "8"))
 SELF_LEARNING_MAX_FACTOR_SHIFT = float(os.environ.get("SELF_LEARNING_MAX_FACTOR_SHIFT", "0.25"))
+SELF_LEARNING_HISTORY_LIMIT = max(20, int(os.environ.get("SELF_LEARNING_HISTORY_LIMIT", "300")))
 SELF_LEARNING_STATE: Dict[str, Any] = {
     "updated_at": None,
     "total_feedback": 0,
     "sports": {},
+    "recent_feedback": [],
 }
 SELF_LEARNING_LOCK = Lock()
 
@@ -627,6 +629,9 @@ def _default_learning_sport_state() -> Dict[str, Any]:
         "feedback_count": 0,
         "hits": 0,
         "sum_predicted_probability": 0.0,
+        "sum_brier_score": 0.0,
+        "sum_roi": 0.0,
+        "roi_count": 0,
         "last_updated": None,
     }
 
@@ -702,13 +707,24 @@ def _load_self_learning_state() -> None:
                 "feedback_count": max(0, _safe_int(stats.get("feedback_count"), 0)),
                 "hits": max(0, _safe_int(stats.get("hits"), 0)),
                 "sum_predicted_probability": max(0.0, _safe_float(stats.get("sum_predicted_probability"), 0.0)),
+                "sum_brier_score": max(0.0, _safe_float(stats.get("sum_brier_score"), 0.0)),
+                "sum_roi": _safe_float(stats.get("sum_roi"), 0.0),
+                "roi_count": max(0, _safe_int(stats.get("roi_count"), 0)),
                 "last_updated": stats.get("last_updated"),
             }
+
+    recent_feedback_payload = payload.get("recent_feedback")
+    normalized_recent_feedback: List[Dict[str, Any]] = []
+    if isinstance(recent_feedback_payload, list):
+        for item in recent_feedback_payload[-SELF_LEARNING_HISTORY_LIMIT:]:
+            if isinstance(item, dict):
+                normalized_recent_feedback.append(item)
 
     with SELF_LEARNING_LOCK:
         SELF_LEARNING_STATE["updated_at"] = payload.get("updated_at")
         SELF_LEARNING_STATE["total_feedback"] = max(0, _safe_int(payload.get("total_feedback"), 0))
         SELF_LEARNING_STATE["sports"] = normalized_sports
+        SELF_LEARNING_STATE["recent_feedback"] = normalized_recent_feedback
 
 
 def _ensure_learning_stats_locked(sport_code: str) -> Dict[str, Any]:
@@ -742,10 +758,16 @@ def _get_learning_meta(sport_code: str) -> Dict[str, Any]:
         feedback_count = max(0, _safe_int(stats.get("feedback_count"), 0))
         hits = max(0, _safe_int(stats.get("hits"), 0))
         sum_pred = max(0.0, _safe_float(stats.get("sum_predicted_probability"), 0.0))
+        sum_brier = max(0.0, _safe_float(stats.get("sum_brier_score"), 0.0))
+        sum_roi = _safe_float(stats.get("sum_roi"), 0.0)
+        roi_count = max(0, _safe_int(stats.get("roi_count"), 0))
 
     factor = _compute_learning_factor_from_stats(stats)
     avg_pred = round(sum_pred / feedback_count, 4) if feedback_count else None
     hit_rate = round(hits / feedback_count, 4) if feedback_count else None
+    brier_score = round(sum_brier / feedback_count, 5) if feedback_count else None
+    calibration_gap = round((hit_rate - avg_pred), 5) if (hit_rate is not None and avg_pred is not None) else None
+    roi_avg = round(sum_roi / roi_count, 5) if roi_count else None
 
     return {
         "sport_code": normalized_sport,
@@ -754,6 +776,10 @@ def _get_learning_meta(sport_code: str) -> Dict[str, Any]:
         "hits": hits,
         "avg_predicted_probability": avg_pred,
         "hit_rate": hit_rate,
+        "brier_score": brier_score,
+        "calibration_gap": calibration_gap,
+        "roi_avg": roi_avg,
+        "roi_count": roi_count,
     }
 
 
@@ -777,17 +803,62 @@ def _parse_outcome(value: Any) -> Optional[bool]:
     return None
 
 
-def _record_learning_feedback(sport_code: str, predicted_probability: float, outcome: bool) -> Dict[str, Any]:
+def _record_learning_feedback(
+    sport_code: str,
+    predicted_probability: float,
+    outcome: bool,
+    coefficient: Optional[float] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     normalized_sport = _normalize_sport_key(sport_code)
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
     probability = _normalize_probability(predicted_probability)
+    actual = 1.0 if outcome else 0.0
+    brier = (probability - actual) ** 2
+
+    coefficient_value = _safe_float(coefficient, 0.0)
+    roi_value: Optional[float] = None
+    if coefficient_value > 1.0:
+        roi_value = (coefficient_value - 1.0) if outcome else -1.0
 
     with SELF_LEARNING_LOCK:
         stats = _ensure_learning_stats_locked(normalized_sport)
         stats["feedback_count"] = max(0, _safe_int(stats.get("feedback_count"), 0)) + 1
         stats["hits"] = max(0, _safe_int(stats.get("hits"), 0)) + (1 if outcome else 0)
         stats["sum_predicted_probability"] = max(0.0, _safe_float(stats.get("sum_predicted_probability"), 0.0)) + probability
+        stats["sum_brier_score"] = max(0.0, _safe_float(stats.get("sum_brier_score"), 0.0)) + brier
+        if roi_value is not None:
+            stats["sum_roi"] = _safe_float(stats.get("sum_roi"), 0.0) + roi_value
+            stats["roi_count"] = max(0, _safe_int(stats.get("roi_count"), 0)) + 1
         stats["last_updated"] = now_iso
+
+        recent_feedback = SELF_LEARNING_STATE.setdefault("recent_feedback", [])
+        if not isinstance(recent_feedback, list):
+            recent_feedback = []
+            SELF_LEARNING_STATE["recent_feedback"] = recent_feedback
+
+        entry = {
+            "timestamp": now_iso,
+            "sport": normalized_sport,
+            "predicted_probability": round(probability, 4),
+            "outcome": bool(outcome),
+            "brier_score": round(brier, 6),
+        }
+        if coefficient_value > 1.0:
+            entry["coefficient"] = round(coefficient_value, 4)
+        if roi_value is not None:
+            entry["roi"] = round(roi_value, 5)
+        if isinstance(metadata, dict):
+            if metadata.get("event_id"):
+                entry["event_id"] = metadata.get("event_id")
+            if metadata.get("line"):
+                entry["line"] = metadata.get("line")
+            if metadata.get("source"):
+                entry["source"] = metadata.get("source")
+
+        recent_feedback.append(entry)
+        if len(recent_feedback) > SELF_LEARNING_HISTORY_LIMIT:
+            del recent_feedback[:-SELF_LEARNING_HISTORY_LIMIT]
 
         SELF_LEARNING_STATE["total_feedback"] = max(0, _safe_int(SELF_LEARNING_STATE.get("total_feedback"), 0)) + 1
         SELF_LEARNING_STATE["updated_at"] = now_iso
@@ -797,23 +868,66 @@ def _record_learning_feedback(sport_code: str, predicted_probability: float, out
     return _get_learning_meta(normalized_sport)
 
 
+def _get_recent_feedback(limit: int = 20) -> List[Dict[str, Any]]:
+    max_limit = max(1, min(200, _safe_int(limit, 20)))
+    with SELF_LEARNING_LOCK:
+        recent = SELF_LEARNING_STATE.get("recent_feedback") or []
+        if not isinstance(recent, list):
+            return []
+        tail = recent[-max_limit:]
+    return list(reversed([entry for entry in tail if isinstance(entry, dict)]))
+
+
 def _get_self_learning_status() -> Dict[str, Any]:
     with SELF_LEARNING_LOCK:
         total_feedback = max(0, _safe_int(SELF_LEARNING_STATE.get("total_feedback"), 0))
         updated_at = SELF_LEARNING_STATE.get("updated_at")
-        sports_keys = sorted((SELF_LEARNING_STATE.get("sports") or {}).keys())
+        sports_raw = dict(SELF_LEARNING_STATE.get("sports") or {})
 
     sports: Dict[str, Any] = {}
-    for sport_code in sports_keys:
-        sports[sport_code] = _get_learning_meta(sport_code)
+    total_hits = 0
+    total_sum_pred = 0.0
+    total_sum_brier = 0.0
+    total_sum_roi = 0.0
+    total_roi_count = 0
+
+    for sport_code in sorted(sports_raw.keys()):
+        meta = _get_learning_meta(sport_code)
+        sports[sport_code] = meta
+
+        stats = sports_raw.get(sport_code) or {}
+        total_hits += max(0, _safe_int(stats.get("hits"), 0))
+        total_sum_pred += max(0.0, _safe_float(stats.get("sum_predicted_probability"), 0.0))
+        total_sum_brier += max(0.0, _safe_float(stats.get("sum_brier_score"), 0.0))
+        total_sum_roi += _safe_float(stats.get("sum_roi"), 0.0)
+        total_roi_count += max(0, _safe_int(stats.get("roi_count"), 0))
+
+    global_hit_rate = round(total_hits / total_feedback, 4) if total_feedback else None
+    global_avg_predicted = round(total_sum_pred / total_feedback, 4) if total_feedback else None
+    global_brier_score = round(total_sum_brier / total_feedback, 6) if total_feedback else None
+    global_calibration_gap = (
+        round(global_hit_rate - global_avg_predicted, 6)
+        if global_hit_rate is not None and global_avg_predicted is not None
+        else None
+    )
+    global_roi_avg = round(total_sum_roi / total_roi_count, 6) if total_roi_count else None
 
     return {
         "enabled": SELF_LEARNING_ENABLED,
         "min_feedback": SELF_LEARNING_MIN_FEEDBACK,
         "max_factor_shift": SELF_LEARNING_MAX_FACTOR_SHIFT,
+        "history_limit": SELF_LEARNING_HISTORY_LIMIT,
         "state_path": SELF_LEARNING_STATE_PATH,
         "total_feedback": total_feedback,
         "updated_at": updated_at,
+        "summary": {
+            "global_hit_rate": global_hit_rate,
+            "global_avg_predicted_probability": global_avg_predicted,
+            "global_brier_score": global_brier_score,
+            "global_calibration_gap": global_calibration_gap,
+            "global_roi_avg": global_roi_avg,
+            "global_roi_count": total_roi_count,
+        },
         "sports": sports,
     }
 
@@ -1510,6 +1624,7 @@ async def source_status(refresh: bool = False):
             "enabled": SELF_LEARNING_ENABLED,
             "total_feedback": learning_status.get("total_feedback", 0),
             "sports_with_feedback": len(learning_status.get("sports", {})),
+            "summary": learning_status.get("summary", {}),
         },
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
@@ -1519,6 +1634,17 @@ async def source_status(refresh: bool = False):
 async def get_learning_status():
     """Статус самообучения по видам спорта."""
     return _get_self_learning_status()
+
+
+@app.get("/api/learning/metrics")
+async def get_learning_metrics(recent_limit: int = 20):
+    """Расширенные метрики самообучения (калибровка, Brier, ROI, recent feedback)."""
+    status = _get_self_learning_status()
+    return {
+        "status": status,
+        "recent_feedback": _get_recent_feedback(limit=recent_limit),
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
 
 
 @app.post("/api/learning/feedback")
@@ -1550,11 +1676,32 @@ async def post_learning_feedback(request: Request = None):
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="invalid_probability")
 
-    updated = _record_learning_feedback(sport_code, predicted_probability, outcome)
+    coefficient: Optional[float] = None
+    coefficient_raw = payload.get("coefficient")
+    if coefficient_raw is not None:
+        try:
+            coefficient = float(coefficient_raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="invalid_coefficient")
+
+    metadata = {
+        "event_id": payload.get("event_id"),
+        "line": payload.get("line"),
+        "source": payload.get("source"),
+    }
+
+    updated = _record_learning_feedback(
+        sport_code=sport_code,
+        predicted_probability=predicted_probability,
+        outcome=outcome,
+        coefficient=coefficient,
+        metadata=metadata,
+    )
     return {
         "ok": True,
         "sport": sport_code,
         "learning": updated,
+        "summary": _get_self_learning_status().get("summary", {}),
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
 

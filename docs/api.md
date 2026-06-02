@@ -42,6 +42,7 @@ GET /models/status — статус загруженных моделей
 ## Self-learning API
 
 - `GET /api/learning/status` — текущий статус самообучения (по видам спорта).
+- `GET /api/learning/metrics` — расширенные метрики калибровки (Brier, calibration gap, ROI, recent feedback).
 - `POST /api/learning/feedback` — запись факта исхода прогноза.
 
 Пример payload для feedback:
@@ -50,7 +51,11 @@ GET /models/status — статус загруженных моделей
 {
   "sport": "football",
   "predicted_probability": 0.63,
-  "outcome": true
+  "outcome": true,
+  "coefficient": 1.9,
+  "event_id": "match_123",
+  "line": "H2H: Team A",
+  "source": "auto_feedback_worker"
 }
 ```
 

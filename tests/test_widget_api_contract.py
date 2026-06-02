@@ -165,5 +165,41 @@ class TestWidgetApiContract(unittest.TestCase):
             self.assertGreaterEqual(float(rec["probability"]), 0.5)
 
 
+    def test_learning_metrics_endpoint_returns_summary_and_recent_feedback(self):
+        feedback_response = self.client.post(
+            "/api/learning/feedback",
+            json={
+                "sport": "football",
+                "predicted_probability": 0.62,
+                "outcome": True,
+                "coefficient": 1.9,
+                "event_id": "test_event_1",
+                "line": "H2H: Team A",
+                "source": "unit_test",
+            },
+        )
+        self.assertEqual(feedback_response.status_code, 200)
+
+        metrics_response = self.client.get("/api/learning/metrics?recent_limit=5")
+        self.assertEqual(metrics_response.status_code, 200)
+
+        payload = metrics_response.json()
+        self.assertIn("status", payload)
+        self.assertIn("recent_feedback", payload)
+
+        status = payload["status"]
+        self.assertIn("summary", status)
+        summary = status["summary"]
+        self.assertIn("global_brier_score", summary)
+        self.assertIn("global_calibration_gap", summary)
+        self.assertIn("global_roi_count", summary)
+
+        self.assertGreaterEqual(len(payload["recent_feedback"]), 1)
+        first = payload["recent_feedback"][0]
+        self.assertIn("sport", first)
+        self.assertIn("predicted_probability", first)
+        self.assertIn("brier_score", first)
+
+
 if __name__ == "__main__":
     unittest.main()

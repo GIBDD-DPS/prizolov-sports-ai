@@ -139,6 +139,8 @@ def _post_feedback(
     predicted_probability: float,
     outcome: bool,
     timeout: float,
+    metadata: Optional[Dict[str, Any]] = None,
+    coefficient: Optional[float] = None,
 ) -> Dict[str, Any]:
     url = f"{api_base_url.rstrip('/')}/api/learning/feedback"
     payload = {
@@ -146,6 +148,15 @@ def _post_feedback(
         "predicted_probability": predicted_probability,
         "outcome": outcome,
     }
+    if coefficient is not None and coefficient > 1.0:
+        payload["coefficient"] = coefficient
+    if isinstance(metadata, dict):
+        if metadata.get("event_id"):
+            payload["event_id"] = metadata.get("event_id")
+        if metadata.get("line"):
+            payload["line"] = metadata.get("line")
+        if metadata.get("source"):
+            payload["source"] = metadata.get("source")
     return _http_json(url, method="POST", payload=payload, timeout=timeout)
 
 
@@ -263,6 +274,7 @@ def _collect_pending_predictions(
                 "home": event.get("home"),
                 "away": event.get("away"),
                 "score": event.get("score"),
+                "coefficient": rec.get("coefficient"),
                 "predicted_probability": probability,
                 "first_seen_at": now_iso,
                 "last_seen_at": now_iso,
@@ -394,6 +406,19 @@ def _process_pending_feedback(
             blocked_api += 1
             continue
 
+        payload_metadata = {
+            "event_id": prediction.get("event_id"),
+            "line": prediction.get("line"),
+            "source": "auto_feedback_worker",
+        }
+
+        coefficient = prediction.get("coefficient")
+        extra_payload: Dict[str, Any] = {}
+        if coefficient is not None:
+            coefficient_value = _safe_float(coefficient, 0.0)
+            if coefficient_value > 1.0:
+                extra_payload["coefficient"] = coefficient_value
+
         try:
             response = _post_feedback(
                 api_base_url=api_base_url,
@@ -401,6 +426,8 @@ def _process_pending_feedback(
                 predicted_probability=probability,
                 outcome=outcome,
                 timeout=timeout,
+                metadata=payload_metadata,
+                **extra_payload,
             )
         except urllib.error.HTTPError as exc:
             logger.warning("HTTP ошибка при отправке feedback: %s", exc)
