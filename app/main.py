@@ -286,6 +286,72 @@ REAL_SOURCE_STATUS: Dict[str, Any] = {
 }
 ODDS_API_UPCOMING_URL = "https://api.the-odds-api.com/v4/sports/upcoming/odds/"
 
+SPORT_LABELS: Dict[str, Dict[str, str]] = {
+    "football": {"ru": "Футбол", "en": "Football"},
+    "hockey": {"ru": "Хоккей", "en": "Hockey"},
+    "basketball": {"ru": "Баскетбол", "en": "Basketball"},
+    "tennis": {"ru": "Теннис", "en": "Tennis"},
+    "volleyball": {"ru": "Волейбол", "en": "Volleyball"},
+    "handball": {"ru": "Гандбол", "en": "Handball"},
+    "esports": {"ru": "Киберспорт", "en": "Esports"},
+    "mma": {"ru": "ММА", "en": "MMA"},
+    "baseball": {"ru": "Бейсбол", "en": "Baseball"},
+    "cricket": {"ru": "Крикет", "en": "Cricket"},
+    "americanfootball": {"ru": "Американский футбол", "en": "American Football"},
+    "other": {"ru": "Другой спорт", "en": "Other Sport"},
+}
+
+
+def _normalize_lang(lang: Optional[str]) -> str:
+    val = str(lang or "ru").strip().lower()
+    return "en" if val.startswith("en") else "ru"
+
+
+def _get_sport_labels(sport_code: Optional[str]) -> Dict[str, str]:
+    code = str(sport_code or "other").lower()
+    labels = SPORT_LABELS.get(code)
+    if labels:
+        return labels
+
+    pretty = code.replace("_", " ").replace("-", " ").strip()
+    if not pretty:
+        pretty = "other"
+
+    return {
+        "ru": pretty.capitalize(),
+        "en": pretty.capitalize(),
+    }
+
+
+def _localize_event(event: Dict[str, Any], lang: str) -> Dict[str, Any]:
+    localized = dict(event)
+    sport_code = str(event.get("sport", "other")).lower()
+    labels = _get_sport_labels(sport_code)
+
+    localized["sport_code"] = sport_code
+    localized["sport_ru"] = labels["ru"]
+    localized["sport_en"] = labels["en"]
+    localized["sport"] = labels["ru"] if lang == "ru" else labels["en"]
+
+    recs = []
+    for rec in (event.get("recommendations") or []):
+        if not isinstance(rec, dict):
+            continue
+        rec_local = dict(rec)
+        rec_local["sport_code"] = sport_code
+        rec_local["sport_ru"] = labels["ru"]
+        rec_local["sport_en"] = labels["en"]
+        rec_local["sport"] = labels["ru"] if lang == "ru" else labels["en"]
+        recs.append(rec_local)
+
+    localized["recommendations"] = recs
+    return localized
+
+
+def _localize_events(events: List[Dict[str, Any]], lang: str) -> List[Dict[str, Any]]:
+    selected_lang = _normalize_lang(lang)
+    return [_localize_event(event, selected_lang) for event in events]
+
 
 def _resolve_odds_api_key() -> Optional[str]:
     return (
@@ -591,63 +657,83 @@ async def health():
 async def get_state(request: Request = None):
     """Получить состояние текущего анализа"""
     payload = await _read_json_payload(request)
+    lang = _normalize_lang(payload.get("lang"))
     events = await _get_runtime_events()
     logger.debug(f"🔍 Запрос /api/state | Total events: {len(events)}")
-    return _build_state_response(payload, events)
+    return _build_state_response(payload, events, lang=lang)
 
 
 @app.post("/get-ai-sports.php")
 async def get_ai_sports(request: Request = None):
     """Endpoint для frontend виджета"""
     payload = await _read_json_payload(request)
+    lang = _normalize_lang(payload.get("lang"))
     events = await _get_runtime_events()
 
     # Основной контракт виджета /sport/: отдаём live-события из real-source (или fallback).
     if payload.get("get_all"):
-        logger.info(f"📦 Возвращаю полный список live событий: {len(events)}")
+        localized_events = _localize_events(events, lang)
+        logger.info(f"📦 Возвращаю полный список live событий: {len(localized_events)} | lang={lang}")
         return {
-            "total": len(events),
-            "events": events,
+            "total": len(localized_events),
+            "language": lang,
+            "events": localized_events,
         }
 
     # Backward-compatible режим single event (для старого фронта).
-    return _build_state_response(payload, events)
+    return _build_state_response(payload, events, lang=lang)
 
 
 @app.get("/api/all-events")
-async def get_all_events():
+async def get_all_events(lang: str = "ru"):
     """Получить все live события"""
+    selected_lang = _normalize_lang(lang)
     events = await _get_runtime_events()
+    localized_events = _localize_events(events, selected_lang)
     return {
-        "total": len(events),
-        "events": events,
+        "total": len(localized_events),
+        "language": selected_lang,
+        "events": localized_events,
     }
 
 
 @app.get("/api/events/{sport}")
-async def get_events_by_sport(sport: str):
+async def get_events_by_sport(sport: str, lang: str = "ru"):
     """Получить события по виду спорта"""
+    selected_lang = _normalize_lang(lang)
     events = await _get_runtime_events()
     matches = get_matches_by_sport(sport.lower(), events)
+    localized_matches = _localize_events(matches, selected_lang)
     return {
         "sport": sport,
-        "total": len(matches),
-        "events": matches,
+        "language": selected_lang,
+        "total": len(localized_matches),
+        "events": localized_matches,
     }
 
 
 @app.get("/api/sports")
-async def get_sports_list():
+async def get_sports_list(lang: str = "ru"):
     """Получить список видов спорта"""
+    selected_lang = _normalize_lang(lang)
     events = await _get_runtime_events()
-    sports = {}
+    sports: Dict[str, Dict[str, Any]] = {}
+
     for event in events:
-        sport = event.get("sport", "other")
-        if sport not in sports:
-            sports[sport] = 0
-        sports[sport] += 1
+        sport_code = str(event.get("sport", "other")).lower()
+        labels = _get_sport_labels(sport_code)
+        if sport_code not in sports:
+            sports[sport_code] = {
+                "code": sport_code,
+                "ru": labels["ru"],
+                "en": labels["en"],
+                "label": labels["ru"] if selected_lang == "ru" else labels["en"],
+                "count": 0,
+            }
+        sports[sport_code]["count"] += 1
 
     return {
+        "language": selected_lang,
         "sports": sports,
         "total_events": len(events),
     }
@@ -669,6 +755,7 @@ async def source_status(refresh: bool = False):
 
     return {
         "api_key_present": bool(_resolve_odds_api_key()),
+        "supported_languages": ["ru", "en"],
         "cache_ttl_seconds": REAL_EVENTS_CACHE_TTL_SECONDS,
         "cache_age_seconds": cache_age_seconds,
         "cached_events_count": len(cached_events),
@@ -706,7 +793,7 @@ async def _read_json_payload(request: Request = None) -> Dict[str, Any]:
     return {}
 
 
-def _build_state_response(payload: Dict[str, Any], events: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _build_state_response(payload: Dict[str, Any], events: List[Dict[str, Any]], lang: str = "ru") -> Dict[str, Any]:
     """Построить ответ в формате single-event."""
     if not events:
         logger.warning("⚠️ Нет live событий")
@@ -725,18 +812,23 @@ def _build_state_response(payload: Dict[str, Any], events: List[Dict[str, Any]])
 
     event_index = event_index % len(events)
     event = events[event_index]
+    selected_lang = _normalize_lang(lang)
+    localized_event = _localize_event(event, selected_lang)
 
     recommendations = []
-    for rec in event.get("recommendations", []):
+    for rec in localized_event.get("recommendations", []):
         recommendations.append({
-            "league": event["league"],
-            "sport": event["sport"],
-            "home": event["home"],
-            "away": event["away"],
-            "line": rec["line"],
-            "confidence": rec["confidence"],
-            "probability": rec["probability"],
-            "coefficient": rec["coefficient"],
+            "league": localized_event.get("league", "—"),
+            "sport": rec.get("sport", localized_event.get("sport", "—")),
+            "sport_code": rec.get("sport_code", localized_event.get("sport_code", "other")),
+            "sport_ru": rec.get("sport_ru", "Спорт"),
+            "sport_en": rec.get("sport_en", "Sport"),
+            "home": localized_event.get("home", "—"),
+            "away": localized_event.get("away", "—"),
+            "line": rec.get("line", "Исход"),
+            "confidence": rec.get("confidence", "med"),
+            "probability": rec.get("probability", 0),
+            "coefficient": rec.get("coefficient", 1.5),
         })
 
     logger.info(
@@ -745,12 +837,16 @@ def _build_state_response(payload: Dict[str, Any], events: List[Dict[str, Any]])
     )
 
     return {
+        "language": selected_lang,
         "match_info": {
-            "league": event["league"],
-            "home": event["home"],
-            "away": event["away"],
-            "status": f"{event['time']} ({event['score']})",
-            "sport": event["sport"],
+            "league": localized_event.get("league", "—"),
+            "home": localized_event.get("home", "—"),
+            "away": localized_event.get("away", "—"),
+            "status": f"{event.get('time', '—')} ({event.get('score', '—')})",
+            "sport": localized_event.get("sport", "—"),
+            "sport_code": localized_event.get("sport_code", "other"),
+            "sport_ru": localized_event.get("sport_ru", "Спорт"),
+            "sport_en": localized_event.get("sport_en", "Sport"),
         },
         "recommendations": recommendations,
         "event_index": event_index,
