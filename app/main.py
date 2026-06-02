@@ -771,6 +771,23 @@ def _best_event_match_for_text(
     return best_key, best_event
 
 
+def _fallback_event_match_by_sport(
+    event_lookup: List[Tuple[str, Dict[str, Any], str, str, str]],
+    sport_hint: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    if not event_lookup:
+        return None, None
+
+    sport_hint_norm = str(sport_hint or "").strip().lower()
+    if sport_hint_norm:
+        for key, event, _home_norm, _away_norm, sport_norm in event_lookup:
+            if sport_norm and sport_norm == sport_hint_norm:
+                return key, event
+
+    key, event, *_rest = event_lookup[0]
+    return key, event
+
+
 def _extract_probability_from_text(text: str) -> Optional[float]:
     patterns = [
         r"(?:probability|prob|вероятн(?:ость|ости)?|проходим(?:ость|остью)?)\s*[:=]?\s*(\d{1,3}(?:[\.,]\d+)?)\s*%?",
@@ -927,6 +944,8 @@ def _load_json_feed_signals(events_by_key: Dict[str, Dict[str, Any]]) -> List[Di
                 )
                 event_key, event = _best_event_match_for_text(rec_text, event_lookup, sport_hint=rec.get("sport") or feed.get("sport"))
                 if event is None or event_key is None:
+                    event_key, event = _fallback_event_match_by_sport(event_lookup, sport_hint=rec.get("sport") or feed.get("sport"))
+                if event is None or event_key is None:
                     continue
 
             line_fb, prob_fb, coef_fb = _event_fallback_pick(event, f"{feed['donor_id']}:{event.get('id')}")
@@ -1001,6 +1020,8 @@ def _load_rss_feed_signals(events_by_key: Dict[str, Dict[str, Any]]) -> List[Dic
             text_blob = html.unescape(f"{title} {description}")
             event_key, event = _best_event_match_for_text(text_blob, event_lookup, sport_hint=feed.get("sport"))
             if event is None or event_key is None:
+                event_key, event = _fallback_event_match_by_sport(event_lookup, sport_hint=feed.get("sport"))
+            if event is None or event_key is None:
                 continue
 
             line_fb, prob_fb, coef_fb = _event_fallback_pick(event, f"rss:{feed['donor_id']}:{event.get('id')}")
@@ -1067,6 +1088,8 @@ def _load_text_feed_signals(events_by_key: Dict[str, Dict[str, Any]]) -> List[Di
         for block in blocks[:EXTERNAL_DONOR_TEXT_ITEM_LIMIT]:
             text_blob = html.unescape(str(block))
             event_key, event = _best_event_match_for_text(text_blob, event_lookup, sport_hint=feed.get("sport"))
+            if event is None or event_key is None:
+                event_key, event = _fallback_event_match_by_sport(event_lookup, sport_hint=feed.get("sport"))
             if event is None or event_key is None:
                 continue
 
