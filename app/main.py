@@ -878,6 +878,188 @@ def _get_recent_feedback(limit: int = 20) -> List[Dict[str, Any]]:
     return list(reversed([entry for entry in tail if isinstance(entry, dict)]))
 
 
+def _compute_feedback_metrics(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
+    samples = 0
+    hits = 0
+    sum_probability = 0.0
+    sum_brier = 0.0
+    sum_roi = 0.0
+    roi_count = 0
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        probability = _normalize_probability(entry.get("predicted_probability", 0.5))
+        outcome = bool(entry.get("outcome"))
+        brier = _safe_float(entry.get("brier_score"), (probability - (1.0 if outcome else 0.0)) ** 2)
+
+        samples += 1
+        hits += 1 if outcome else 0
+        sum_probability += probability
+        sum_brier += max(0.0, brier)
+
+        if entry.get("roi") is not None:
+            sum_roi += _safe_float(entry.get("roi"), 0.0)
+            roi_count += 1
+
+    if samples == 0:
+        return {
+            "samples": 0,
+            "hit_rate": None,
+            "avg_predicted_probability": None,
+            "brier_score": None,
+            "calibration_gap": None,
+            "roi_avg": None,
+            "roi_count": 0,
+        }
+
+    hit_rate = hits / samples
+    avg_pred = sum_probability / samples
+    brier_score = sum_brier / samples
+    calibration_gap = hit_rate - avg_pred
+    roi_avg = (sum_roi / roi_count) if roi_count else None
+
+    return {
+        "samples": samples,
+        "hit_rate": round(hit_rate, 6),
+        "avg_predicted_probability": round(avg_pred, 6),
+        "brier_score": round(brier_score, 6),
+        "calibration_gap": round(calibration_gap, 6),
+        "roi_avg": round(roi_avg, 6) if roi_avg is not None else None,
+        "roi_count": roi_count,
+    }
+
+
+def _compute_learning_windows(
+    recent_feedback: List[Dict[str, Any]],
+    recent_window_hours: int,
+    baseline_window_hours: int,
+) -> Dict[str, Any]:
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    recent_hours = max(1, _safe_int(recent_window_hours, 24))
+    baseline_hours = max(recent_hours + 1, _safe_int(baseline_window_hours, 168))
+
+    recent_boundary = now_utc - datetime.timedelta(hours=recent_hours)
+    baseline_boundary = now_utc - datetime.timedelta(hours=baseline_hours)
+
+    recent_entries: List[Dict[str, Any]] = []
+    baseline_entries: List[Dict[str, Any]] = []
+
+    for entry in recent_feedback:
+        if not isinstance(entry, dict):
+            continue
+        ts = _parse_iso_datetime(entry.get("timestamp"))
+        if not ts:
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=datetime.timezone.utc)
+
+        if ts >= recent_boundary:
+            recent_entries.append(entry)
+        elif ts >= baseline_boundary:
+            baseline_entries.append(entry)
+
+    recent_metrics = _compute_feedback_metrics(recent_entries)
+    baseline_metrics = _compute_feedback_metrics(baseline_entries)
+
+    trend: Dict[str, Optional[float]] = {}
+    for key in ["hit_rate", "avg_predicted_probability", "brier_score", "calibration_gap", "roi_avg"]:
+        recent_val = recent_metrics.get(key)
+        baseline_val = baseline_metrics.get(key)
+        if recent_val is None or baseline_val is None:
+            trend[key] = None
+        else:
+            trend[key] = round(_safe_float(recent_val) - _safe_float(baseline_val), 6)
+
+    return {
+        "recent_window_hours": recent_hours,
+        "baseline_window_hours": baseline_hours,
+        "recent": recent_metrics,
+        "baseline": baseline_metrics,
+        "trend_delta": trend,
+    }
+
+
+def _build_learning_alerts(window_metrics: Dict[str, Any], min_samples: int = 10) -> List[Dict[str, Any]]:
+    alerts: List[Dict[str, Any]] = []
+    threshold_samples = max(1, _safe_int(min_samples, 10))
+
+    recent = window_metrics.get("recent") or {}
+    baseline = window_metrics.get("baseline") or {}
+    trend = window_metrics.get("trend_delta") or {}
+
+    recent_samples = _safe_int(recent.get("samples"), 0)
+    if recent_samples < threshold_samples:
+        alerts.append(
+            {
+                "severity": "info",
+                "code": "insufficient_samples",
+                "message": f"Недостаточно фидбека для стабильной оценки: {recent_samples}/{threshold_samples}",
+            }
+        )
+        return alerts
+
+    recent_brier = recent.get("brier_score")
+    if recent_brier is not None and _safe_float(recent_brier) > 0.24:
+        alerts.append(
+            {
+                "severity": "high",
+                "code": "brier_high",
+                "message": f"Brier score высокий: {recent_brier}",
+            }
+        )
+
+    delta_brier = trend.get("brier_score")
+    if delta_brier is not None and _safe_float(delta_brier) > 0.035:
+        alerts.append(
+            {
+                "severity": "med",
+                "code": "brier_degrading",
+                "message": f"Качество ухудшилось: delta brier +{delta_brier}",
+            }
+        )
+
+    calibration_gap = recent.get("calibration_gap")
+    if calibration_gap is not None and abs(_safe_float(calibration_gap)) > 0.12:
+        alerts.append(
+            {
+                "severity": "med",
+                "code": "calibration_gap",
+                "message": f"Сильный calibration gap: {calibration_gap}",
+            }
+        )
+
+    recent_roi = recent.get("roi_avg")
+    baseline_roi = baseline.get("roi_avg")
+    if recent_roi is not None and _safe_float(recent_roi) < -0.12:
+        alerts.append(
+            {
+                "severity": "med",
+                "code": "roi_negative",
+                "message": f"Отрицательный ROI в recent окне: {recent_roi}",
+            }
+        )
+    elif recent_roi is not None and baseline_roi is not None and (_safe_float(recent_roi) - _safe_float(baseline_roi)) < -0.08:
+        alerts.append(
+            {
+                "severity": "med",
+                "code": "roi_drop",
+                "message": f"ROI снизился относительно baseline: {recent_roi} vs {baseline_roi}",
+            }
+        )
+
+    if not alerts:
+        alerts.append(
+            {
+                "severity": "ok",
+                "code": "metrics_stable",
+                "message": "Метрики самообучения стабильны",
+            }
+        )
+
+    return alerts
+
+
 def _get_self_learning_status() -> Dict[str, Any]:
     with SELF_LEARNING_LOCK:
         total_feedback = max(0, _safe_int(SELF_LEARNING_STATE.get("total_feedback"), 0))
@@ -1637,11 +1819,26 @@ async def get_learning_status():
 
 
 @app.get("/api/learning/metrics")
-async def get_learning_metrics(recent_limit: int = 20):
-    """Расширенные метрики самообучения (калибровка, Brier, ROI, recent feedback)."""
+async def get_learning_metrics(
+    recent_limit: int = 20,
+    recent_window_hours: int = 24,
+    baseline_window_hours: int = 168,
+    alert_min_samples: int = 10,
+):
+    """Расширенные метрики самообучения (калибровка, Brier, ROI, recent feedback, тренды, алерты)."""
     status = _get_self_learning_status()
+    full_recent_feedback = _get_recent_feedback(limit=SELF_LEARNING_HISTORY_LIMIT)
+    windows = _compute_learning_windows(
+        recent_feedback=full_recent_feedback,
+        recent_window_hours=recent_window_hours,
+        baseline_window_hours=baseline_window_hours,
+    )
+    alerts = _build_learning_alerts(windows, min_samples=alert_min_samples)
+
     return {
         "status": status,
+        "windows": windows,
+        "alerts": alerts,
         "recent_feedback": _get_recent_feedback(limit=recent_limit),
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }

@@ -42,7 +42,7 @@ GET /models/status — статус загруженных моделей
 ## Self-learning API
 
 - `GET /api/learning/status` — текущий статус самообучения (по видам спорта).
-- `GET /api/learning/metrics` — расширенные метрики калибровки (Brier, calibration gap, ROI, recent feedback).
+- `GET /api/learning/metrics` — расширенные метрики калибровки (Brier, calibration gap, ROI, recent feedback, trend windows, alerts).
 - `POST /api/learning/feedback` — запись факта исхода прогноза.
 
 Пример payload для feedback:
@@ -125,3 +125,14 @@ python3 scripts/auto_feedback_worker.py \
 Отдельный endpoint витрины:
 - `GET /api/recommendations/top` — плоский список лучших рекомендаций
   - параметры: `lang`, `sport`, `limit`, `min_probability`
+
+
+Параметры `GET /api/learning/metrics`:
+- `recent_limit` — сколько последних feedback записей вернуть
+- `recent_window_hours` — окно recent для трендов
+- `baseline_window_hours` — baseline окно для сравнения
+- `alert_min_samples` — минимальное число samples для алертов деградации
+
+Ответ включает блоки:
+- `windows` (`recent`, `baseline`, `trend_delta`)
+- `alerts` (сигналы стабильности/деградации качества)

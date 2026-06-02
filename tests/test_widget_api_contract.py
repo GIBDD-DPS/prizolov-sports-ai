@@ -180,12 +180,16 @@ class TestWidgetApiContract(unittest.TestCase):
         )
         self.assertEqual(feedback_response.status_code, 200)
 
-        metrics_response = self.client.get("/api/learning/metrics?recent_limit=5")
+        metrics_response = self.client.get(
+            "/api/learning/metrics?recent_limit=5&recent_window_hours=48&baseline_window_hours=168&alert_min_samples=1"
+        )
         self.assertEqual(metrics_response.status_code, 200)
 
         payload = metrics_response.json()
         self.assertIn("status", payload)
         self.assertIn("recent_feedback", payload)
+        self.assertIn("windows", payload)
+        self.assertIn("alerts", payload)
 
         status = payload["status"]
         self.assertIn("summary", status)
@@ -193,6 +197,14 @@ class TestWidgetApiContract(unittest.TestCase):
         self.assertIn("global_brier_score", summary)
         self.assertIn("global_calibration_gap", summary)
         self.assertIn("global_roi_count", summary)
+
+        windows = payload["windows"]
+        self.assertIn("recent", windows)
+        self.assertIn("baseline", windows)
+        self.assertIn("trend_delta", windows)
+        self.assertGreaterEqual(windows["recent"].get("samples", 0), 1)
+
+        self.assertGreaterEqual(len(payload["alerts"]), 1)
 
         self.assertGreaterEqual(len(payload["recent_feedback"]), 1)
         first = payload["recent_feedback"][0]
