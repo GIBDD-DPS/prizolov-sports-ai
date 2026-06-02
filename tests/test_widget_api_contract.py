@@ -116,5 +116,22 @@ class TestWidgetApiContract(unittest.TestCase):
         )
 
 
+    def test_source_status_exposes_quality_filters(self):
+        response = self.client.get("/api/source-status")
+        self.assertEqual(response.status_code, 200)
+
+        payload = response.json()
+        self.assertIn("quality_filters", payload)
+        quality = payload["quality_filters"]
+        self.assertIn("supported_runtime_sports", quality)
+        self.assertIn("min_bookmakers_per_event", quality)
+        self.assertIn("min_recommendation_probability", quality)
+        self.assertIn("min_event_quality_score", quality)
+        self.assertIn("max_recommendations_per_event", quality)
+
+        self.assertIn("self_learning", payload)
+        self.assertIn("enabled", payload["self_learning"])
+
+
 if __name__ == "__main__":
     unittest.main()

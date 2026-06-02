@@ -73,8 +73,27 @@ python3 scripts/auto_feedback_worker.py \
   --max-feedback-per-run 25
 ```
 
+Боевой режим (без bootstrap, только подтвержденные исходы):
+
+```bash
+python3 scripts/auto_feedback_worker.py \
+  --api-base-url "https://prizolov-sports-dmandreyanov.amvera.io" \
+  --settle-seconds 7200 \
+  --max-feedback-per-run 25
+```
+
 Пример cron (каждые 10 минут):
 
 ```cron
 */10 * * * * cd /workspace && /usr/bin/python3 scripts/auto_feedback_worker.py --api-base-url "http://127.0.0.1:8080" >> /workspace/logs/auto_feedback_worker.log 2>&1
 ```
+
+## Quality filters for runtime events
+
+`/api/source-status` возвращает блок `quality_filters` с активными настройками фильтрации:
+- `supported_runtime_sports`
+- `min_bookmakers_per_event`
+- `min_recommendation_probability`
+- `min_event_quality_score`
+- `max_recommendations_per_event`
+- `max_upcoming_hours`

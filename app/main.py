@@ -282,6 +282,8 @@ REAL_SOURCE_STATUS: Dict[str, Any] = {
     "last_http_status": None,
     "last_error": None,
     "last_count": 0,
+    "last_input_count": 0,
+    "last_filtered_out": 0,
     "used_fallback": True,
     "active_source": "demo_fallback",
     "cache_hit": False,
@@ -314,6 +316,20 @@ SELF_LEARNING_STATE: Dict[str, Any] = {
     "sports": {},
 }
 SELF_LEARNING_LOCK = Lock()
+
+SUPPORTED_RUNTIME_SPORTS = {
+    sport.strip().lower()
+    for sport in os.environ.get(
+        "SUPPORTED_RUNTIME_SPORTS",
+        "football,hockey,basketball,tennis,volleyball,handball,esports,mma",
+    ).split(",")
+    if sport.strip()
+}
+MIN_BOOKMAKERS_PER_EVENT = max(1, int(os.environ.get("MIN_BOOKMAKERS_PER_EVENT", "2")))
+MIN_RECOMMENDATION_PROBABILITY = min(0.9, max(0.01, float(os.environ.get("MIN_RECOMMENDATION_PROBABILITY", "0.46"))))
+MAX_RECOMMENDATIONS_PER_EVENT = max(1, int(os.environ.get("MAX_RECOMMENDATIONS_PER_EVENT", "3")))
+REAL_EVENTS_MAX_UPCOMING_HOURS = max(1, int(os.environ.get("REAL_EVENTS_MAX_UPCOMING_HOURS", "72")))
+MIN_EVENT_QUALITY_SCORE = min(100.0, max(0.0, float(os.environ.get("MIN_EVENT_QUALITY_SCORE", "42"))))
 
 
 def _normalize_lang(lang: Optional[str]) -> str:
@@ -643,61 +659,194 @@ def _compute_probabilities(outcomes: List[Dict[str, Any]]) -> Dict[str, float]:
     return probs
 
 
+def _extract_bookmaker_count(event: Dict[str, Any]) -> int:
+    bookmakers = event.get("bookmakers") or []
+    if not isinstance(bookmakers, list):
+        return 0
+    return len(bookmakers)
+
+
+def _extract_freshness_seconds(event: Dict[str, Any], now_utc: datetime.datetime) -> Optional[int]:
+    bookmakers = event.get("bookmakers") or []
+    if not isinstance(bookmakers, list):
+        return None
+
+    latest_update: Optional[datetime.datetime] = None
+    for bookmaker in bookmakers:
+        if not isinstance(bookmaker, dict):
+            continue
+        updated = _parse_iso_datetime(bookmaker.get("last_update"))
+        if not updated:
+            continue
+        if updated.tzinfo is None:
+            updated = updated.replace(tzinfo=datetime.timezone.utc)
+        if latest_update is None or updated > latest_update:
+            latest_update = updated
+
+    if not latest_update:
+        return None
+
+    delta_seconds = int((now_utc - latest_update).total_seconds())
+    return max(0, delta_seconds)
+
+
+def _freshness_label(freshness_seconds: Optional[int]) -> str:
+    if freshness_seconds is None:
+        return "unknown"
+    if freshness_seconds <= 120:
+        return "fresh"
+    if freshness_seconds <= 600:
+        return "warming"
+    if freshness_seconds <= 1800:
+        return "stale"
+    return "outdated"
+
+
+def _compute_event_quality_score(
+    bookmakers_count: int,
+    recommendations_count: int,
+    freshness_seconds: Optional[int],
+    status: str,
+) -> float:
+    bookmakers_factor = min(1.0, max(0.0, bookmakers_count / 6.0))
+    recommendations_factor = min(1.0, max(0.0, recommendations_count / max(1, MAX_RECOMMENDATIONS_PER_EVENT)))
+
+    freshness_factor = 0.55
+    if freshness_seconds is not None:
+        if freshness_seconds <= 120:
+            freshness_factor = 1.0
+        elif freshness_seconds <= 600:
+            freshness_factor = 0.8
+        elif freshness_seconds <= 1800:
+            freshness_factor = 0.55
+        else:
+            freshness_factor = 0.25
+
+    status_factor = 1.0 if status == "LIVE" else 0.86
+
+    score = 100.0 * status_factor * (
+        0.45 * bookmakers_factor
+        + 0.35 * recommendations_factor
+        + 0.20 * freshness_factor
+    )
+    return round(min(100.0, max(0.0, score)), 1)
+
+
+def _is_event_in_supported_window(commence_dt: Optional[datetime.datetime], now_utc: datetime.datetime) -> bool:
+    if not commence_dt:
+        return True
+
+    if commence_dt.tzinfo is None:
+        commence_dt = commence_dt.replace(tzinfo=datetime.timezone.utc)
+
+    max_upcoming = now_utc + datetime.timedelta(hours=REAL_EVENTS_MAX_UPCOMING_HOURS)
+    too_old = now_utc - datetime.timedelta(hours=8)
+    return too_old <= commence_dt <= max_upcoming
+
+
+def _build_recommendation_line(market_key: str, outcome_name: str, point: Any) -> str:
+    line_name = str(outcome_name or "Исход")
+    if point is not None:
+        line_name = f"{line_name} {point}"
+
+    if market_key == "h2h":
+        return f"H2H: {line_name}"
+    if market_key == "totals":
+        return f"TOTALS: {line_name}"
+    if market_key == "spreads":
+        return f"SPREADS: {line_name}"
+    return line_name
+
+
+def _recommendation_strength(probability: float, price: float) -> float:
+    # Простой value-like score: вероятность и коэффициент одновременно.
+    implied = min(0.99, max(0.01, 1.0 / max(price, 1.01)))
+    edge = max(0.0, probability - implied)
+    return round((probability * 0.7) + (edge * 0.3), 4)
+
+
 def _extract_recommendations(event: Dict[str, Any], league: str, sport: str, home: str, away: str) -> List[Dict[str, Any]]:
     recommendations: List[Dict[str, Any]] = []
     bookmakers = event.get("bookmakers") or []
 
-    if not isinstance(bookmakers, list):
+    if not isinstance(bookmakers, list) or len(bookmakers) < MIN_BOOKMAKERS_PER_EVENT:
         return recommendations
 
-    chosen_market: Optional[Dict[str, Any]] = None
+    market_candidates: List[Dict[str, Any]] = []
     for bookmaker in bookmakers:
+        if not isinstance(bookmaker, dict):
+            continue
+        bookmaker_name = bookmaker.get("title") or bookmaker.get("key") or "bookmaker"
         for market in bookmaker.get("markets") or []:
-            if market.get("key") in {"h2h", "totals", "spreads"}:
-                chosen_market = market
-                break
-        if chosen_market:
-            break
+            if not isinstance(market, dict):
+                continue
+            market_key = str(market.get("key") or "")
+            if market_key not in {"h2h", "totals", "spreads"}:
+                continue
+            outcomes = market.get("outcomes") or []
+            if isinstance(outcomes, list) and outcomes:
+                market_candidates.append(
+                    {
+                        "market_key": market_key,
+                        "outcomes": outcomes,
+                        "bookmaker": bookmaker_name,
+                    }
+                )
 
-    if not chosen_market:
+    if not market_candidates:
         return recommendations
 
-    outcomes = chosen_market.get("outcomes") or []
-    if not isinstance(outcomes, list):
-        return recommendations
+    market_priority = {"h2h": 0, "totals": 1, "spreads": 2}
+    market_candidates.sort(
+        key=lambda item: (
+            market_priority.get(str(item.get("market_key")), 99),
+            -len(item.get("outcomes") or []),
+        )
+    )
+    chosen = market_candidates[0]
+    outcomes = chosen.get("outcomes") or []
+    market_key = str(chosen.get("market_key") or "h2h")
 
     probabilities = _compute_probabilities(outcomes)
-    market_key = chosen_market.get("key", "h2h")
+    scored_candidates: List[Dict[str, Any]] = []
 
-    for outcome in outcomes[:3]:
+    for outcome in outcomes:
+        if not isinstance(outcome, dict):
+            continue
+
         try:
             price = float(outcome.get("price"))
         except (TypeError, ValueError):
             continue
-
         if price <= 1.0:
             continue
 
-        line_name = str(outcome.get("name") or "Исход")
-        point = outcome.get("point")
-        if point is not None:
-            line_name = f"{line_name} {point}"
+        outcome_name = str(outcome.get("name") or "Исход")
+        probability = probabilities.get(outcome_name, round(min(0.99, 1.0 / price), 4))
+        probability = max(0.01, min(0.99, probability))
 
-        probability = probabilities.get(str(outcome.get("name") or "Исход"), round(min(0.99, 1.0 / price), 4))
+        if probability < MIN_RECOMMENDATION_PROBABILITY:
+            continue
 
-        recommendations.append(
+        scored_candidates.append(
             {
                 "league": league,
                 "sport": sport,
                 "home": home,
                 "away": away,
-                "line": line_name if market_key != "h2h" else f"{market_key.upper()}: {line_name}",
-                "confidence": "high" if probability >= 0.45 else "med",
-                "probability": probability,
+                "line": _build_recommendation_line(market_key, outcome_name, outcome.get("point")),
+                "confidence": _probability_to_confidence(probability),
+                "probability": round(probability, 4),
                 "coefficient": round(price, 2),
+                "confidence_score": round(probability, 4),
+                "market": market_key,
+                "bookmaker": chosen.get("bookmaker"),
+                "value_score": _recommendation_strength(probability, price),
             }
         )
 
+    scored_candidates.sort(key=lambda item: (item.get("value_score", 0.0), item.get("probability", 0.0)), reverse=True)
+    recommendations.extend(scored_candidates[:MAX_RECOMMENDATIONS_PER_EVENT])
     return recommendations
 
 
@@ -708,15 +857,35 @@ def _transform_odds_event(event: Dict[str, Any], now_utc: datetime.datetime) -> 
         return None
 
     sport = _normalize_sport_key(event.get("sport_key"))
+    if SUPPORTED_RUNTIME_SPORTS and sport not in SUPPORTED_RUNTIME_SPORTS:
+        return None
+
     league = event.get("sport_title") or event.get("sport_key") or "Unknown League"
     commence_time = event.get("commence_time")
     commence_dt = _parse_iso_datetime(commence_time)
+    if not _is_event_in_supported_window(commence_dt, now_utc):
+        return None
 
     status = "UPCOMING"
     if commence_dt and commence_dt <= now_utc:
         status = "LIVE"
 
     recommendations = _extract_recommendations(event, league, sport, home, away)
+    if not recommendations:
+        return None
+
+    bookmakers_count = _extract_bookmaker_count(event)
+    freshness_seconds = _extract_freshness_seconds(event, now_utc)
+    freshness = _freshness_label(freshness_seconds)
+    quality_score = _compute_event_quality_score(
+        bookmakers_count=bookmakers_count,
+        recommendations_count=len(recommendations),
+        freshness_seconds=freshness_seconds,
+        status=status,
+    )
+
+    if quality_score < MIN_EVENT_QUALITY_SCORE:
+        return None
 
     return {
         "id": event.get("id") or f"{sport}_{home}_{away}",
@@ -727,6 +896,10 @@ def _transform_odds_event(event: Dict[str, Any], now_utc: datetime.datetime) -> 
         "status": status,
         "time": "LIVE" if status == "LIVE" else _format_event_time(commence_time),
         "score": "—",
+        "bookmakers_count": bookmakers_count,
+        "freshness_seconds": freshness_seconds,
+        "freshness": freshness,
+        "quality_score": quality_score,
         "recommendations": recommendations,
     }
 
@@ -780,20 +953,32 @@ async def _fetch_real_events(limit: int = 30) -> List[Dict[str, Any]]:
 
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     events: List[Dict[str, Any]] = []
+    filtered_out = 0
 
     for item in payload:
         if not isinstance(item, dict):
+            filtered_out += 1
             continue
         transformed = _transform_odds_event(item, now_utc)
         if transformed:
             events.append(transformed)
+        else:
+            filtered_out += 1
 
-    events.sort(key=lambda ev: (ev.get("status") != "LIVE", ev.get("time", "")))
+    events.sort(
+        key=lambda ev: (
+            ev.get("status") != "LIVE",
+            -(ev.get("quality_score") or 0),
+            ev.get("time", ""),
+        )
+    )
     result = events[:limit]
 
     REAL_SOURCE_STATUS["last_fetch_ok"] = True
     REAL_SOURCE_STATUS["last_http_status"] = 200
     REAL_SOURCE_STATUS["last_error"] = None
+    REAL_SOURCE_STATUS["last_input_count"] = len(payload)
+    REAL_SOURCE_STATUS["last_filtered_out"] = filtered_out
     REAL_SOURCE_STATUS["last_count"] = len(result)
     return result
 
@@ -985,6 +1170,14 @@ async def source_status(refresh: bool = False):
         "cached_events_count": len(cached_events),
         "cache_source": RUNTIME_EVENTS_CACHE.get("source", "unknown"),
         "source_status": REAL_SOURCE_STATUS,
+        "quality_filters": {
+            "supported_runtime_sports": sorted(SUPPORTED_RUNTIME_SPORTS),
+            "min_bookmakers_per_event": MIN_BOOKMAKERS_PER_EVENT,
+            "min_recommendation_probability": MIN_RECOMMENDATION_PROBABILITY,
+            "min_event_quality_score": MIN_EVENT_QUALITY_SCORE,
+            "max_recommendations_per_event": MAX_RECOMMENDATIONS_PER_EVENT,
+            "max_upcoming_hours": REAL_EVENTS_MAX_UPCOMING_HOURS,
+        },
         "self_learning": {
             "enabled": SELF_LEARNING_ENABLED,
             "total_feedback": learning_status.get("total_feedback", 0),
