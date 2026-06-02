@@ -49,6 +49,39 @@ app.add_middleware(
 )
 
 
+def _load_env_pack_defaults() -> Dict[str, str]:
+    """Load defaults from docs/external_donor_pack.env if present."""
+    pack_path = pathlib.Path(__file__).resolve().parents[1] / "docs" / "external_donor_pack.env"
+    if not pack_path.exists():
+        return {}
+
+    defaults: Dict[str, str] = {}
+    try:
+        for raw_line in pack_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            defaults[key.strip()] = value.strip()
+    except Exception:
+        return {}
+    return defaults
+
+
+def _env_default(name: str, fallback: str) -> str:
+    return _ENV_PACK_DEFAULTS.get(name, fallback)
+
+
+def _normalize_json_env_value(value: str) -> str:
+    raw = str(value or "").strip()
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {'"', "'"}:
+        return raw[1:-1]
+    return raw
+
+
+_ENV_PACK_DEFAULTS = _load_env_pack_defaults()
+
+
 # ============================================
 # КОНФИГ
 # ============================================
@@ -64,19 +97,19 @@ DEFAULT_WINDOW_HOURS = int(os.getenv("DEFAULT_WINDOW_HOURS", "24"))
 DEFAULT_MIN_PROBABILITY = float(os.getenv("DEFAULT_MIN_PROBABILITY", "0.6"))
 DEFAULT_MIN_COEFFICIENT = float(os.getenv("DEFAULT_MIN_COEFFICIENT", "1.5"))
 DEFAULT_MIN_BOOKMAKERS_SUPPORT = float(os.getenv("DEFAULT_MIN_BOOKMAKERS_SUPPORT", "2.0"))
-EXTERNAL_CONSENSUS_MIN_SOURCES = int(os.getenv("EXTERNAL_CONSENSUS_MIN_SOURCES", "3"))
-EXTERNAL_CONSENSUS_ENABLED = os.getenv("EXTERNAL_CONSENSUS_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+EXTERNAL_CONSENSUS_MIN_SOURCES = int(os.getenv("EXTERNAL_CONSENSUS_MIN_SOURCES", _env_default("EXTERNAL_CONSENSUS_MIN_SOURCES", "3")))
+EXTERNAL_CONSENSUS_ENABLED = os.getenv("EXTERNAL_CONSENSUS_ENABLED", _env_default("EXTERNAL_CONSENSUS_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "on"}
 EXTERNAL_DONOR_RANDOM_SEED = os.getenv("EXTERNAL_DONOR_RANDOM_SEED", "prizolov-donor-seed")
-EXTERNAL_DONOR_CATALOG_EXTRA_JSON = os.getenv("EXTERNAL_DONOR_CATALOG_EXTRA_JSON", "")
-EXTERNAL_DONOR_JSON_FEEDS = os.getenv("EXTERNAL_DONOR_JSON_FEEDS", "")
-EXTERNAL_DONOR_RSS_FEEDS = os.getenv("EXTERNAL_DONOR_RSS_FEEDS", "")
-EXTERNAL_DONOR_TEXT_FEEDS = os.getenv("EXTERNAL_DONOR_TEXT_FEEDS", "")
-EXTERNAL_DONOR_HTTP_TIMEOUT_SECONDS = int(os.getenv("EXTERNAL_DONOR_HTTP_TIMEOUT_SECONDS", "5"))
-EXTERNAL_DONOR_HTTP_MAX_BODY_BYTES = int(os.getenv("EXTERNAL_DONOR_HTTP_MAX_BODY_BYTES", "850000"))
-EXTERNAL_DONOR_RSS_ITEM_LIMIT = int(os.getenv("EXTERNAL_DONOR_RSS_ITEM_LIMIT", "50"))
-EXTERNAL_DONOR_TEXT_ITEM_LIMIT = int(os.getenv("EXTERNAL_DONOR_TEXT_ITEM_LIMIT", "60"))
-EXTERNAL_DONOR_ENABLE_SYNTHETIC = os.getenv("EXTERNAL_DONOR_ENABLE_SYNTHETIC", "true").strip().lower() in {"1", "true", "yes", "on"}
-EXTERNAL_DONOR_SIGNAL_LIMIT_PER_EVENT = int(os.getenv("EXTERNAL_DONOR_SIGNAL_LIMIT_PER_EVENT", "10"))
+EXTERNAL_DONOR_CATALOG_EXTRA_JSON = _normalize_json_env_value(os.getenv("EXTERNAL_DONOR_CATALOG_EXTRA_JSON", _env_default("EXTERNAL_DONOR_CATALOG_EXTRA_JSON", "")))
+EXTERNAL_DONOR_JSON_FEEDS = _normalize_json_env_value(os.getenv("EXTERNAL_DONOR_JSON_FEEDS", _env_default("EXTERNAL_DONOR_JSON_FEEDS", "")))
+EXTERNAL_DONOR_RSS_FEEDS = _normalize_json_env_value(os.getenv("EXTERNAL_DONOR_RSS_FEEDS", _env_default("EXTERNAL_DONOR_RSS_FEEDS", "")))
+EXTERNAL_DONOR_TEXT_FEEDS = _normalize_json_env_value(os.getenv("EXTERNAL_DONOR_TEXT_FEEDS", _env_default("EXTERNAL_DONOR_TEXT_FEEDS", "")))
+EXTERNAL_DONOR_HTTP_TIMEOUT_SECONDS = int(os.getenv("EXTERNAL_DONOR_HTTP_TIMEOUT_SECONDS", _env_default("EXTERNAL_DONOR_HTTP_TIMEOUT_SECONDS", "5")))
+EXTERNAL_DONOR_HTTP_MAX_BODY_BYTES = int(os.getenv("EXTERNAL_DONOR_HTTP_MAX_BODY_BYTES", _env_default("EXTERNAL_DONOR_HTTP_MAX_BODY_BYTES", "850000")))
+EXTERNAL_DONOR_RSS_ITEM_LIMIT = int(os.getenv("EXTERNAL_DONOR_RSS_ITEM_LIMIT", _env_default("EXTERNAL_DONOR_RSS_ITEM_LIMIT", "50")))
+EXTERNAL_DONOR_TEXT_ITEM_LIMIT = int(os.getenv("EXTERNAL_DONOR_TEXT_ITEM_LIMIT", _env_default("EXTERNAL_DONOR_TEXT_ITEM_LIMIT", "60")))
+EXTERNAL_DONOR_ENABLE_SYNTHETIC = os.getenv("EXTERNAL_DONOR_ENABLE_SYNTHETIC", _env_default("EXTERNAL_DONOR_ENABLE_SYNTHETIC", "true")).strip().lower() in {"1", "true", "yes", "on"}
+EXTERNAL_DONOR_SIGNAL_LIMIT_PER_EVENT = int(os.getenv("EXTERNAL_DONOR_SIGNAL_LIMIT_PER_EVENT", _env_default("EXTERNAL_DONOR_SIGNAL_LIMIT_PER_EVENT", "10")))
 
 MAX_ODDS_AGE_SECONDS = int(os.getenv("MAX_ODDS_AGE_SECONDS", "900"))  # 15 минут
 STALE_ODDS_PENALTY_FACTOR = float(os.getenv("STALE_ODDS_PENALTY_FACTOR", "0.92"))
@@ -618,11 +651,12 @@ def _donor_noise(seed: str, min_value: float, max_value: float) -> float:
 
 
 def _parse_feed_sources_env(raw_env: str, fallback_prefix: str, channel: str) -> List[Dict[str, Any]]:
-    if not raw_env.strip():
+    normalized_env = _normalize_json_env_value(raw_env)
+    if not normalized_env.strip():
         return []
 
     try:
-        payload = json.loads(raw_env)
+        payload = json.loads(normalized_env)
     except Exception:
         logger.warning(f"⚠️ Failed to parse {fallback_prefix} feed configuration")
         return []
@@ -1991,6 +2025,7 @@ async def donors_status():
             "http_max_body_bytes": EXTERNAL_DONOR_HTTP_MAX_BODY_BYTES,
             "rss_item_limit": EXTERNAL_DONOR_RSS_ITEM_LIMIT,
             "text_item_limit": EXTERNAL_DONOR_TEXT_ITEM_LIMIT,
+            "pack_defaults_loaded": bool(_ENV_PACK_DEFAULTS),
         },
         "configured_feeds": {
             "json": len(json_feeds),
@@ -2093,6 +2128,7 @@ async def source_status():
             "external_donor_http_max_body_bytes": EXTERNAL_DONOR_HTTP_MAX_BODY_BYTES,
             "external_donor_rss_item_limit": EXTERNAL_DONOR_RSS_ITEM_LIMIT,
             "external_donor_text_item_limit": EXTERNAL_DONOR_TEXT_ITEM_LIMIT,
+            "external_donor_pack_defaults_loaded": bool(_ENV_PACK_DEFAULTS),
         },
         "runtime": {
             "low_event_streak": low_streak,
