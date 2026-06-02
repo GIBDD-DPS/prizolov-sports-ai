@@ -334,7 +334,10 @@ SUPPORTED_RUNTIME_SPORTS = {
 }
 MIN_BOOKMAKERS_PER_EVENT = max(1, int(os.environ.get("MIN_BOOKMAKERS_PER_EVENT", "2")))
 MIN_RECOMMENDATION_PROBABILITY = min(0.9, max(0.01, float(os.environ.get("MIN_RECOMMENDATION_PROBABILITY", "0.46"))))
-MAX_RECOMMENDATIONS_PER_EVENT = max(1, int(os.environ.get("MAX_RECOMMENDATIONS_PER_EVENT", "3")))
+MIN_RECOMMENDATION_COEFFICIENT = max(1.01, float(os.environ.get("MIN_RECOMMENDATION_COEFFICIENT", "1.55")))
+MIN_RECOMMENDATION_EDGE = max(-0.15, min(0.3, float(os.environ.get("MIN_RECOMMENDATION_EDGE", "0.015"))))
+MAX_RECOMMENDATIONS_PER_EVENT = max(1, int(os.environ.get("MAX_RECOMMENDATIONS_PER_EVENT", "6")))
+MAX_LINES_PER_MARKET = max(1, int(os.environ.get("MAX_LINES_PER_MARKET", "3")))
 REAL_EVENTS_MAX_UPCOMING_HOURS = max(1, int(os.environ.get("REAL_EVENTS_MAX_UPCOMING_HOURS", "72")))
 MIN_EVENT_QUALITY_SCORE = min(100.0, max(0.0, float(os.environ.get("MIN_EVENT_QUALITY_SCORE", "42"))))
 
@@ -1553,7 +1556,8 @@ def _compute_event_quality_score(
     status: str,
 ) -> float:
     bookmakers_factor = min(1.0, max(0.0, bookmakers_count / 6.0))
-    recommendations_factor = min(1.0, max(0.0, recommendations_count / max(1, MAX_RECOMMENDATIONS_PER_EVENT)))
+    recommendations_target = max(1, min(MAX_RECOMMENDATIONS_PER_EVENT, 4))
+    recommendations_factor = min(1.0, max(0.0, recommendations_count / recommendations_target))
 
     freshness_factor = 0.55
     if freshness_seconds is not None:
@@ -1609,6 +1613,119 @@ def _recommendation_strength(probability: float, price: float) -> float:
     return round((probability * 0.7) + (edge * 0.3), 4)
 
 
+def _normalize_outcome_key(outcome_name: str, point: Any) -> str:
+    name = str(outcome_name or "").strip().lower()
+    if point is None:
+        return name
+    return f"{name}|{point}"
+
+
+def _build_candidate_from_group(
+    group: Dict[str, Any],
+    league: str,
+    sport: str,
+    home: str,
+    away: str,
+    min_probability_threshold: float,
+    min_coefficient_threshold: float,
+    min_edge_threshold: float,
+    tier: str,
+) -> Optional[Dict[str, Any]]:
+    probabilities = group.get("probabilities") or []
+    odds = group.get("odds") or []
+    bookmakers = group.get("bookmakers") or set()
+
+    if not probabilities or not odds:
+        return None
+
+    avg_probability = sum(probabilities) / len(probabilities)
+    best_coefficient = max(odds)
+    implied_probability = min(0.99, max(0.01, 1.0 / max(best_coefficient, 1.01)))
+    edge = avg_probability - implied_probability
+
+    if avg_probability < min_probability_threshold:
+        return None
+    if best_coefficient < min_coefficient_threshold:
+        return None
+    if edge < min_edge_threshold:
+        return None
+
+    coverage = len(bookmakers) if isinstance(bookmakers, set) else len(list(bookmakers))
+    market_key = str(group.get("market") or "h2h")
+    line = _build_recommendation_line(market_key, str(group.get("outcome_name") or "Исход"), group.get("point"))
+
+    score = _recommendation_strength(avg_probability, best_coefficient)
+    # Лёгкий бонус за подтверждение нескольких букмекеров.
+    score += min(0.08, coverage * 0.01)
+
+    return {
+        "league": league,
+        "sport": sport,
+        "home": home,
+        "away": away,
+        "line": line,
+        "confidence": _probability_to_confidence(avg_probability),
+        "probability": round(min(0.99, max(0.01, avg_probability)), 4),
+        "coefficient": round(best_coefficient, 2),
+        "confidence_score": round(min(0.99, max(0.01, avg_probability)), 4),
+        "market": market_key,
+        "bookmaker": "consensus",
+        "bookmakers_support": coverage,
+        "edge": round(edge, 5),
+        "value_score": round(score, 4),
+        "selection_tier": tier,
+    }
+
+
+def _pick_diversified_recommendations(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not candidates:
+        return []
+
+    # Сначала сортируем по ценности и вероятности, потом добираем с диверсификацией рынков.
+    ordered = sorted(
+        candidates,
+        key=lambda item: (
+            _safe_float(item.get("value_score"), 0.0),
+            _safe_float(item.get("probability"), 0.0),
+            _safe_float(item.get("coefficient"), 0.0),
+        ),
+        reverse=True,
+    )
+
+    market_counts: Dict[str, int] = {}
+    selected: List[Dict[str, Any]] = []
+
+    for candidate in ordered:
+        market = str(candidate.get("market") or "other")
+        if market_counts.get(market, 0) >= MAX_LINES_PER_MARKET:
+            continue
+
+        selected.append(candidate)
+        market_counts[market] = market_counts.get(market, 0) + 1
+        if len(selected) >= MAX_RECOMMENDATIONS_PER_EVENT:
+            break
+
+    # Если из-за диверсификации выбрали меньше, чем нужно — добираем лучшими оставшимися.
+    if len(selected) < MAX_RECOMMENDATIONS_PER_EVENT:
+        selected_keys = {
+            (
+                str(item.get("market") or ""),
+                str(item.get("line") or ""),
+            )
+            for item in selected
+        }
+        for candidate in ordered:
+            key = (str(candidate.get("market") or ""), str(candidate.get("line") or ""))
+            if key in selected_keys:
+                continue
+            selected.append(candidate)
+            selected_keys.add(key)
+            if len(selected) >= MAX_RECOMMENDATIONS_PER_EVENT:
+                break
+
+    return selected
+
+
 def _extract_recommendations(event: Dict[str, Any], league: str, sport: str, home: str, away: str, min_probability_threshold: float) -> List[Dict[str, Any]]:
     recommendations: List[Dict[str, Any]] = []
     bookmakers = event.get("bookmakers") or []
@@ -1616,82 +1733,116 @@ def _extract_recommendations(event: Dict[str, Any], league: str, sport: str, hom
     if not isinstance(bookmakers, list) or len(bookmakers) < MIN_BOOKMAKERS_PER_EVENT:
         return recommendations
 
-    market_candidates: List[Dict[str, Any]] = []
+    grouped_lines: Dict[str, Dict[str, Any]] = {}
+
     for bookmaker in bookmakers:
         if not isinstance(bookmaker, dict):
             continue
-        bookmaker_name = bookmaker.get("title") or bookmaker.get("key") or "bookmaker"
+        bookmaker_name = str(bookmaker.get("title") or bookmaker.get("key") or "bookmaker")
+
         for market in bookmaker.get("markets") or []:
             if not isinstance(market, dict):
                 continue
             market_key = str(market.get("key") or "")
             if market_key not in {"h2h", "totals", "spreads"}:
                 continue
+
             outcomes = market.get("outcomes") or []
-            if isinstance(outcomes, list) and outcomes:
-                market_candidates.append(
+            if not isinstance(outcomes, list) or not outcomes:
+                continue
+
+            probabilities = _compute_probabilities(outcomes)
+            for outcome in outcomes:
+                if not isinstance(outcome, dict):
+                    continue
+
+                try:
+                    price = float(outcome.get("price"))
+                except (TypeError, ValueError):
+                    continue
+                if price <= 1.0:
+                    continue
+
+                outcome_name = str(outcome.get("name") or "Исход")
+                point = outcome.get("point")
+                probability = probabilities.get(outcome_name, round(min(0.99, 1.0 / price), 4))
+                probability = max(0.01, min(0.99, probability))
+
+                line_key = f"{market_key}:{_normalize_outcome_key(outcome_name, point)}"
+                group = grouped_lines.setdefault(
+                    line_key,
                     {
-                        "market_key": market_key,
-                        "outcomes": outcomes,
-                        "bookmaker": bookmaker_name,
-                    }
+                        "market": market_key,
+                        "outcome_name": outcome_name,
+                        "point": point,
+                        "probabilities": [],
+                        "odds": [],
+                        "bookmakers": set(),
+                    },
                 )
 
-    if not market_candidates:
+                group["probabilities"].append(probability)
+                group["odds"].append(price)
+                group["bookmakers"].add(bookmaker_name)
+
+    if not grouped_lines:
         return recommendations
 
-    market_priority = {"h2h": 0, "totals": 1, "spreads": 2}
-    market_candidates.sort(
-        key=lambda item: (
-            market_priority.get(str(item.get("market_key")), 99),
-            -len(item.get("outcomes") or []),
+    strict_candidates: List[Dict[str, Any]] = []
+    relaxed_candidates: List[Dict[str, Any]] = []
+
+    strict_probability = max(min_probability_threshold, MIN_RECOMMENDATION_PROBABILITY)
+    strict_coeff = max(1.01, MIN_RECOMMENDATION_COEFFICIENT)
+    strict_edge = MIN_RECOMMENDATION_EDGE
+
+    relaxed_probability = max(min_probability_threshold, strict_probability - 0.03)
+    relaxed_coeff = max(1.30, strict_coeff - 0.20)
+    relaxed_edge = max(-0.06, strict_edge - 0.04)
+
+    for group in grouped_lines.values():
+        strict_candidate = _build_candidate_from_group(
+            group,
+            league,
+            sport,
+            home,
+            away,
+            min_probability_threshold=strict_probability,
+            min_coefficient_threshold=strict_coeff,
+            min_edge_threshold=strict_edge,
+            tier="strict",
         )
-    )
-    chosen = market_candidates[0]
-    outcomes = chosen.get("outcomes") or []
-    market_key = str(chosen.get("market_key") or "h2h")
-
-    probabilities = _compute_probabilities(outcomes)
-    scored_candidates: List[Dict[str, Any]] = []
-
-    for outcome in outcomes:
-        if not isinstance(outcome, dict):
+        if strict_candidate:
+            strict_candidates.append(strict_candidate)
             continue
 
-        try:
-            price = float(outcome.get("price"))
-        except (TypeError, ValueError):
-            continue
-        if price <= 1.0:
-            continue
-
-        outcome_name = str(outcome.get("name") or "Исход")
-        probability = probabilities.get(outcome_name, round(min(0.99, 1.0 / price), 4))
-        probability = max(0.01, min(0.99, probability))
-
-        if probability < min_probability_threshold:
-            continue
-
-        scored_candidates.append(
-            {
-                "league": league,
-                "sport": sport,
-                "home": home,
-                "away": away,
-                "line": _build_recommendation_line(market_key, outcome_name, outcome.get("point")),
-                "confidence": _probability_to_confidence(probability),
-                "probability": round(probability, 4),
-                "coefficient": round(price, 2),
-                "confidence_score": round(probability, 4),
-                "market": market_key,
-                "bookmaker": chosen.get("bookmaker"),
-                "value_score": _recommendation_strength(probability, price),
-            }
+        relaxed_candidate = _build_candidate_from_group(
+            group,
+            league,
+            sport,
+            home,
+            away,
+            min_probability_threshold=relaxed_probability,
+            min_coefficient_threshold=relaxed_coeff,
+            min_edge_threshold=relaxed_edge,
+            tier="relaxed",
         )
+        if relaxed_candidate:
+            relaxed_candidates.append(relaxed_candidate)
 
-    scored_candidates.sort(key=lambda item: (item.get("value_score", 0.0), item.get("probability", 0.0)), reverse=True)
-    recommendations.extend(scored_candidates[:MAX_RECOMMENDATIONS_PER_EVENT])
-    return recommendations
+    candidates = strict_candidates
+    if len(candidates) < max(2, MAX_RECOMMENDATIONS_PER_EVENT // 2):
+        existing_keys = {
+            (str(item.get("market") or ""), str(item.get("line") or ""))
+            for item in candidates
+        }
+        for item in relaxed_candidates:
+            key = (str(item.get("market") or ""), str(item.get("line") or ""))
+            if key in existing_keys:
+                continue
+            candidates.append(item)
+            existing_keys.add(key)
+
+    return _pick_diversified_recommendations(candidates)
 
 
 def _transform_odds_event(event: Dict[str, Any], now_utc: datetime.datetime, min_probability_threshold: float) -> Optional[Dict[str, Any]]:
@@ -2190,6 +2341,9 @@ async def source_status(refresh: bool = False):
             "supported_runtime_sports": sorted(SUPPORTED_RUNTIME_SPORTS),
             "min_bookmakers_per_event": MIN_BOOKMAKERS_PER_EVENT,
             "min_recommendation_probability": MIN_RECOMMENDATION_PROBABILITY,
+            "min_recommendation_coefficient": MIN_RECOMMENDATION_COEFFICIENT,
+            "min_recommendation_edge": MIN_RECOMMENDATION_EDGE,
+            "max_lines_per_market": MAX_LINES_PER_MARKET,
             "effective_min_recommendation_probability": REAL_SOURCE_STATUS.get("adaptive_min_probability") or MIN_RECOMMENDATION_PROBABILITY,
             "adaptive_threshold_enabled": ADAPTIVE_THRESHOLD_ENABLED,
             "adaptive_threshold_min_feedback": ADAPTIVE_THRESHOLD_MIN_FEEDBACK,

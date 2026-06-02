@@ -100,6 +100,9 @@ python3 scripts/auto_feedback_worker.py \
 - `supported_runtime_sports`
 - `min_bookmakers_per_event`
 - `min_recommendation_probability`
+- `min_recommendation_coefficient`
+- `min_recommendation_edge`
+- `max_lines_per_market`
 - `effective_min_recommendation_probability`
 - `adaptive_threshold_enabled`
 - `adaptive_threshold_min_feedback`
@@ -168,3 +171,9 @@ python3 scripts/auto_feedback_worker.py \
 В degraded-режиме API автоматически усиливает фильтрацию и сортировку по качеству для более надежной выдачи.
 
 `GET /api/learning/metrics` также поддерживает `policy_mode` и `adaptive_policy` для preview storefront-режима в аналитике.
+
+
+Расширение линий ставок:
+- рекомендации агрегируются по нескольким букмекерам и рынкам (`h2h`, `totals`, `spreads`),
+- отбор приоритизирует линии с высокой проходимостью и высоким коэффициентом,
+- поддерживается диверсификация по рынкам (`max_lines_per_market`) и увеличенный лимит `max_recommendations_per_event`.

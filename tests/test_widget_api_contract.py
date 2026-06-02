@@ -129,6 +129,9 @@ class TestWidgetApiContract(unittest.TestCase):
         self.assertIn("min_event_quality_score", quality)
         self.assertIn("max_recommendations_per_event", quality)
         self.assertIn("effective_min_recommendation_probability", quality)
+        self.assertIn("min_recommendation_coefficient", quality)
+        self.assertIn("min_recommendation_edge", quality)
+        self.assertIn("max_lines_per_market", quality)
         self.assertIn("adaptive_threshold_enabled", quality)
 
         self.assertIn("self_learning", payload)
@@ -242,6 +245,102 @@ class TestWidgetApiContract(unittest.TestCase):
         self.assertIn("sport", first)
         self.assertIn("predicted_probability", first)
         self.assertIn("brier_score", first)
+
+
+    def test_recommendation_extraction_expands_lines_with_quality_constraints(self):
+        from app.main import (
+            MAX_RECOMMENDATIONS_PER_EVENT,
+            MIN_RECOMMENDATION_COEFFICIENT,
+            _extract_recommendations,
+        )
+
+        sample_event = {
+            "bookmakers": [
+                {
+                    "title": "BookA",
+                    "markets": [
+                        {
+                            "key": "h2h",
+                            "outcomes": [
+                                {"name": "Home", "price": 1.85},
+                                {"name": "Away", "price": 2.05},
+                            ],
+                        },
+                        {
+                            "key": "totals",
+                            "outcomes": [
+                                {"name": "Over", "point": 2.5, "price": 1.92},
+                                {"name": "Under", "point": 2.5, "price": 1.95},
+                            ],
+                        },
+                    ],
+                },
+                {
+                    "title": "BookB",
+                    "markets": [
+                        {
+                            "key": "h2h",
+                            "outcomes": [
+                                {"name": "Home", "price": 1.88},
+                                {"name": "Away", "price": 2.08},
+                            ],
+                        },
+                        {
+                            "key": "spreads",
+                            "outcomes": [
+                                {"name": "Home", "point": -1.5, "price": 2.2},
+                                {"name": "Away", "point": 1.5, "price": 1.77},
+                            ],
+                        },
+                    ],
+                },
+                {
+                    "title": "BookC",
+                    "markets": [
+                        {
+                            "key": "totals",
+                            "outcomes": [
+                                {"name": "Over", "point": 2.5, "price": 1.98},
+                                {"name": "Under", "point": 2.5, "price": 1.9},
+                            ],
+                        },
+                        {
+                            "key": "spreads",
+                            "outcomes": [
+                                {"name": "Home", "point": -1.5, "price": 2.25},
+                                {"name": "Away", "point": 1.5, "price": 1.74},
+                            ],
+                        },
+                    ],
+                },
+            ]
+        }
+
+        recommendations = _extract_recommendations(
+            sample_event,
+            league="Test League",
+            sport="football",
+            home="Home",
+            away="Away",
+            min_probability_threshold=0.5,
+        )
+
+        self.assertGreater(len(recommendations), 0)
+        self.assertLessEqual(len(recommendations), MAX_RECOMMENDATIONS_PER_EVENT)
+
+        strong_lines = 0
+        markets = set()
+        for rec in recommendations:
+            self.assertGreaterEqual(float(rec.get("probability", 0.0)), 0.5)
+            self.assertGreaterEqual(float(rec.get("coefficient", 0.0)), 1.3)
+            self.assertIn("selection_tier", rec)
+            self.assertIn("bookmakers_support", rec)
+            markets.add(rec.get("market"))
+            if float(rec.get("coefficient", 0.0)) >= float(MIN_RECOMMENDATION_COEFFICIENT):
+                strong_lines += 1
+
+        self.assertGreaterEqual(strong_lines, 1)
+        self.assertGreaterEqual(len(markets), 2)
 
 
 if __name__ == "__main__":
