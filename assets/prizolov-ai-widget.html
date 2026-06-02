@@ -1,288 +1,554 @@
-<!-- Контейнер для вывода виджета ИИ -->
-<div id="prizolov-ai-widget" style="background: #1e1e24; color: #fff; padding: 20px; border-radius: 12px; font-family: sans-serif; max-width: 450px; margin: 15px auto;">
-    <!-- Шапка LIVE-матча -->
-    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #333; padding-bottom: 10px; margin-bottom: 15px;">
-        <div>
-            <span id="c-league" style="font-size: 12px; text-transform: uppercase; color: #888; letter-spacing: 1px;">Загрузка лиги...</span>
-            <div id="c-match" style="font-size: 18px; font-weight: bold; margin-top: 5px;">Поиск события...</div>
-            <div id="c-sport" style="font-size: 11px; color: #666; margin-top: 3px;">—</div>
-        </div>
-        <span id="c-time" style="background: #ff3b30; color: #fff; padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: bold; animation: blink 1.5s infinite;">LIVE</span>
+<!-- Elementor-ready adaptive widget for Prizolov Sports AI -->
+<div id="pzsw-widget" class="pzsw-widget">
+  <div class="pzsw-header">
+    <div>
+      <div class="pzsw-title">Prizolov AI • LIVE</div>
+      <div class="pzsw-subtitle">Все улучшения модели + витрина ставок</div>
     </div>
-    <!-- Список рекомендаций -->
-    <div id="recs"><div class="ph" style="color: #888; text-align: center; padding: 20px;">🤖 AI анализирует рынок...</div></div>
-    <!-- Навигация по матчам -->
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 15px; padding-top: 10px; border-top: 1px solid #333;">
-        <button id="prev-match" style="background: #007aff; color: #fff; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;">← Предыдущий</button>
-        <span id="match-counter" style="font-size: 11px; color: #666;">Матч 1 из ?</span>
-        <button id="next-match" style="background: #007aff; color: #fff; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;">Следующий →</button>
+    <button id="pzsw-refresh-btn" class="pzsw-btn" type="button">Обновить</button>
+  </div>
+
+  <div class="pzsw-badges">
+    <span class="pzsw-badge">Проходимость > 60%</span>
+    <span class="pzsw-badge">Коэф. >= 1.50</span>
+    <span class="pzsw-badge">Сортировка: по проходимости</span>
+  </div>
+
+  <div id="pzsw-meta" class="pzsw-meta">Загрузка live событий...</div>
+
+  <section class="pzsw-section">
+    <h3 class="pzsw-section-title">Рекомендуемые ставки</h3>
+    <div id="pzsw-reco-list" class="pzsw-reco-list">
+      <div class="pzsw-placeholder">Анализируем события...</div>
     </div>
+  </section>
+
+  <section class="pzsw-section">
+    <h3 class="pzsw-section-title">Все LIVE события</h3>
+    <div id="pzsw-events-list" class="pzsw-events-list">
+      <div class="pzsw-placeholder">Подгружаем матчи...</div>
+    </div>
+  </section>
+
+  <div class="pzsw-footer">
+    <span id="pzsw-last-update">—</span>
+    <span id="pzsw-status-pill" class="pzsw-pill">online</span>
+  </div>
 </div>
 
 <style>
-@keyframes blink { 0% {opacity: 1;} 50% {opacity: 0.4;} 100% {opacity: 1;} }
-.rec { display: flex; justify-content: space-between; align-items: center; background: #2a2a32; padding: 12px; border-radius: 8px; margin-bottom: 8px; border-left: 4px solid #007aff; }
-.rec-league { font-size: 11px; color: #aaa; text-transform: uppercase; }
-.rec-marker { font-size: 14px; margin: 4px 0; font-weight: 500; }
-.rec-meta { font-size: 12px; color: #888; }
-.conf { padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: bold; margin-left: 5px; }
-.conf.high { background: rgba(52, 199, 89, 0.2); color: #34c759; }
-.conf.med { background: rgba(255, 149, 0, 0.2); color: #ff9500; }
-.rec-coef { background: #007aff; color: #fff; padding: 6px 12px; border-radius: 6px; font-weight: bold; font-size: 15px; min-width: 45px; text-align: center; }
-button:hover { opacity: 0.8; }
+  .pzsw-widget {
+    background: linear-gradient(180deg, #151923 0%, #121624 100%);
+    color: #f7f8fb;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    box-shadow: 0 12px 35px rgba(10, 14, 22, 0.35);
+    padding: 16px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    width: 100%;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+
+  .pzsw-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .pzsw-title {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+  }
+
+  .pzsw-subtitle {
+    font-size: 13px;
+    color: #a9b0c4;
+    margin-top: 2px;
+  }
+
+  .pzsw-btn {
+    border: 0;
+    cursor: pointer;
+    border-radius: 10px;
+    background: #2563eb;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 9px 14px;
+    transition: transform 0.15s ease, opacity 0.15s ease;
+  }
+
+  .pzsw-btn:hover {
+    transform: translateY(-1px);
+    opacity: 0.95;
+  }
+
+  .pzsw-badges {
+    margin-top: 12px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .pzsw-badge {
+    display: inline-block;
+    background: rgba(37, 99, 235, 0.18);
+    border: 1px solid rgba(37, 99, 235, 0.35);
+    color: #cfe0ff;
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .pzsw-meta {
+    margin-top: 10px;
+    color: #97a0b8;
+    font-size: 12px;
+  }
+
+  .pzsw-section {
+    margin-top: 18px;
+  }
+
+  .pzsw-section-title {
+    margin: 0 0 10px;
+    font-size: 16px;
+    font-weight: 700;
+  }
+
+  .pzsw-placeholder {
+    font-size: 13px;
+    color: #9aa3bb;
+    padding: 14px;
+    border: 1px dashed rgba(255, 255, 255, 0.18);
+    border-radius: 12px;
+  }
+
+  .pzsw-reco-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .pzsw-reco-card {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 12px;
+    padding: 12px;
+  }
+
+  .pzsw-reco-top {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .pzsw-reco-line {
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.35;
+    color: #f4f7ff;
+  }
+
+  .pzsw-reco-premium {
+    flex-shrink: 0;
+    font-size: 10px;
+    font-weight: 700;
+    background: rgba(253, 186, 116, 0.2);
+    color: #fdba74;
+    border-radius: 999px;
+    padding: 4px 8px;
+    height: fit-content;
+  }
+
+  .pzsw-reco-match {
+    margin-top: 7px;
+    font-size: 12px;
+    color: #c0c8da;
+  }
+
+  .pzsw-reco-stats {
+    margin-top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .pzsw-chip {
+    font-size: 11px;
+    border-radius: 8px;
+    background: rgba(148, 163, 184, 0.16);
+    color: #d9e0ef;
+    padding: 3px 7px;
+    line-height: 1.3;
+  }
+
+  .pzsw-chip.pzsw-chip-success {
+    background: rgba(16, 185, 129, 0.2);
+    color: #6ee7b7;
+  }
+
+  .pzsw-chip.pzsw-chip-accent {
+    background: rgba(37, 99, 235, 0.2);
+    color: #93c5fd;
+  }
+
+  .pzsw-events-list {
+    display: grid;
+    gap: 10px;
+  }
+
+  .pzsw-event-card {
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 12px;
+  }
+
+  .pzsw-event-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    align-items: flex-start;
+  }
+
+  .pzsw-event-title {
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.35;
+  }
+
+  .pzsw-event-league {
+    font-size: 11px;
+    color: #9ea7c0;
+    margin-top: 3px;
+  }
+
+  .pzsw-event-prob {
+    font-size: 13px;
+    font-weight: 700;
+    color: #6ee7b7;
+    white-space: nowrap;
+  }
+
+  .pzsw-event-recs {
+    margin-top: 8px;
+    display: grid;
+    gap: 6px;
+  }
+
+  .pzsw-event-rec {
+    font-size: 12px;
+    color: #dbe2f3;
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 9px;
+    padding: 7px 8px;
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .pzsw-footer {
+    margin-top: 14px;
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    align-items: center;
+    font-size: 11px;
+    color: #9ea7c0;
+  }
+
+  .pzsw-pill {
+    border-radius: 999px;
+    padding: 3px 8px;
+    background: rgba(16, 185, 129, 0.18);
+    color: #86efac;
+    border: 1px solid rgba(16, 185, 129, 0.32);
+    font-weight: 700;
+  }
+
+  .pzsw-pill.error {
+    background: rgba(239, 68, 68, 0.2);
+    color: #fca5a5;
+    border-color: rgba(239, 68, 68, 0.4);
+  }
+
+  @media (max-width: 1024px) {
+    .pzsw-reco-list {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .pzsw-widget {
+      border-radius: 12px;
+      padding: 12px;
+    }
+    .pzsw-title {
+      font-size: 18px;
+    }
+    .pzsw-subtitle {
+      font-size: 12px;
+    }
+    .pzsw-btn {
+      font-size: 12px;
+      padding: 8px 10px;
+    }
+    .pzsw-section-title {
+      font-size: 15px;
+    }
+  }
 </style>
 
 <script>
-document.addEventListener("DOMContentLoaded", function() {
-    var TARGET_URL = "/get-ai-sports.php";
-    var currentEventIndex = 0;
-    var allEvents = [];
+  (function() {
+    var root = document.getElementById("pzsw-widget");
+    if (!root) return;
 
-    function escapeHtml(str) {
-        if (!str) return "";
-        return String(str)
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;");
+    var CONFIG = {
+      apiBase: window.PRIZOLOV_API_BASE || "",
+      lang: window.PRIZOLOV_WIDGET_LANG || "ru",
+      minProbability: 0.6,
+      minCoefficient: 1.5,
+      topLimit: 16,
+      eventsLimit: 40,
+      refreshMs: 45000
+    };
+
+    var refreshBtn = document.getElementById("pzsw-refresh-btn");
+    var recoList = document.getElementById("pzsw-reco-list");
+    var eventsList = document.getElementById("pzsw-events-list");
+    var meta = document.getElementById("pzsw-meta");
+    var lastUpdate = document.getElementById("pzsw-last-update");
+    var statusPill = document.getElementById("pzsw-status-pill");
+
+    function esc(value) {
+      return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
     }
 
-    function formatSport(sport) {
-        if (!sport) return "FOOTBALL";
-        return String(sport).toUpperCase();
+    function num(value, fallback) {
+      var parsed = parseFloat(value);
+      return Number.isFinite(parsed) ? parsed : fallback;
     }
 
-    function normalizeProbability(value) {
-        var parsed = parseFloat(value);
-        if (!isFinite(parsed)) return 0;
-        if (parsed > 1) parsed = parsed / 100;
-        if (parsed < 0) parsed = 0;
-        if (parsed > 1) parsed = 1;
-        return parsed;
+    function pct(probability) {
+      return Math.round(num(probability, 0) * 100);
     }
 
-    function normalizeCoefficient(value) {
-        var parsed = parseFloat(value);
-        if (!isFinite(parsed) || parsed <= 0) return 1.5;
-        return parsed;
+    function formatCoef(value) {
+      return num(value, 0).toFixed(2);
     }
 
-    function normalizeEvent(raw) {
-        if (!raw || typeof raw !== "object") return null;
+    function qualify(rec) {
+      return num(rec && rec.probability, 0) > CONFIG.minProbability && num(rec && rec.coefficient, 0) >= CONFIG.minCoefficient;
+    }
 
-        var matchInfo = raw.match_info || {};
-        var recommendations = Array.isArray(raw.recommendations) ? raw.recommendations : [];
-        var baseSport = raw.sport || matchInfo.sport || "football";
-        var baseLeague = raw.league || matchInfo.league || "—";
-        var baseHome = raw.home || raw.home_team || matchInfo.home || "—";
-        var baseAway = raw.away || raw.away_team || matchInfo.away || "—";
+    function withTimeout(url, ms) {
+      var controller = new AbortController();
+      var timer = setTimeout(function() {
+        controller.abort();
+      }, ms);
+      return fetch(url, { signal: controller.signal }).finally(function() {
+        clearTimeout(timer);
+      });
+    }
 
-        var normalizedRecs = recommendations.map(function(rec) {
-            return {
-                line: rec.line || rec.market || "Исход",
-                confidence: rec.confidence === "high" ? "high" : "med",
-                probability: normalizeProbability(rec.probability),
-                coefficient: normalizeCoefficient(rec.coefficient || rec.price || rec.odds),
-                league: rec.league || baseLeague,
-                sport: rec.sport || baseSport,
-                home: rec.home || baseHome,
-                away: rec.away || baseAway
-            };
+    function buildUrl(path, params) {
+      var query = new URLSearchParams(params || {});
+      return CONFIG.apiBase + path + "?" + query.toString();
+    }
+
+    async function fetchJson(path, params) {
+      var url = buildUrl(path, params);
+      var response = await withTimeout(url, 12000);
+      if (!response.ok) throw new Error("HTTP " + response.status + " for " + path);
+      return response.json();
+    }
+
+    function flattenRecommendations(events) {
+      var output = [];
+      (events || []).forEach(function(event) {
+        (event.recommendations || []).forEach(function(rec) {
+          output.push({
+            event_id: event.id,
+            league: event.league,
+            home: event.home,
+            away: event.away,
+            sport: event.sport,
+            line: rec.line,
+            probability: rec.probability,
+            coefficient: rec.coefficient,
+            edge: rec.edge,
+            bookmakers_support: rec.bookmakers_support,
+            weighted_bookmakers_support: rec.weighted_bookmakers_support,
+            no_vig_probability: rec.no_vig_probability,
+            market_overround: rec.market_overround,
+            selection_tier: rec.selection_tier,
+            is_premium: rec.is_premium
+          });
+        });
+      });
+      return output;
+    }
+
+    function sortRecommendations(items) {
+      return items.sort(function(a, b) {
+        var pDiff = num(b.probability, 0) - num(a.probability, 0);
+        if (Math.abs(pDiff) > 0.0001) return pDiff;
+        var cDiff = num(b.coefficient, 0) - num(a.coefficient, 0);
+        if (Math.abs(cDiff) > 0.0001) return cDiff;
+        return num(b.edge, -999) - num(a.edge, -999);
+      });
+    }
+
+    function renderRecommendations(recommendations) {
+      if (!recommendations.length) {
+        recoList.innerHTML = '<div class="pzsw-placeholder">Под условия (>60% и коэф. >=1.5) подходящих ставок пока нет.</div>';
+        return;
+      }
+
+      recoList.innerHTML = recommendations.slice(0, CONFIG.topLimit).map(function(rec) {
+        var prob = pct(rec.probability);
+        var coef = formatCoef(rec.coefficient);
+        var edge = (num(rec.edge, 0) * 100).toFixed(1);
+        var weightedSupport = num(rec.weighted_bookmakers_support, rec.bookmakers_support || 0).toFixed(1);
+        var noVig = rec.no_vig_probability == null ? "—" : (pct(rec.no_vig_probability) + "%");
+        var overround = rec.market_overround == null ? "—" : (num(rec.market_overround, 0) * 100).toFixed(2) + "%";
+
+        return '<article class="pzsw-reco-card">' +
+          '<div class="pzsw-reco-top">' +
+            '<div class="pzsw-reco-line">' + esc(rec.line) + '</div>' +
+            (rec.is_premium ? '<span class="pzsw-reco-premium">PREMIUM</span>' : '') +
+          '</div>' +
+          '<div class="pzsw-reco-match">' + esc(rec.home) + ' vs ' + esc(rec.away) + '</div>' +
+          '<div class="pzsw-reco-stats">' +
+            '<span class="pzsw-chip pzsw-chip-success">Вероятность: ' + prob + '%</span>' +
+            '<span class="pzsw-chip pzsw-chip-accent">Коэф: ' + coef + '</span>' +
+            '<span class="pzsw-chip">Edge: ' + edge + '%</span>' +
+            '<span class="pzsw-chip">Поддержка БК: ' + weightedSupport + '</span>' +
+            '<span class="pzsw-chip">No-vig: ' + noVig + '</span>' +
+            '<span class="pzsw-chip">Overround: ' + overround + '</span>' +
+          '</div>' +
+        '</article>';
+      }).join("");
+    }
+
+    function renderEvents(events) {
+      if (!events.length) {
+        eventsList.innerHTML = '<div class="pzsw-placeholder">LIVE события не найдены.</div>';
+        return;
+      }
+
+      eventsList.innerHTML = events.map(function(event) {
+        var topProbability = pct(event.top_probability || 0);
+        var recommendationsHtml = (event.recommendations || []).slice(0, 3).map(function(rec) {
+          return '<div class="pzsw-event-rec">' +
+              '<span>' + esc(rec.line) + '</span>' +
+              '<strong>' + pct(rec.probability) + '% • ' + formatCoef(rec.coefficient) + '</strong>' +
+            '</div>';
+        }).join("");
+
+        return '<article class="pzsw-event-card">' +
+          '<div class="pzsw-event-head">' +
+            '<div>' +
+              '<div class="pzsw-event-title">' + esc(event.home) + ' vs ' + esc(event.away) + '</div>' +
+              '<div class="pzsw-event-league">' + esc(event.league || "—") + ' • ' + esc(event.time || "—") + '</div>' +
+            '</div>' +
+            '<div class="pzsw-event-prob">' + topProbability + '%</div>' +
+          '</div>' +
+          '<div class="pzsw-event-recs">' + recommendationsHtml + '</div>' +
+        '</article>';
+      }).join("");
+    }
+
+    function setStatus(ok, text) {
+      statusPill.classList.toggle("error", !ok);
+      statusPill.textContent = ok ? "online" : "error";
+      meta.textContent = text;
+      lastUpdate.textContent = "Обновлено: " + new Date().toLocaleTimeString();
+    }
+
+    async function loadWidget() {
+      refreshBtn.disabled = true;
+      setStatus(true, "Обновляем данные...");
+
+      try {
+        var eventsPromise = fetchJson("/api/all-events", {
+          lang: CONFIG.lang,
+          min_probability: CONFIG.minProbability,
+          recommendations_only: true,
+          sort_by: "probability",
+          include_top: true,
+          top_limit: CONFIG.topLimit,
+          limit: CONFIG.eventsLimit,
+          premium_only: false
         });
 
-        return {
-            league: baseLeague,
-            home: baseHome,
-            away: baseAway,
-            sport: baseSport,
-            status: raw.status || matchInfo.status || raw.time || "LIVE",
-            recommendations: normalizedRecs
-        };
-    }
-
-    function extractEvents(payload) {
-        var source = [];
-
-        if (payload && Array.isArray(payload.events)) {
-            source = payload.events;
-        } else if (Array.isArray(payload)) {
-            source = payload;
-        } else if (payload && (payload.match_info || Array.isArray(payload.recommendations))) {
-            source = [payload];
-        }
-
-        return source.map(normalizeEvent).filter(function(event) {
-            return !!event;
+        var topPromise = fetchJson("/api/recommendations/top", {
+          lang: CONFIG.lang,
+          limit: CONFIG.topLimit * 2,
+          min_probability: CONFIG.minProbability,
+          premium_only: false
         });
+
+        var settled = await Promise.allSettled([eventsPromise, topPromise]);
+        var eventsPayload = settled[0].status === "fulfilled" ? settled[0].value : { events: [] };
+        var topPayload = settled[1].status === "fulfilled" ? settled[1].value : { recommendations: [] };
+
+        var eventsRaw = Array.isArray(eventsPayload.events) ? eventsPayload.events : [];
+
+        var eventsPrepared = eventsRaw.map(function(event) {
+          var recs = Array.isArray(event.recommendations) ? event.recommendations.filter(qualify) : [];
+          recs = sortRecommendations(recs);
+          var topProbability = recs.length ? num(recs[0].probability, 0) : 0;
+          return {
+            id: event.id,
+            league: event.league,
+            home: event.home,
+            away: event.away,
+            time: event.time,
+            recommendations: recs,
+            top_probability: topProbability
+          };
+        }).filter(function(event) {
+          return event.recommendations.length > 0;
+        }).sort(function(a, b) {
+          return num(b.top_probability, 0) - num(a.top_probability, 0);
+        });
+
+        var recommendationsRaw = Array.isArray(topPayload.recommendations) ? topPayload.recommendations : flattenRecommendations(eventsPrepared);
+        var recommended = sortRecommendations(recommendationsRaw.filter(qualify));
+
+        renderRecommendations(recommended);
+        renderEvents(eventsPrepared);
+
+        var totalEvents = eventsPrepared.length;
+        var totalRecommendations = recommended.length;
+        setStatus(true, "LIVE: " + totalEvents + " • Рекомендаций: " + totalRecommendations + " • Фильтр: >60% и >=1.5");
+      } catch (error) {
+        console.error("[Prizolov Elementor Widget] load error", error);
+        recoList.innerHTML = '<div class="pzsw-placeholder">Ошибка загрузки рекомендаций.</div>';
+        eventsList.innerHTML = '<div class="pzsw-placeholder">Ошибка загрузки live событий.</div>';
+        setStatus(false, "Ошибка API: " + (error && error.message ? error.message : "unknown"));
+      } finally {
+        refreshBtn.disabled = false;
+      }
     }
 
-    function updateCounter() {
-        var counter = document.getElementById("match-counter");
-        if (!counter) return;
-        if (allEvents.length === 0) {
-            counter.innerText = "Матчи не найдены";
-            return;
-        }
-        counter.innerText = "Матч " + (currentEventIndex + 1) + " из " + allEvents.length;
-    }
-
-    async function fetchSingleEvent(index) {
-        try {
-            var resp = await fetch(TARGET_URL, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Accept": "application/json"
-                },
-                body: JSON.stringify({
-                    version_bypass: Date.now(),
-                    event_index: index
-                })
-            });
-            if (!resp.ok) throw new Error("HTTP " + resp.status);
-            return await resp.json();
-        } catch (e) {
-            console.error("[Prizolov AI] ❌ Ошибка загрузки события:", e);
-            return null;
-        }
-    }
-
-    async function fetchAllEvents() {
-        try {
-            console.log("[Prizolov AI] 📥 Загружаю полный список матчей...");
-            var resp = await fetch(TARGET_URL, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Accept": "application/json"
-                },
-                body: JSON.stringify({
-                    version_bypass: Date.now(),
-                    get_all: true
-                })
-            });
-
-            if (!resp.ok) throw new Error("HTTP " + resp.status);
-            var data = await resp.json();
-            var events = extractEvents(data);
-            console.log("[Prizolov AI] ✅ Загружено live событий:", events.length);
-            return events;
-        } catch (e) {
-            console.error("[Prizolov AI] ❌ Ошибка загрузки списка:", e);
-            return [];
-        }
-    }
-
-    async function displayEvent(index) {
-        try {
-            // Если список ещё пуст, пробуем получить хотя бы одно событие.
-            if (allEvents.length === 0) {
-                var singlePayload = await fetchSingleEvent(index);
-                var fallbackEvents = extractEvents(singlePayload);
-                if (fallbackEvents.length > 0) {
-                    allEvents = fallbackEvents;
-                } else {
-                    var recsDivEmpty = document.getElementById("recs");
-                    if (recsDivEmpty) {
-                        recsDivEmpty.innerHTML = '<div class="ph" style="color: #888; text-align: center; padding: 20px;">🤖 Live события пока не найдены</div>';
-                    }
-                    updateCounter();
-                    return;
-                }
-            }
-
-            currentEventIndex = (index % allEvents.length + allEvents.length) % allEvents.length;
-            var event = allEvents[currentEventIndex];
-            console.log("[Prizolov AI] 🔄 Показываю событие #" + (currentEventIndex + 1), event);
-
-            // Заполнение заголовка
-            var leagueEl = document.getElementById("c-league");
-            if (leagueEl) leagueEl.innerText = event.league || "—";
-
-            var matchEl = document.getElementById("c-match");
-            if (matchEl) {
-                matchEl.innerText = (event.home || "?") + " vs " + (event.away || "?");
-            }
-
-            var sportEl = document.getElementById("c-sport");
-            if (sportEl) {
-                sportEl.innerText = formatSport(event.sport);
-            }
-
-            var timeEl = document.getElementById("c-time");
-            if (timeEl) timeEl.innerText = event.status || "LIVE";
-
-            // Отображение рекомендаций
-            var recs = Array.isArray(event.recommendations) ? event.recommendations : [];
-            var recsDiv = document.getElementById("recs");
-
-            if (recsDiv) {
-                if (recs.length > 0) {
-                    var htmlResult = "";
-
-                    for (var i = 0; i < Math.min(recs.length, 8); i++) {
-                        var r = recs[i];
-                        var probPercent = Math.round(normalizeProbability(r.probability) * 100);
-                        var confClass = r.confidence === "high" ? "high" : "med";
-                        var confText = r.confidence === "high" ? "Выбор" : "Ср";
-                        var coefFormatted = normalizeCoefficient(r.coefficient).toFixed(2);
-
-                        htmlResult += '<div class="rec">' +
-                                        '<div class="rec-info">' +
-                                            '<div class="rec-league">' + escapeHtml(r.league || event.league || "РПЛ") + ' • ' + formatSport(r.sport || event.sport) + '</div>' +
-                                            '<div class="rec-marker">' + escapeHtml(r.home || event.home || "Команда") + ' vs ' + escapeHtml(r.away || event.away || "Команда") + ' ➔ <span style="color:#007aff; font-weight:bold;">' + escapeHtml(r.line || "Исход") + '</span></div>' +
-                                            '<div class="rec-meta">Вер: ' + probPercent + '% <span class="conf ' + confClass + '">' + confText + '</span></div>' +
-                                        '</div>' +
-                                        '<span class="rec-coef">' + coefFormatted + '</span>' +
-                                      '</div>';
-                    }
-
-                    recsDiv.innerHTML = htmlResult;
-                    console.log("[Prizolov AI] ✅ Рекомендации отрисованы: " + recs.length);
-                } else {
-                    recsDiv.innerHTML = '<div class="ph" style="color: #888; text-align: center; padding: 20px;">🤖 Нет рекомендаций для этого матча</div>';
-                    console.log("[Prizolov AI] ⚠️ Нет рекомендаций");
-                }
-            }
-
-            updateCounter();
-        } catch (e) {
-            console.error("[Prizolov AI] ❌ Ошибка отображения:", e);
-        }
-    }
-
-    // Кнопки навигации
-    document.getElementById("next-match").addEventListener("click", function() {
-        if (allEvents.length > 0) {
-            currentEventIndex = (currentEventIndex + 1) % allEvents.length;
-            displayEvent(currentEventIndex);
-        }
+    refreshBtn.addEventListener("click", function() {
+      loadWidget();
     });
 
-    document.getElementById("prev-match").addEventListener("click", function() {
-        if (allEvents.length > 0) {
-            currentEventIndex = (currentEventIndex - 1 + allEvents.length) % allEvents.length;
-            displayEvent(currentEventIndex);
-        }
-    });
-
-    // Инициализация
-    async function init() {
-        console.log("[Prizolov AI] 🚀 Инициализация виджета...");
-
-        allEvents = await fetchAllEvents();
-
-        // Загружаем первое событие сразу (или fallback на single-event).
-        await displayEvent(0);
-
-        // Каждые 10 секунд показываем следующий матч автоматически
-        setInterval(function() {
-            if (allEvents.length > 0) {
-                currentEventIndex = (currentEventIndex + 1) % allEvents.length;
-                displayEvent(currentEventIndex);
-            }
-        }, 10000);
-    }
-
-    init();
-});
+    loadWidget();
+    setInterval(loadWidget, CONFIG.refreshMs);
+  })();
 </script>
