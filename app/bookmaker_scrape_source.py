@@ -75,6 +75,193 @@ _PARI_SPORT_RE = re.compile(r'itemprop="sport" content="([^"]+)"', re.IGNORECASE
 _PARI_START_RE = re.compile(r'itemprop="startDate" content="([^"]+)"', re.IGNORECASE)
 _ODDS_RE = re.compile(r">([1-9]\.[0-9]{2})</")
 
+_PARI_FACTOR_VALUE_RE = re.compile(
+    r'value--[^"]*value--[^"]*">([0-9]+\.[0-9]{2})</',
+    re.IGNORECASE,
+)
+_PARI_PARAM_RE = re.compile(
+    r"factor-value_param[^>]*>.*?<div>(-?[0-9]+\.?[0-9]*)</div>",
+    re.IGNORECASE | re.DOTALL,
+)
+_PARI_SUB_EVENT_RE = re.compile(
+    r'sport-sub-event-name[^"]*"[^>]*>([^<]+)<',
+    re.IGNORECASE,
+)
+BOOKMAKER_MAX_RECOMMENDATIONS = int(os.getenv("BOOKMAKER_MAX_RECOMMENDATIONS", "18"))
+
+_MAIN_MARKET_COLUMNS = ["1", "Х", "2", "ФОРА 1", "ФОРА 2", "Тотал", "Б", "М"]
+
+
+def _slice_event_chunk(html: str, start: int) -> str:
+    next_match = _PARI_TEAM_RE.search(html, start + 80)
+    end = next_match.start() if next_match else start + 28000
+    end = min(end, start + 28000)
+    return html[start:end]
+
+
+def _pick_total_line(params: List[float], sport: str = "football") -> float:
+    preferred = 5.5 if sport == "hockey" else 2.5
+    candidates = [value for value in params if 1.0 <= value <= 6.5]
+    if not candidates:
+        candidates = [value for value in params if 0.5 <= value <= 8.5]
+    if not candidates:
+        return preferred
+    return min(candidates, key=lambda value: abs(value - preferred))
+
+
+def _pick_handicap_lines(params: List[float]) -> Tuple[Optional[float], Optional[float]]:
+    handicaps = [value for value in params if -5.0 <= value <= 5.0 and value != 0]
+    if not handicaps:
+        return None, None
+    if len(handicaps) == 1:
+        return handicaps[0], None
+    return handicaps[0], handicaps[1]
+
+
+def _append_rec(
+    recommendations: List[Dict[str, Any]],
+    line: str,
+    coefficient: float,
+    now_utc: datetime.datetime,
+    *,
+    probability: Optional[float] = None,
+    confidence: Optional[str] = None,
+) -> None:
+    if coefficient < 1.01 or coefficient > 100:
+        return
+    if probability is None:
+        probability = min(0.97, max(0.05, (1.0 / coefficient) * 0.94))
+    else:
+        probability = min(0.97, max(0.05, probability))
+    recommendations.append(
+        {
+            "line": line,
+            "coefficient": round(coefficient, 2),
+            "probability": round(probability, 4),
+            "confidence": confidence or ("high" if probability >= 0.68 else "med"),
+            "bookmakers_support": 3.0,
+            "odds_updated_at": now_utc.isoformat(),
+        }
+    )
+
+
+def _double_chance_odds(c1: float, cx: float, c2: float, mode: str) -> Optional[float]:
+    inv = {"1": 1.0 / c1, "X": 1.0 / cx, "2": 1.0 / c2}
+    if mode == "1X":
+        combined = inv["1"] + inv["X"]
+    elif mode == "X2":
+        combined = inv["X"] + inv["2"]
+    elif mode == "12":
+        combined = inv["1"] + inv["2"]
+    else:
+        return None
+    if combined <= 0:
+        return None
+    return min(50.0, (1.0 / combined) * 0.97)
+
+
+def _recommendations_from_pari_chunk(
+    home: str,
+    away: str,
+    chunk: str,
+    sport: str,
+    now_utc: datetime.datetime,
+) -> List[Dict[str, Any]]:
+    recommendations: List[Dict[str, Any]] = []
+    values = [float(v) for v in _PARI_FACTOR_VALUE_RE.findall(chunk)]
+    if len(values) < 3:
+        return []
+
+    params = []
+    for raw in _PARI_PARAM_RE.findall(chunk):
+        try:
+            params.append(float(raw))
+        except ValueError:
+            continue
+
+    handicap1, handicap2 = _pick_handicap_lines(params)
+    total_line = _pick_total_line(params, sport)
+
+    # Основная линия 1X2 + фора + тотал (первые 8 коэффициентов)
+    main_values = values[:8]
+    column_map = {
+        "1": f"Победа {home}",
+        "Х": "Ничья",
+        "X": "Ничья",
+        "2": f"Победа {away}",
+        "ФОРА 1": f"Фора 1 ({home}" + (f" {handicap1:+.1f})" if handicap1 is not None else ")"),
+        "ФОРА 2": f"Фора 2 ({away}" + (f" {handicap2:+.1f})" if handicap2 is not None else ")"),
+        "Б": f"Тотал больше {total_line}",
+        "М": f"Тотал меньше {total_line}",
+    }
+
+    outcome_probs: Dict[str, float] = {}
+    if len(main_values) >= 3:
+        inv_sum = sum(1.0 / coef for coef in main_values[:3])
+        if inv_sum > 0:
+            outcome_probs = {
+                "1": (1.0 / main_values[0]) / inv_sum,
+                "Х": (1.0 / main_values[1]) / inv_sum,
+                "2": (1.0 / main_values[2]) / inv_sum,
+            }
+
+    for idx, column in enumerate(_MAIN_MARKET_COLUMNS):
+        if column == "Тотал":
+            continue
+        if idx >= len(main_values):
+            break
+        line = column_map.get(column)
+        if not line:
+            continue
+        prob = outcome_probs.get(column)
+        _append_rec(recommendations, line, main_values[idx], now_utc, probability=prob)
+
+    # Двойной шанс из 1X2
+    if len(main_values) >= 3:
+        c1, cx, c2 = main_values[0], main_values[1], main_values[2]
+        for mode, label in (
+            ("1X", f"Двойной шанс 1X ({home} или ничья)"),
+            ("X2", f"Двойной шанс X2 (ничья или {away})"),
+            ("12", f"Двойной шанс 12 ({home} или {away})"),
+        ):
+            combo = _double_chance_odds(c1, cx, c2, mode)
+            if combo:
+                _append_rec(recommendations, label, combo, now_utc)
+
+    # Доп. рынки (угловые, фолы, карточки и т.д.)
+    for sub_match in _PARI_SUB_EVENT_RE.finditer(chunk):
+        sub_name = unescape(sub_match.group(1)).strip()
+        if not sub_name:
+            continue
+        seg = chunk[sub_match.end() : sub_match.end() + 2200]
+        sub_values = [float(v) for v in _PARI_FACTOR_VALUE_RE.findall(seg)[:4]]
+        if len(sub_values) >= 2:
+            _append_rec(recommendations, f"{sub_name}: больше", sub_values[0], now_utc)
+            _append_rec(recommendations, f"{sub_name}: меньше", sub_values[1], now_utc)
+        elif len(sub_values) == 1:
+            _append_rec(recommendations, f"{sub_name}: исход", sub_values[0], now_utc)
+
+    # Теннис/двухисходные — если ничья с коэф. > 20, оставляем только 2 исхода
+    if sport == "tennis" and len(main_values) >= 2 and (len(main_values) < 3 or main_values[1] > 15):
+        recommendations = [
+            rec
+            for rec in recommendations
+            if "Ничья" not in rec["line"] and "X2" not in rec["line"] and "1X" not in rec["line"]
+        ]
+
+    # Дедуп по названию линии
+    deduped: List[Dict[str, Any]] = []
+    seen_lines = set()
+    for rec in sorted(recommendations, key=lambda item: (-item["probability"], -item["coefficient"])):
+        key = rec["line"]
+        if key in seen_lines:
+            continue
+        seen_lines.add(key)
+        deduped.append(rec)
+        if len(deduped) >= BOOKMAKER_MAX_RECOMMENDATIONS:
+            break
+    return deduped
+
 
 def _parse_iso_datetime(value: Any) -> Optional[datetime.datetime]:
     if not value:
@@ -127,57 +314,6 @@ def _normalize_sport(raw: Optional[str], source_url: str = "") -> str:
         return "esports"
     return mapping.get(value, value or "football")
 
-
-def _extract_odds(chunk: str, limit: int = 8) -> List[float]:
-    odds: List[float] = []
-    for match in _ODDS_RE.finditer(chunk):
-        try:
-            value = float(match.group(1))
-        except ValueError:
-            continue
-        if 1.01 <= value <= 100.0:
-            odds.append(value)
-        if len(odds) >= limit:
-            break
-    return odds
-
-
-def _recommendations_from_odds(
-    home: str,
-    away: str,
-    odds: List[float],
-    now_utc: datetime.datetime,
-) -> List[Dict[str, Any]]:
-    if len(odds) < 3:
-        return []
-
-    markets = [
-        (f"Победа {home}", odds[0]),
-        ("Ничья", odds[1]),
-        (f"Победа {away}", odds[2]),
-    ]
-    inv_sum = sum(1.0 / coef for _, coef in markets)
-    if inv_sum <= 0:
-        return []
-
-    recommendations: List[Dict[str, Any]] = []
-    for line, coefficient in markets:
-        implied = (1.0 / coefficient) / inv_sum
-        probability = min(0.97, max(0.05, implied * 0.97))
-        confidence = "high" if probability >= 0.68 else "med"
-        recommendations.append(
-            {
-                "line": line,
-                "coefficient": round(coefficient, 2),
-                "probability": round(probability, 4),
-                "confidence": confidence,
-                "bookmakers_support": 3.0,
-                "odds_updated_at": now_utc.isoformat(),
-            }
-        )
-
-    recommendations.sort(key=lambda item: (-item["probability"], -item["coefficient"]))
-    return recommendations
 
 
 def _build_event(
@@ -253,7 +389,7 @@ def _extract_pari_events_from_html(html: str, source_url: str) -> List[Dict[str,
     for match in _PARI_TEAM_RE.finditer(html):
         home = unescape(match.group(1)).strip()
         away = unescape(match.group(2)).strip()
-        chunk = html[match.start() : match.start() + 2800]
+        chunk = _slice_event_chunk(html, match.start())
 
         score_match = _PARI_SCORE_RE.search(chunk)
         minute_match = _PARI_MINUTE_RE.search(chunk)
@@ -268,8 +404,7 @@ def _extract_pari_events_from_html(html: str, source_url: str) -> List[Dict[str,
         sport = _normalize_sport(sport_match.group(1) if sport_match else sport_hint, source_url)
         start_at = start_match.group(1).strip() if start_match else None
 
-        odds = _extract_odds(chunk)
-        recommendations = _recommendations_from_odds(home, away, odds, now_utc)
+        recommendations = _recommendations_from_pari_chunk(home, away, chunk, sport, now_utc)
         if not recommendations:
             continue
 
