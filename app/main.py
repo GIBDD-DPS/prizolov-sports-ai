@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib import request as urllib_request
 from urllib.error import HTTPError, URLError
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -1296,6 +1296,21 @@ def _collect_raw_events(
         except Exception as exc:
             logger.warning("⚠️ Real events source failed: %s", exc)
 
+    if not items:
+        try:
+            from bookmaker_scrape_source import get_cached_bookmaker_events
+
+            bookmaker_events = get_cached_bookmaker_events(force_refresh=force_refresh)
+            for event in bookmaker_events:
+                is_live = _safe_bool(event.get("is_live"), False)
+                if is_live and not include_live:
+                    continue
+                if not is_live and not include_upcoming:
+                    continue
+                items.append(copy.deepcopy(event))
+        except Exception as exc:
+            logger.warning("⚠️ Bookmaker scrape source failed: %s", exc)
+
     if not items and STOREFRONT_DEMO_EVENTS_ENABLED:
         if include_live:
             items.extend(_build_live_events(now_utc))
@@ -1594,6 +1609,29 @@ async def _metrics_middleware(request: Request, call_next):
     return response
 
 
+
+
+def _resolve_storefront_events_source_label() -> str:
+    if STOREFRONT_DEMO_EVENTS_ENABLED:
+        return "demo_templates"
+    try:
+        from real_events_source import get_status_snapshot as real_status
+
+        real_source = real_status().get("source")
+        if REAL_EVENTS_ENABLED and real_source not in {None, "none"}:
+            return str(real_source)
+    except Exception:
+        pass
+    try:
+        from bookmaker_scrape_source import get_status_snapshot as bookmaker_status
+
+        bk = bookmaker_status()
+        if bk.get("enabled") and int(bk.get("cached_events") or 0) > 0:
+            return str(bk.get("source") or "bookmaker_scrape")
+    except Exception:
+        pass
+    return "odds_api" if REAL_EVENTS_ENABLED else "none"
+
 # ============================================
 # API
 # ============================================
@@ -1602,6 +1640,12 @@ async def _metrics_middleware(request: Request, call_next):
 async def startup_event():
     logger.info("🚀 PRIZOLOV SPORTS AI v14.0 - STORE-FRONT OPTIMIZED")
     logger.info(f"📦 Storefront cache TTL: {CACHE_TTL_SECONDS}s")
+    try:
+        from bookmaker_scrape_source import _ensure_background_scrape_started
+
+        _ensure_background_scrape_started()
+    except Exception as exc:
+        logger.warning("Bookmaker scrape startup hook failed: %s", exc)
 
 
 @app.get("/")
@@ -2005,6 +2049,32 @@ async def api_metrics():
     }
 
 
+
+
+@app.post("/api/ingest/bookmaker-events")
+async def ingest_bookmaker_events(request: Request):
+    from bookmaker_scrape_source import BOOKMAKER_INGEST_SECRET, get_status_snapshot, ingest_bookmaker_events as ingest_events
+
+    if not BOOKMAKER_INGEST_SECRET:
+        raise HTTPException(status_code=503, detail="bookmaker_ingest_not_configured")
+
+    provided = (request.headers.get("x-bookmaker-ingest-secret") or "").strip()
+    if provided != BOOKMAKER_INGEST_SECRET:
+        raise HTTPException(status_code=401, detail="bookmaker_ingest_unauthorized")
+
+    payload = await _read_payload(request)
+    raw_events = payload.get("events") if isinstance(payload, dict) else None
+    if not isinstance(raw_events, list):
+        raise HTTPException(status_code=400, detail="events_array_required")
+
+    count = ingest_events(raw_events)
+    return {
+        "status": "ok",
+        "ingested": count,
+        "bookmaker": get_status_snapshot(),
+        "timestamp": _now_utc().isoformat(),
+    }
+
 @app.get("/api/source-status")
 async def source_status():
     from real_events_source import get_status_snapshot
@@ -2039,15 +2109,7 @@ async def source_status():
             "external_donor_rss_item_limit": EXTERNAL_DONOR_RSS_ITEM_LIMIT,
             "external_donor_text_item_limit": EXTERNAL_DONOR_TEXT_ITEM_LIMIT,
                         "storefront_demo_events_enabled": STOREFRONT_DEMO_EVENTS_ENABLED,
-            "storefront_events_source": (
-                "demo_templates"
-                if STOREFRONT_DEMO_EVENTS_ENABLED
-                else (
-                    get_status_snapshot().get("source")
-                    if REAL_EVENTS_ENABLED and get_status_snapshot().get("source") not in {None, "none"}
-                    else ("odds_api" if REAL_EVENTS_ENABLED else "none")
-                )
-            ),
+            "storefront_events_source": _resolve_storefront_events_source_label(),
             "external_donor_ingestion_enabled": EXTERNAL_DONOR_INGESTION_ENABLED,
             "external_donor_pack_defaults_loaded": bool(_ENV_PACK_DEFAULTS),
         },
@@ -2060,6 +2122,9 @@ async def source_status():
         },
         "external_donors": donor_pipeline,
         "real_events": get_status_snapshot(),
+        "bookmaker_scrape": (
+            __import__("bookmaker_scrape_source", fromlist=["get_status_snapshot"]).get_status_snapshot()
+        ),
         "alerts": alerts,
         "timestamp": _now_utc().isoformat(),
     }
