@@ -470,17 +470,15 @@
   var API_URL = "/get-ai-sports.php";
   var API_BASE = window.PRIZOLOV_API_BASE || "https://prizolov-sports-dmandreyanov.amvera.io";
   var ALL_EVENTS_URL = "/api/all-events";
+  var WIDGET_BUILD = "2026-06-04-no-demo-fallback";
 
   var WINDOW_HOURS = 24;
   var MIN_PROBABILITY = 0.6;
   var MIN_COEFFICIENT = 1.5;
   var MIN_CONSENSUS_SOURCES = 3;
-  var MAX_SNAPSHOT_AGE_MS = 2 * 60 * 1000;
   var MAX_LIVE_EVENT_AGE_MS = 4 * 60 * 60 * 1000;
   var AUTO_ROTATE_MS = 10000;
   var AUTO_REFRESH_MS = 45000;
-  var INDEX_SCAN_LIMIT = 40;
-  var STORE_CACHE_KEY_PREFIX = "prizolov_storefront_snapshot_v1:";
 
   var MODES = {
     all24: { label: "LIVE + 24ч", includeLive: true, onlyLive: false, onlyUpcoming: false },
@@ -493,6 +491,18 @@
     if (!root) return;
     if (root.getAttribute("data-pz-init") === "1") return;
     root.setAttribute("data-pz-init", "1");
+    root.setAttribute("data-widget-build", WIDGET_BUILD);
+
+    try {
+      if (window.sessionStorage) {
+        var purge = [];
+        for (var si = 0; si < sessionStorage.length; si++) {
+          var k = sessionStorage.key(si);
+          if (k && k.indexOf("prizolov_storefront_snapshot") === 0) purge.push(k);
+        }
+        purge.forEach(function (key) { sessionStorage.removeItem(key); });
+      }
+    } catch (e) { /* ignore */ }
 
     var currentMode = "all24";
     var currentEventIndex = 0;
@@ -604,36 +614,6 @@
     }
 
 
-    function saveSnapshot(mode, payload) {
-      try {
-        if (!window.sessionStorage) return;
-        sessionStorage.setItem(
-          STORE_CACHE_KEY_PREFIX + mode,
-          JSON.stringify({
-            saved_at: new Date().toISOString(),
-            events: payload
-          })
-        );
-      } catch (e) {
-        // ignore storage errors in strict privacy mode
-      }
-    }
-
-    function loadSnapshot(mode) {
-      try {
-        if (!window.sessionStorage) return null;
-        var raw = sessionStorage.getItem(STORE_CACHE_KEY_PREFIX + mode);
-        if (!raw) return null;
-        var parsed = JSON.parse(raw);
-        if (!parsed || !Array.isArray(parsed.events)) return null;
-        var savedTs = Date.parse(parsed.saved_at || "");
-        if (!Number.isFinite(savedTs)) return null;
-        if ((Date.now() - savedTs) > MAX_SNAPSHOT_AGE_MS) return null;
-        return parsed;
-      } catch (e) {
-        return null;
-      }
-    }
 
     function qs(params) {
       if (typeof URLSearchParams === "function") {
@@ -932,7 +912,8 @@
         min_coefficient: "1",
         include_consensus: "true",
         min_consensus_sources: String(MIN_CONSENSUS_SOURCES),
-        sort_by: "passability"
+        sort_by: "passability",
+        refresh: "true"
       }), null, function (payload) {
         cb(Array.isArray(payload && payload.events) ? payload.events : []);
       }, function () {
@@ -940,92 +921,12 @@
       });
     }
 
-    function fetchFromGetAll(modeCfg, cb) {
-      requestJson("POST", withBase(API_URL), {
-        version_bypass: Date.now(),
-        get_all: true,
-        window_hours: WINDOW_HOURS,
-        include_live: modeCfg.includeLive,
-        include_upcoming: !modeCfg.onlyLive,
-        passable_only: false,
-        min_probability: 0,
-        min_coefficient: 1,
-        include_consensus: true,
-        min_consensus_sources: MIN_CONSENSUS_SOURCES
-      }, function (payload) {
-        cb(Array.isArray(payload && payload.events) ? payload.events : []);
-      }, function () {
-        cb([]);
-      });
-    }
 
-    function fetchByIndex(modeCfg, cb) {
-      var collected = [];
-      var i = 0;
-      var repeatStreak = 0;
-      var lastKey = "";
-
-      function step() {
-        if (i >= INDEX_SCAN_LIMIT || repeatStreak >= 3) {
-          cb(dedupeEvents(collected));
-          return;
-        }
-
-        requestJson("POST", withBase(API_URL), {
-          version_bypass: Date.now(),
-          event_index: i,
-          window_hours: WINDOW_HOURS,
-          include_live: modeCfg.includeLive,
-          include_upcoming: !modeCfg.onlyLive,
-          passable_only: false,
-          min_probability: 0,
-          min_coefficient: 1,
-          include_consensus: true,
-          min_consensus_sources: MIN_CONSENSUS_SOURCES
-        }, function (payload) {
-          i += 1;
-          var event = payloadToEvent(payload);
-          if (!event) {
-            cb(dedupeEvents(collected));
-            return;
-          }
-
-          var key = [event.home, event.away, event.league, event.time, event.sport].join("|");
-          if (key === lastKey) {
-            repeatStreak += 1;
-          } else {
-            repeatStreak = 0;
-            lastKey = key;
-          }
-          collected.push(event);
-          step();
-        }, function () {
-          cb(dedupeEvents(collected));
-        });
-      }
-
-      step();
-    }
 
     function fetchAllEvents(cb) {
       var modeCfg = MODES[currentMode] || MODES.all24;
       fetchFromAllEvents(modeCfg, function (eventsA) {
-        if (eventsA.length > 1) {
-          cb(dedupeEvents(eventsA));
-          return;
-        }
-
-        fetchFromGetAll(modeCfg, function (eventsB) {
-          var merged = dedupeEvents(eventsA.concat(eventsB));
-          if (merged.length > 1) {
-            cb(merged);
-            return;
-          }
-
-          fetchByIndex(modeCfg, function (eventsC) {
-            cb(dedupeEvents(merged.concat(eventsC)));
-          });
-        });
+        cb(dedupeEvents(Array.isArray(eventsA) ? eventsA : []));
       });
     }
 
@@ -1044,7 +945,6 @@
         if (normalized.length > 0) {
           usingCachedSnapshot = false;
           lastUpdatedLabel = new Date().toLocaleTimeString();
-          saveSnapshot(currentMode, normalized);
           allEvents = normalized;
         } else {
           allEvents = [];

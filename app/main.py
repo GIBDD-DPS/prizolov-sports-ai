@@ -132,10 +132,13 @@ MAX_LIVE_EVENT_AGE_HOURS = float(os.getenv("MAX_LIVE_EVENT_AGE_HOURS", "4"))
 # ============================================
 
 # Demo templates moved to demo_storefront_events.py (off by default).
-STOREFRONT_DEMO_EVENTS_ENABLED = os.getenv(
+_STOREFRONT_DEMO_EVENTS_ENV = os.getenv(
     "STOREFRONT_DEMO_EVENTS_ENABLED",
     _env_default("STOREFRONT_DEMO_EVENTS_ENABLED", "false"),
 ).strip().lower() in {"1", "true", "yes", "on"}
+# Production safety: fictional fixtures stay off unless explicitly allowed.
+_ALLOW_STOREFRONT_DEMO = os.getenv("ALLOW_STOREFRONT_DEMO", "false").strip().lower() in {"1", "true", "yes", "on"}
+STOREFRONT_DEMO_EVENTS_ENABLED = _STOREFRONT_DEMO_EVENTS_ENV and _ALLOW_STOREFRONT_DEMO
 
 
 def _live_events_catalog() -> List[Dict[str, Any]]:
@@ -1648,7 +1651,11 @@ async def get_all_events(
             headers={
                 "ETag": entry["etag"],
                 "Last-Modified": entry["last_modified"],
-                "Cache-Control": f"public, max-age={CACHE_TTL_SECONDS}",
+                "Cache-Control": (
+                f"public, max-age={CACHE_TTL_SECONDS}"
+                if STOREFRONT_DEMO_EVENTS_ENABLED
+                else "no-store, no-cache, must-revalidate, max-age=0"
+            ),
             },
         )
 
