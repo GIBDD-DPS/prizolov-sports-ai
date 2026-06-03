@@ -470,7 +470,7 @@
   var API_URL = "/get-ai-sports.php";
   var API_BASE = window.PRIZOLOV_API_BASE || "https://prizolov-sports-dmandreyanov.amvera.io";
   var ALL_EVENTS_URL = "/api/all-events";
-  var WIDGET_BUILD = "2026-06-03-lines-40";
+  var WIDGET_BUILD = "2026-06-03-multi-sport";
 
   var WINDOW_HOURS = 24;
   var MIN_PROBABILITY = 0.6;
@@ -529,8 +529,29 @@
       return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
 
+    var SPORT_LABELS = {
+      football: "Футбол",
+      hockey: "Хоккей",
+      basketball: "Баскетбол",
+      tennis: "Теннис",
+      table_tennis: "Настольный теннис",
+      volleyball: "Волейбол",
+      handball: "Гандбол",
+      baseball: "Бейсбол",
+      boxing: "Бокс",
+      esports: "Киберспорт",
+      darts: "Дартс",
+      cricket: "Крикет",
+      rugby: "Регби",
+      futsal: "Футзал",
+      water_polo: "Водное поло",
+      badminton: "Бадминтон",
+      other: "Другое"
+    };
+
     function asSport(s) {
-      return (s || "football").toString().toUpperCase();
+      var key = (s || "football").toString().toLowerCase();
+      return SPORT_LABELS[key] || key.toUpperCase();
     }
 
     function isPassable(rec) {

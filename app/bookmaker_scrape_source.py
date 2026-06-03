@@ -30,25 +30,43 @@ def _bookmaker_scrape_enabled_from_env() -> bool:
 
 
 BOOKMAKER_SCRAPE_ENABLED = _bookmaker_scrape_enabled_from_env()
+# Pari sport path slug -> internal sport key (verified via SSR HTML scrape)
+PARI_SPORT_PAGES: Dict[str, str] = {
+    "football": "football",
+    "hockey": "hockey",
+    "basketball": "basketball",
+    "tennis": "tennis",
+    "table-tennis": "table_tennis",
+    "volleyball": "volleyball",
+    "handball": "handball",
+    "baseball": "baseball",
+    "boxing": "boxing",
+    "esports": "esports",
+    "darts": "darts",
+    "cricket": "cricket",
+    "rugby": "rugby",
+    "futsal": "futsal",
+    "waterpolo": "water_polo",
+    "badminton": "badminton",
+}
+
+
+def _default_bookmaker_scrape_urls() -> List[str]:
+    urls = ["https://pari.ru/live?dateInterval=5"]
+    for slug in PARI_SPORT_PAGES:
+        urls.append(f"https://pari.ru/sports/{slug}?dateInterval=5")
+    return urls
+
+
 BOOKMAKER_SCRAPE_URLS = [
     part.strip()
-    for part in (
-        os.getenv("BOOKMAKER_SCRAPE_URLS")
-        or ",".join(
-            [
-                "https://pari.ru/live?dateInterval=5",
-                "https://pari.ru/sports/football?dateInterval=5",
-                "https://pari.ru/sports/hockey?dateInterval=5",
-                "https://pari.ru/sports/basketball?dateInterval=5",
-                "https://pari.ru/sports/tennis?dateInterval=5",
-            ]
-        )
-    ).split(",")
+    for part in (os.getenv("BOOKMAKER_SCRAPE_URLS") or ",".join(_default_bookmaker_scrape_urls())).split(",")
     if part.strip()
 ]
 BOOKMAKER_SCRAPE_INTERVAL_SECONDS = int(os.getenv("BOOKMAKER_SCRAPE_INTERVAL_SECONDS", "300"))
 BOOKMAKER_SCRAPE_CACHE_TTL_SECONDS = int(os.getenv("BOOKMAKER_SCRAPE_CACHE_TTL_SECONDS", "300"))
-BOOKMAKER_SCRAPE_LIMIT = int(os.getenv("BOOKMAKER_SCRAPE_LIMIT", "120"))
+BOOKMAKER_SCRAPE_LIMIT = int(os.getenv("BOOKMAKER_SCRAPE_LIMIT", "280"))
+BOOKMAKER_SCRAPE_PER_URL_LIMIT = int(os.getenv("BOOKMAKER_SCRAPE_PER_URL_LIMIT", "14"))
 BOOKMAKER_SCRAPE_USER_AGENT = (
     os.getenv("BOOKMAKER_SCRAPE_USER_AGENT")
     or "Mozilla/5.0 (compatible; Googlebot/2.1; +https://prizolov.ru/bot)"
@@ -100,7 +118,14 @@ def _slice_event_chunk(html: str, start: int) -> str:
 
 
 def _pick_total_line(params: List[float], sport: str = "football") -> float:
-    preferred = 5.5 if sport == "hockey" else 2.5
+    if sport == "hockey":
+        preferred = 5.5
+    elif sport == "basketball":
+        preferred = 220.5
+    elif sport in ("tennis", "table_tennis", "volleyball", "badminton"):
+        preferred = 21.5
+    else:
+        preferred = 2.5
     candidates = [value for value in params if 1.0 <= value <= 6.5]
     if not candidates:
         candidates = [value for value in params if 0.5 <= value <= 8.5]
@@ -231,28 +256,6 @@ def _append_main_market_group(
             if combo:
                 _append_rec(recommendations, label, combo, now_utc)
 
-
-    if len(sub_values) >= 3:
-        labels = ("1", "X", "2")
-        for label, coef in zip(labels, sub_values[:3]):
-            _append_rec(recommendations, f"{sub_name}: исход {label}", coef, now_utc)
-        if len(sub_values) >= 6:
-            for label, coef in zip(labels, sub_values[3:6]):
-                _append_rec(recommendations, f"{sub_name} (доп.): исход {label}", coef, now_utc)
-        if len(sub_values) >= 8:
-            _append_rec(recommendations, f"{sub_name}: тотал больше", sub_values[6], now_utc)
-            _append_rec(recommendations, f"{sub_name}: тотал меньше", sub_values[7], now_utc)
-        return
-
-    if len(sub_values) >= 2:
-        _append_rec(recommendations, f"{sub_name}: больше", sub_values[0], now_utc)
-        _append_rec(recommendations, f"{sub_name}: меньше", sub_values[1], now_utc)
-        for idx, coef in enumerate(sub_values[2:8], start=3):
-            _append_rec(recommendations, f"{sub_name}: линия {idx}", coef, now_utc)
-    elif len(sub_values) == 1:
-        _append_rec(recommendations, f"{sub_name}: исход", sub_values[0], now_utc)
-
-
 def _recommendations_from_pari_chunk(
     home: str,
     away: str,
@@ -359,23 +362,45 @@ def _normalize_sport(raw: Optional[str], source_url: str = "") -> str:
         "basketball": "basketball",
         "теннис": "tennis",
         "tennis": "tennis",
+        "настольный теннис": "table_tennis",
+        "table tennis": "table_tennis",
+        "table-tennis": "table_tennis",
         "волейбол": "volleyball",
         "volleyball": "volleyball",
+        "гандбол": "handball",
+        "handball": "handball",
+        "бейсбол": "baseball",
+        "baseball": "baseball",
+        "бокс": "boxing",
+        "boxing": "boxing",
         "киберспорт": "esports",
         "esports": "esports",
+        "cs2": "esports",
+        "дартс": "darts",
+        "darts": "darts",
+        "крикет": "cricket",
+        "cricket": "cricket",
+        "регби": "rugby",
+        "rugby": "rugby",
+        "футзал": "futsal",
+        "futsal": "futsal",
+        "водное поло": "water_polo",
+        "water polo": "water_polo",
+        "waterpolo": "water_polo",
+        "бадминтон": "badminton",
+        "badminton": "badminton",
     }
     if value in mapping:
         return mapping[value]
     url = source_url.lower()
-    if "/hockey" in url:
-        return "hockey"
-    if "/basketball" in url:
-        return "basketball"
-    if "/tennis" in url:
-        return "tennis"
+    for slug, sport_key in PARI_SPORT_PAGES.items():
+        if f"/{slug}" in url:
+            return sport_key
     if "/esport" in url:
         return "esports"
-    return mapping.get(value, value or "football")
+    if "/live" in url and not value:
+        return "football"
+    return mapping.get(value, value.replace(" ", "_") or "other")
 
 
 
@@ -433,12 +458,9 @@ def _build_event(
 
 def _sport_hint_from_url(source_url: str) -> str:
     url = source_url.lower()
-    if "/hockey" in url:
-        return "hockey"
-    if "/basketball" in url:
-        return "basketball"
-    if "/tennis" in url:
-        return "tennis"
+    for slug, sport_key in PARI_SPORT_PAGES.items():
+        if f"/{slug}" in url:
+            return sport_key
     if "/esport" in url:
         return "esports"
     return "football"
@@ -544,12 +566,15 @@ def scrape_bookmaker_urls_sync(urls: Optional[List[str]] = None, limit: int = BO
             continue
         if not html:
             continue
+        per_url_cap = min(BOOKMAKER_SCRAPE_PER_URL_LIMIT, max(6, limit // max(len(targets), 1)))
+        added_here = 0
         for event in _extract_events_from_html(html, url):
             if event["id"] in seen_ids:
                 continue
             seen_ids.add(event["id"])
             merged.append(event)
-            if len(merged) >= limit:
+            added_here += 1
+            if added_here >= per_url_cap or len(merged) >= limit:
                 break
         if len(merged) >= limit:
             break
@@ -653,6 +678,8 @@ def get_status_snapshot() -> Dict[str, Any]:
             "last_error": _cache.get("last_error"),
             "ingest_configured": bool(BOOKMAKER_INGEST_SECRET),
             "max_recommendations_per_event": BOOKMAKER_MAX_RECOMMENDATIONS,
+            "sport_pages": list(PARI_SPORT_PAGES.keys()),
+            "scrape_per_url_limit": BOOKMAKER_SCRAPE_PER_URL_LIMIT,
             "winline": _winline_status_snapshot(),
         }
 
