@@ -41,7 +41,6 @@ PARI_SPORT_PAGES: Dict[str, str] = {
     "handball": "handball",
     "baseball": "baseball",
     "boxing": "boxing",
-    "esports": "esports",
     "darts": "darts",
     "cricket": "cricket",
     "rugby": "rugby",

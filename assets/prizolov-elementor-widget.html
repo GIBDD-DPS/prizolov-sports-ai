@@ -488,7 +488,7 @@
   var API_URL = "/get-ai-sports.php";
   var API_BASE = window.PRIZOLOV_API_BASE || "https://prizolov-sports-dmandreyanov.amvera.io";
   var ALL_EVENTS_URL = "/api/all-events";
-  var WIDGET_BUILD = "2026-06-03-all-bets-title";
+  var WIDGET_BUILD = "2026-06-03-no-esports";
 
   var WINDOW_HOURS = 24;
   var MIN_PROBABILITY = 0.6;
@@ -496,6 +496,7 @@
   var MIN_CONSENSUS_SOURCES = 3;
   var MIN_TABLE_COEFFICIENT = 1.4;
   var MIN_TABLE_PROBABILITY = 0.55;
+  var EXCLUDED_SPORTS = { esports: true };
   var MAX_LIVE_EVENT_AGE_MS = 4 * 60 * 60 * 1000;
   var AUTO_ROTATE_MS = 10000;
   var AUTO_REFRESH_MS = 45000;
@@ -559,7 +560,6 @@
       handball: "Гандбол",
       baseball: "Бейсбол",
       boxing: "Бокс",
-      esports: "Киберспорт",
       darts: "Дартс",
       cricket: "Крикет",
       rugby: "Регби",
@@ -1042,7 +1042,9 @@
         var normalized = raw.map(normalizeEvent).filter(Boolean).filter(function (e) {
           return e.allRecommendations && e.allRecommendations.length > 0;
         });
-        normalized = applyMode(normalized.filter(isActualEvent));
+        normalized = applyMode(normalized.filter(isActualEvent).filter(function (e) {
+          return e && !EXCLUDED_SPORTS[e.sport];
+        }));
         normalized.sort(function (a, b) {
           var p = topProbability(b) - topProbability(a);
           if (Math.abs(p) > 0.0001) return p;
