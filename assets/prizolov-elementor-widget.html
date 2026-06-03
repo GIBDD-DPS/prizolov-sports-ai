@@ -470,7 +470,7 @@
   var API_URL = "/get-ai-sports.php";
   var API_BASE = window.PRIZOLOV_API_BASE || "https://prizolov-sports-dmandreyanov.amvera.io";
   var ALL_EVENTS_URL = "/api/all-events";
-  var WIDGET_BUILD = "2026-06-03-passable-fix";
+  var WIDGET_BUILD = "2026-06-03-pari-rich-fix";
 
   var WINDOW_HOURS = 24;
   var MIN_PROBABILITY = 0.6;
@@ -656,6 +656,8 @@
         status: event.status || event.time || "LIVE",
         time: event.time || event.status || "LIVE",
         start_at: event.start_at || "",
+        score: event.score || "—",
+        live_minute: event.live_minute || "",
         is_live: Boolean(event.is_live || String(event.status || "").toUpperCase() === "LIVE"),
         allRecommendations: allRecs,
         passableRecommendations: allRecs.filter(isPassable),
@@ -712,14 +714,15 @@
       var startTs = toTimestamp(event.start_at);
 
       if (event.is_live) {
+        if (event.live_minute || (event.score && event.score !== "—")) return true;
         if (!startTs) return true;
         if (startTs > now + 5 * 60 * 1000) return false;
         return (now - startTs) <= MAX_LIVE_EVENT_AGE_MS;
       }
 
-      if (!startTs) return false;
+      if (!startTs) return true;
       var horizon = now + WINDOW_HOURS * 60 * 60 * 1000;
-      return startTs >= now && startTs <= horizon;
+      return startTs >= now - 15 * 60 * 1000 && startTs <= horizon;
     }
 
     function applyMode(events) {
@@ -806,9 +809,17 @@
       var event = allEvents[currentEventIndex];
 
       if (byId("main-league")) byId("main-league").textContent = event.league;
-      if (byId("main-match")) byId("main-match").textContent = event.home + " vs " + event.away;
+      if (byId("main-match")) {
+        var matchText = event.home + " vs " + event.away;
+        if (event.score && event.score !== "—") matchText += "  (" + event.score + ")";
+        byId("main-match").textContent = matchText;
+      }
       if (byId("main-sport")) byId("main-sport").textContent = asSport(event.sport);
-      if (byId("main-time")) byId("main-time").textContent = event.is_live ? "LIVE" : (event.time || "UPCOMING");
+      if (byId("main-time")) {
+        var timeText = event.is_live ? (event.live_minute || event.time || "LIVE") : (event.time || "UPCOMING");
+        if (event.is_live) timeText = (timeText.indexOf("LIVE") === -1 ? timeText + " LIVE" : timeText);
+        byId("main-time").textContent = timeText;
+      }
       if (byId("counter")) byId("counter").textContent = "Событие " + (currentEventIndex + 1) + " из " + allEvents.length;
 
       var consensusEl = byId("main-consensus");
@@ -890,7 +901,9 @@
         html += "<tr style='background:" + rowBg + ";'>" +
           "<td>" + timeText + "</td>" +
           "<td>" + asSport(event.sport) + "</td>" +
-          "<td><strong>" + escapeHtml(event.home) + " vs " + escapeHtml(event.away) + "</strong></td>" +
+          "<td><strong>" + escapeHtml(event.home) + " vs " + escapeHtml(event.away) +
+            (event.score && event.score !== "—" ? " (" + escapeHtml(event.score) + ")" : "") +
+            "</strong></td>" +
           "<td>" + escapeHtml(event.league) + "</td>" +
           "<td>" + bestLine + "</td>" +
           "<td><span class='pz-passability'>" + bestProb + "%</span></td>" +
@@ -915,8 +928,8 @@
     function fetchFromAllEvents(modeCfg, cb) {
       requestJson("GET", withBase(ALL_EVENTS_URL) + "?" + qs({
         window_hours: String(WINDOW_HOURS),
-        include_live: modeCfg.includeLive ? "true" : "false",
-        include_upcoming: modeCfg.onlyLive ? "false" : "true",
+        include_live: "true",
+        include_upcoming: "true",
         passable_only: "false",
         min_probability: "0",
         min_coefficient: "1",
@@ -945,8 +958,8 @@
       fetchAllEvents(function (raw) {
         var normalized = raw.map(normalizeEvent).filter(Boolean).filter(function (e) {
           return e.allRecommendations && e.allRecommendations.length > 0;
-        }).filter(isActualEvent);
-        normalized = applyMode(normalized);
+        });
+        normalized = applyMode(normalized.filter(isActualEvent));
         normalized.sort(function (a, b) {
           var p = topProbability(b) - topProbability(a);
           if (Math.abs(p) > 0.0001) return p;

@@ -467,11 +467,76 @@ def _load_extra_donor_catalog() -> List[Dict[str, Any]]:
     return extras
 
 
+def _catalog_from_feed_sources() -> List[Dict[str, Any]]:
+    """Build donor catalog entries from configured JSON/RSS/text feeds."""
+    catalog: List[Dict[str, Any]] = []
+    seen = set()
+    for source in (
+        _parse_external_feed_sources()
+        + _parse_external_rss_sources()
+        + _parse_external_text_sources()
+    ):
+        donor_id = str(source.get("donor_id") or "").strip()
+        if not donor_id or donor_id in seen:
+            continue
+        seen.add(donor_id)
+        catalog.append(
+            {
+                "id": donor_id,
+                "name": str(source.get("donor_name") or donor_id),
+                "channel": str(source.get("channel") or "external"),
+                "weight": _coerce_float(source.get("weight"), 1.0, minimum=0.2, maximum=3.0),
+                "active": True,
+                "url": source.get("url"),
+            }
+        )
+    return catalog
+
+
+def _generate_recommendation_donor_signals(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Use scraped market lines as donor signals for consensus coverage."""
+    now_iso = _now_utc().isoformat()
+    donor_templates = [
+        ("pari-market-primary", "Pari Market", 1.0),
+        ("pari-market-secondary", "Pari Secondary", 0.96),
+        ("prizolov-market-model", "Prizolov Market Model", 0.92),
+    ]
+    signals: List[Dict[str, Any]] = []
+
+    for event in events:
+        event_id = str(event.get("id") or "")
+        if not event_id:
+            continue
+        recs = event.get("all_recommendations") or event.get("recommendations") or []
+        for idx, rec in enumerate(recs[:3]):
+            donor_id, donor_name, donor_weight = donor_templates[min(idx, len(donor_templates) - 1)]
+            probability = _coerce_float(rec.get("adjusted_probability", rec.get("probability", 0.0)), 0.0, minimum=0.02, maximum=0.98)
+            coefficient = _coerce_float(rec.get("coefficient", 1.5), 1.5, minimum=1.01, maximum=50.0)
+            signals.append(
+                {
+                    "event_id": event_id,
+                    "event_key": _event_match_key(event),
+                    "line": str(rec.get("line") or "Исход"),
+                    "probability": round(probability, 4),
+                    "coefficient": round(coefficient, 2),
+                    "source_id": donor_id,
+                    "source_name": donor_name,
+                    "source_channel": "bookmaker-line",
+                    "source_weight": donor_weight,
+                    "captured_at": now_iso,
+                    "source_url": event.get("source_url"),
+                }
+            )
+    return signals
+
+
 def _resolve_donor_catalog() -> List[Dict[str, Any]]:
     catalog = _default_donor_catalog()
     extras = _load_extra_donor_catalog()
     merged: Dict[str, Dict[str, Any]] = {item["id"]: item for item in catalog}
     for item in extras:
+        merged[item["id"]] = item
+    for item in _catalog_from_feed_sources():
         merged[item["id"]] = item
     return list(merged.values())
 
@@ -1139,7 +1204,8 @@ def _apply_external_consensus(events: List[Dict[str, Any]], min_sources: int) ->
     json_feed_signals = _load_json_feed_signals(events_by_key)
     rss_feed_signals = _load_rss_feed_signals(events_by_key)
     text_feed_signals = _load_text_feed_signals(events_by_key)
-    all_signals = synthetic_signals + json_feed_signals + rss_feed_signals + text_feed_signals
+    recommendation_signals = _generate_recommendation_donor_signals(events)
+    all_signals = recommendation_signals + synthetic_signals + json_feed_signals + rss_feed_signals + text_feed_signals
 
     grouped_count: Dict[str, int] = {}
     trimmed_signals: List[Dict[str, Any]] = []
@@ -1193,6 +1259,7 @@ def _apply_external_consensus(events: List[Dict[str, Any]], min_sources: int) ->
             "rss_feed_signals_total": len(rss_feed_signals),
             "text_feed_signals_total": len(text_feed_signals),
             "real_feed_signals_total": len(json_feed_signals) + len(rss_feed_signals) + len(text_feed_signals),
+            "recommendation_signals_total": len(recommendation_signals),
         }
     )
     return events, donor_summary, consensus_top
