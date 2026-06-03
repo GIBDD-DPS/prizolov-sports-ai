@@ -224,10 +224,18 @@ def fetch_odds_events_sync(limit: int = REAL_EVENTS_FETCH_LIMIT) -> List[Dict[st
             status = getattr(response, "status", 200)
             body = response.read().decode("utf-8", errors="ignore")
     except HTTPError as exc:
+        error_code = f"http_{exc.code}"
+        try:
+            err_body = exc.read().decode("utf-8", errors="ignore")
+            err_payload = json.loads(err_body)
+            if isinstance(err_payload, dict) and err_payload.get("error_code"):
+                error_code = str(err_payload["error_code"])
+        except Exception:
+            pass
         with _cache_lock:
-            _cache["last_error"] = f"http_{exc.code}"
+            _cache["last_error"] = error_code
             _cache["last_http_status"] = exc.code
-        logger.warning("Odds API HTTP %s", exc.code)
+        logger.warning("Odds API HTTP %s (%s)", exc.code, error_code)
         return []
     except (URLError, TimeoutError, ValueError) as exc:
         with _cache_lock:
@@ -242,6 +250,14 @@ def fetch_odds_events_sync(limit: int = REAL_EVENTS_FETCH_LIMIT) -> List[Dict[st
         with _cache_lock:
             _cache["last_error"] = "invalid_json"
             _cache["last_http_status"] = status
+        return []
+
+    if isinstance(payload, dict):
+        error_code = str(payload.get("error_code") or "odds_api_error")
+        with _cache_lock:
+            _cache["last_error"] = error_code
+            _cache["last_http_status"] = status
+        logger.warning("Odds API error: %s", error_code)
         return []
 
     if not isinstance(payload, list):

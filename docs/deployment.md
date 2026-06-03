@@ -84,3 +84,14 @@ After deploy, verify:
 - `GET /api/donors/status`
 - `GET /api/source-status` (quality + external donor runtime)
 - `GET /api/consensus/top`
+
+## The Odds API (Amvera)
+
+Задайте в переменных окружения Amvera (не в git):
+
+- `THE_ODDS_API_KEY` — ключ с https://the-odds-api.com/
+- `REAL_EVENTS_ENABLED=true`
+
+Проверка: `GET /api/source-status` → `real_events.api_key_present: true`, `last_error: null`.
+
+Если `OUT_OF_USAGE_CREDITS` — бесплатные credits закончились; дождитесь сброса или подключите платный план.
