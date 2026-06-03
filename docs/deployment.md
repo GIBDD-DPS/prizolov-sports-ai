@@ -78,7 +78,7 @@ EXTERNAL_DONOR_TEXT_ITEM_LIMIT=60
 
 
 Ready donor pack (validated public feeds):
-- `docs/external_donor_pack.env`
+- `docs/external_donor_pack.env` (empty feeds, synthetic off)
 
 After deploy, verify:
 - `GET /api/donors/status`

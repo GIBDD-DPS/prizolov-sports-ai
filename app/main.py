@@ -108,7 +108,7 @@ EXTERNAL_DONOR_HTTP_TIMEOUT_SECONDS = int(os.getenv("EXTERNAL_DONOR_HTTP_TIMEOUT
 EXTERNAL_DONOR_HTTP_MAX_BODY_BYTES = int(os.getenv("EXTERNAL_DONOR_HTTP_MAX_BODY_BYTES", _env_default("EXTERNAL_DONOR_HTTP_MAX_BODY_BYTES", "850000")))
 EXTERNAL_DONOR_RSS_ITEM_LIMIT = int(os.getenv("EXTERNAL_DONOR_RSS_ITEM_LIMIT", _env_default("EXTERNAL_DONOR_RSS_ITEM_LIMIT", "50")))
 EXTERNAL_DONOR_TEXT_ITEM_LIMIT = int(os.getenv("EXTERNAL_DONOR_TEXT_ITEM_LIMIT", _env_default("EXTERNAL_DONOR_TEXT_ITEM_LIMIT", "60")))
-EXTERNAL_DONOR_ENABLE_SYNTHETIC = os.getenv("EXTERNAL_DONOR_ENABLE_SYNTHETIC", _env_default("EXTERNAL_DONOR_ENABLE_SYNTHETIC", "true")).strip().lower() in {"1", "true", "yes", "on"}
+EXTERNAL_DONOR_ENABLE_SYNTHETIC = os.getenv("EXTERNAL_DONOR_ENABLE_SYNTHETIC", _env_default("EXTERNAL_DONOR_ENABLE_SYNTHETIC", "false")).strip().lower() in {"1", "true", "yes", "on"}
 EXTERNAL_DONOR_SIGNAL_LIMIT_PER_EVENT = int(os.getenv("EXTERNAL_DONOR_SIGNAL_LIMIT_PER_EVENT", _env_default("EXTERNAL_DONOR_SIGNAL_LIMIT_PER_EVENT", "10")))
 
 MAX_ODDS_AGE_SECONDS = int(os.getenv("MAX_ODDS_AGE_SECONDS", "900"))  # 15 минут
@@ -772,23 +772,6 @@ def _best_event_match_for_text(
     return best_key, best_event
 
 
-def _fallback_event_match_by_sport(
-    event_lookup: List[Tuple[str, Dict[str, Any], str, str, str]],
-    sport_hint: Optional[str] = None,
-) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
-    if not event_lookup:
-        return None, None
-
-    sport_hint_norm = str(sport_hint or "").strip().lower()
-    if sport_hint_norm:
-        for key, event, _home_norm, _away_norm, sport_norm in event_lookup:
-            if sport_norm and sport_norm == sport_hint_norm:
-                return key, event
-
-    key, event, *_rest = event_lookup[0]
-    return key, event
-
-
 def _extract_probability_from_text(text: str) -> Optional[float]:
     patterns = [
         r"(?:probability|prob|вероятн(?:ость|ости)?|проходим(?:ость|остью)?)\s*[:=]?\s*(\d{1,3}(?:[\.,]\d+)?)\s*%?",
@@ -944,9 +927,7 @@ def _load_json_feed_signals(events_by_key: Dict[str, Dict[str, Any]]) -> List[Di
                     ]
                 )
                 event_key, event = _best_event_match_for_text(rec_text, event_lookup, sport_hint=rec.get("sport") or feed.get("sport"))
-                if event is None or event_key is None:
-                    event_key, event = _fallback_event_match_by_sport(event_lookup, sport_hint=rec.get("sport") or feed.get("sport"))
-                if event is None or event_key is None:
+            if event is None or event_key is None:
                     continue
 
             line_fb, prob_fb, coef_fb = _event_fallback_pick(event, f"{feed['donor_id']}:{event.get('id')}")
@@ -1021,8 +1002,6 @@ def _load_rss_feed_signals(events_by_key: Dict[str, Dict[str, Any]]) -> List[Dic
             text_blob = html.unescape(f"{title} {description}")
             event_key, event = _best_event_match_for_text(text_blob, event_lookup, sport_hint=feed.get("sport"))
             if event is None or event_key is None:
-                event_key, event = _fallback_event_match_by_sport(event_lookup, sport_hint=feed.get("sport"))
-            if event is None or event_key is None:
                 continue
 
             line_fb, prob_fb, coef_fb = _event_fallback_pick(event, f"rss:{feed['donor_id']}:{event.get('id')}")
@@ -1089,8 +1068,6 @@ def _load_text_feed_signals(events_by_key: Dict[str, Dict[str, Any]]) -> List[Di
         for block in blocks[:EXTERNAL_DONOR_TEXT_ITEM_LIMIT]:
             text_blob = html.unescape(str(block))
             event_key, event = _best_event_match_for_text(text_blob, event_lookup, sport_hint=feed.get("sport"))
-            if event is None or event_key is None:
-                event_key, event = _fallback_event_match_by_sport(event_lookup, sport_hint=feed.get("sport"))
             if event is None or event_key is None:
                 continue
 

@@ -1047,15 +1047,9 @@
           saveSnapshot(currentMode, normalized);
           allEvents = normalized;
         } else {
-          var snapshot = loadSnapshot(currentMode);
-          if (snapshot && Array.isArray(snapshot.events) && snapshot.events.length > 0) {
-            usingCachedSnapshot = true;
-            allEvents = snapshot.events;
-            var dt = new Date(snapshot.saved_at || Date.now());
-            lastUpdatedLabel = dt.toLocaleTimeString();
-          } else {
-            allEvents = [];
-          }
+          allEvents = [];
+          usingCachedSnapshot = false;
+          showError("Нет актуальных событий. Обновите страницу.");
         }
 
         if (currentEventIndex >= allEvents.length) currentEventIndex = 0;
