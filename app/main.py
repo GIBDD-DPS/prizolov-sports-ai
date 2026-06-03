@@ -97,6 +97,11 @@ DEFAULT_WINDOW_HOURS = int(os.getenv("DEFAULT_WINDOW_HOURS", "24"))
 DEFAULT_MIN_PROBABILITY = float(os.getenv("DEFAULT_MIN_PROBABILITY", "0.6"))
 DEFAULT_MIN_COEFFICIENT = float(os.getenv("DEFAULT_MIN_COEFFICIENT", "1.5"))
 DEFAULT_MIN_BOOKMAKERS_SUPPORT = float(os.getenv("DEFAULT_MIN_BOOKMAKERS_SUPPORT", "2.0"))
+EXCLUDED_STOREFRONT_SPORTS = frozenset(
+    s.strip().lower()
+    for s in (os.getenv("EXCLUDED_STOREFRONT_SPORTS") or "esports").split(",")
+    if s.strip()
+)
 EXTERNAL_CONSENSUS_MIN_SOURCES = int(os.getenv("EXTERNAL_CONSENSUS_MIN_SOURCES", _env_default("EXTERNAL_CONSENSUS_MIN_SOURCES", "3")))
 EXTERNAL_CONSENSUS_ENABLED = os.getenv("EXTERNAL_CONSENSUS_ENABLED", _env_default("EXTERNAL_CONSENSUS_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "on"}
 EXTERNAL_DONOR_INGESTION_ENABLED = os.getenv(
@@ -1339,6 +1344,16 @@ def _is_event_relevant_now(event: Dict[str, Any], now_utc: datetime.datetime, wi
     return now_utc <= start_at <= horizon
 
 
+
+
+def _is_storefront_sport_allowed(event: Dict[str, Any]) -> bool:
+    sport = str(event.get("sport") or "").strip().lower()
+    if not sport:
+        return True
+    if sport in EXCLUDED_STOREFRONT_SPORTS or sport.startswith("esport"):
+        return False
+    return True
+
 def _collect_raw_events(
     window_hours: int,
     include_live: bool,
@@ -1387,7 +1402,8 @@ def _collect_raw_events(
     return [
         event
         for event in items
-        if _is_event_relevant_now(event, now_utc, window_hours)
+        if _is_storefront_sport_allowed(event)
+        and _is_event_relevant_now(event, now_utc, window_hours)
     ]
 
 
