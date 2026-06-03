@@ -389,18 +389,20 @@ def fetch_api_football_events_sync(limit: int = REAL_EVENTS_FETCH_LIMIT) -> List
                 "start_at": commence_dt.isoformat() if commence_dt else now_utc.isoformat(),
                 "recommendations": [
                     {
-                        "line": "Исход: 1",
-                        "coefficient": 1.72,
-                        "probability": 0.57,
-                        "confidence": "med",
-                        "bookmakers_support": 2.0,
+                        "line": "Победа 1",
+                        "coefficient": 2.05,
+                        "probability": 0.68,
+                        "confidence": "high",
+                        "bookmakers_support": 3.0,
+                        "odds_updated_at": now_utc.isoformat(),
                     },
                     {
                         "line": "Тотал больше 2.5",
-                        "coefficient": 1.68,
-                        "probability": 0.55,
+                        "coefficient": 1.85,
+                        "probability": 0.64,
                         "confidence": "med",
-                        "bookmakers_support": 2.0,
+                        "bookmakers_support": 3.0,
+                        "odds_updated_at": now_utc.isoformat(),
                     },
                 ],
             }

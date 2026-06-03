@@ -470,7 +470,7 @@
   var API_URL = "/get-ai-sports.php";
   var API_BASE = window.PRIZOLOV_API_BASE || "https://prizolov-sports-dmandreyanov.amvera.io";
   var ALL_EVENTS_URL = "/api/all-events";
-  var WIDGET_BUILD = "2026-06-04-no-demo-fallback";
+  var WIDGET_BUILD = "2026-06-03-passable-fix";
 
   var WINDOW_HOURS = 24;
   var MIN_PROBABILITY = 0.6;
@@ -509,6 +509,7 @@
     var allEvents = [];
     var usingCachedSnapshot = false;
     var lastUpdatedLabel = "—";
+    var donorsEnabled = false;
 
     function byId(id) {
       return root.querySelector("#" + id);
@@ -820,7 +821,7 @@
             "<strong>" + escapeHtml(consensusLabel(consensus)) + "</strong>" +
             "<span class='pz-consensus-pill " + readyClass + "'>agreement " + Math.round((consensus.agreement || 0) * 100) + "%</span>";
         } else {
-          consensusEl.textContent = "Внешние доноры отключены";
+          consensusEl.textContent = donorsEnabled ? "Нет прогнозов от доноров" : "Внешние доноры отключены";
         }
       }
 
@@ -828,7 +829,16 @@
       if (!recsEl) return;
       var recs = event.passableRecommendations || [];
       if (!recs.length) {
-        recsEl.innerHTML = "<div class='pz-loading'>🤖 Для этого события нет ставок >60% и >=1.5</div>";
+        var watch = (event.allRecommendations || []).slice().sort(function (a, b) {
+          return (b.probability || 0) - (a.probability || 0);
+        });
+        if (watch.length) {
+          var w = watch[0];
+          var wp = Math.round((w.probability || 0) * 100);
+          recsEl.innerHTML = "<div class='pz-rec-item'><div class='pz-rec-info'><div class='pz-rec-line'><span class='pz-rec-line-name'>" + escapeHtml(w.line) + "</span></div><div class='pz-rec-meta'>Вер: " + wp + "% • наблюдение (ниже порога 60%)</div></div><div class='pz-rec-coef'>" + asNum(w.coefficient, 1.5).toFixed(2) + "</div></div>";
+        } else {
+          recsEl.innerHTML = "<div class='pz-loading'>🤖 Для этого события нет ставок >60% и >=1.5</div>";
+        }
         return;
       }
 
@@ -915,6 +925,7 @@
         sort_by: "passability",
         refresh: "true"
       }), null, function (payload) {
+        donorsEnabled = Boolean(payload && payload.external_donors && payload.external_donors.enabled);
         cb(Array.isArray(payload && payload.events) ? payload.events : []);
       }, function () {
         cb([]);
