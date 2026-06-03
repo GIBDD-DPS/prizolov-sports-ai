@@ -98,7 +98,11 @@ DEFAULT_MIN_PROBABILITY = float(os.getenv("DEFAULT_MIN_PROBABILITY", "0.6"))
 DEFAULT_MIN_COEFFICIENT = float(os.getenv("DEFAULT_MIN_COEFFICIENT", "1.5"))
 DEFAULT_MIN_BOOKMAKERS_SUPPORT = float(os.getenv("DEFAULT_MIN_BOOKMAKERS_SUPPORT", "2.0"))
 EXTERNAL_CONSENSUS_MIN_SOURCES = int(os.getenv("EXTERNAL_CONSENSUS_MIN_SOURCES", _env_default("EXTERNAL_CONSENSUS_MIN_SOURCES", "3")))
-EXTERNAL_CONSENSUS_ENABLED = os.getenv("EXTERNAL_CONSENSUS_ENABLED", _env_default("EXTERNAL_CONSENSUS_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "on"}
+EXTERNAL_CONSENSUS_ENABLED = os.getenv("EXTERNAL_CONSENSUS_ENABLED", _env_default("EXTERNAL_CONSENSUS_ENABLED", "false")).strip().lower() in {"1", "true", "yes", "on"}
+EXTERNAL_DONOR_INGESTION_ENABLED = os.getenv(
+    "EXTERNAL_DONOR_INGESTION_ENABLED",
+    _env_default("EXTERNAL_DONOR_INGESTION_ENABLED", "false"),
+).strip().lower() in {"1", "true", "yes", "on"}
 EXTERNAL_DONOR_RANDOM_SEED = os.getenv("EXTERNAL_DONOR_RANDOM_SEED", "prizolov-donor-seed")
 EXTERNAL_DONOR_CATALOG_EXTRA_JSON = _normalize_json_env_value(os.getenv("EXTERNAL_DONOR_CATALOG_EXTRA_JSON", _env_default("EXTERNAL_DONOR_CATALOG_EXTRA_JSON", "")))
 EXTERNAL_DONOR_JSON_FEEDS = _normalize_json_env_value(os.getenv("EXTERNAL_DONOR_JSON_FEEDS", _env_default("EXTERNAL_DONOR_JSON_FEEDS", "")))
@@ -110,6 +114,13 @@ EXTERNAL_DONOR_RSS_ITEM_LIMIT = int(os.getenv("EXTERNAL_DONOR_RSS_ITEM_LIMIT", _
 EXTERNAL_DONOR_TEXT_ITEM_LIMIT = int(os.getenv("EXTERNAL_DONOR_TEXT_ITEM_LIMIT", _env_default("EXTERNAL_DONOR_TEXT_ITEM_LIMIT", "60")))
 EXTERNAL_DONOR_ENABLE_SYNTHETIC = os.getenv("EXTERNAL_DONOR_ENABLE_SYNTHETIC", _env_default("EXTERNAL_DONOR_ENABLE_SYNTHETIC", "false")).strip().lower() in {"1", "true", "yes", "on"}
 EXTERNAL_DONOR_SIGNAL_LIMIT_PER_EVENT = int(os.getenv("EXTERNAL_DONOR_SIGNAL_LIMIT_PER_EVENT", _env_default("EXTERNAL_DONOR_SIGNAL_LIMIT_PER_EVENT", "10")))
+
+
+
+def _external_donors_active() -> bool:
+    """External donor pipeline is opt-in only (off by default)."""
+    return EXTERNAL_DONOR_INGESTION_ENABLED and EXTERNAL_CONSENSUS_ENABLED
+
 
 MAX_ODDS_AGE_SECONDS = int(os.getenv("MAX_ODDS_AGE_SECONDS", "900"))  # 15 минут
 STALE_ODDS_PENALTY_FACTOR = float(os.getenv("STALE_ODDS_PENALTY_FACTOR", "0.92"))
@@ -549,60 +560,8 @@ def _event_match_key(event: Dict[str, Any]) -> str:
 
 
 def _default_donor_catalog() -> List[Dict[str, Any]]:
-    raw = [
-        ("smartscore", "SmartScore", "aggregator", 1.08),
-        ("oddsradar", "OddsRadar", "aggregator", 1.05),
-        ("betinsider", "BetInsider", "site", 0.98),
-        ("tipsarena", "TipsArena", "site", 0.96),
-        ("winstats", "WinStats", "site", 0.95),
-        ("xscore-feed", "XScore Feed", "aggregator", 1.02),
-        ("goalpulse", "GoalPulse", "site", 0.93),
-        ("matchinsight", "MatchInsight", "site", 0.91),
-        ("bet-mentor", "Bet Mentor", "site", 0.92),
-        ("alpha-lines", "Alpha Lines", "site", 0.99),
-        ("sharpwatch", "SharpWatch", "aggregator", 1.09),
-        ("lineconsensus", "LineConsensus", "aggregator", 1.07),
-        ("telegram-sportedge", "SportEdge TG", "messenger", 0.89),
-        ("telegram-betforum", "BetForum TG", "messenger", 0.87),
-        ("telegram-livevalue", "LiveValue TG", "messenger", 0.9),
-        ("telegram-futbolab", "Futbolab TG", "messenger", 0.86),
-        ("telegram-hockeyhub", "HockeyHub TG", "messenger", 0.85),
-        ("telegram-basketpulse", "BasketPulse TG", "messenger", 0.85),
-        ("reddit-sportsbook", "Reddit Sportsbook", "community", 0.78),
-        ("x-picks", "X Picks", "social", 0.73),
-        ("discord-sharps", "Discord Sharps", "community", 0.8),
-        ("tipstracker", "TipsTracker", "aggregator", 1.01),
-        ("marketwhisper", "MarketWhisper", "site", 0.94),
-        ("value-lab", "ValueLab", "site", 0.97),
-        ("forecastgrid", "ForecastGrid", "aggregator", 1.0),
-        ("sportpulse-ai", "SportPulse AI", "site", 1.03),
-        ("footballmatrix", "FootballMatrix", "site", 0.95),
-        ("hockeymatrix", "HockeyMatrix", "site", 0.95),
-        ("tennisvalue", "TennisValue", "site", 0.94),
-        ("mma-insight", "MMA Insight", "site", 0.88),
-        ("baseball-angles", "Baseball Angles", "site", 0.9),
-        ("rugby-lab", "Rugby Lab", "site", 0.86),
-        ("cricket-edge", "Cricket Edge", "site", 0.85),
-        ("table-tennis-pro", "TableTennisPro", "site", 0.84),
-        ("badminton-focus", "Badminton Focus", "site", 0.83),
-        ("futsal-center", "Futsal Center", "site", 0.82),
-        ("global-consensus", "Global Consensus", "aggregator", 1.04),
-        ("line-observer", "Line Observer", "aggregator", 1.02),
-    ]
-
-    catalog = []
-    for donor_id, name, channel, weight in raw:
-        catalog.append(
-            {
-                "id": donor_id,
-                "name": name,
-                "channel": channel,
-                "weight": float(weight),
-                "active": True,
-                "url": None,
-            }
-        )
-    return catalog
+    """Built-in donor catalog disabled — use only vetted EXTERNAL_DONOR_* env feeds."""
+    return []
 
 
 def _load_extra_donor_catalog() -> List[Dict[str, Any]]:
@@ -693,14 +652,20 @@ def _parse_feed_sources_env(raw_env: str, fallback_prefix: str, channel: str) ->
 
 
 def _parse_external_feed_sources() -> List[Dict[str, Any]]:
+    if not _external_donors_active():
+        return []
     return _parse_feed_sources_env(EXTERNAL_DONOR_JSON_FEEDS, "json-feed", "json-feed")
 
 
 def _parse_external_rss_sources() -> List[Dict[str, Any]]:
+    if not _external_donors_active():
+        return []
     return _parse_feed_sources_env(EXTERNAL_DONOR_RSS_FEEDS, "rss-feed", "rss")
 
 
 def _parse_external_text_sources() -> List[Dict[str, Any]]:
+    if not _external_donors_active():
+        return []
     return _parse_feed_sources_env(EXTERNAL_DONOR_TEXT_FEEDS, "text-feed", "text-feed")
 
 
@@ -1267,7 +1232,9 @@ def _build_external_consensus(
 
 
 def _apply_external_consensus(events: List[Dict[str, Any]], min_sources: int) -> Tuple[List[Dict[str, Any]], Dict[str, Any], List[Dict[str, Any]]]:
-    if not EXTERNAL_CONSENSUS_ENABLED:
+    if not _external_donors_active():
+        for event in events:
+            event["external_consensus"] = None
         with _metrics_lock:
             _metrics["donor_pipeline"].update(
                 {
@@ -1279,7 +1246,13 @@ def _apply_external_consensus(events: List[Dict[str, Any]], min_sources: int) ->
                     "last_generated_at": _now_utc().isoformat(),
                 }
             )
-        return events, {"enabled": False}, []
+            _runtime_state["last_donor_coverage_ratio"] = 0.0
+            _runtime_state["low_donor_coverage_streak"] = 0
+        return events, {
+            "enabled": False,
+            "ingestion_enabled": EXTERNAL_DONOR_INGESTION_ENABLED,
+            "consensus_enabled": EXTERNAL_CONSENSUS_ENABLED,
+        }, []
 
     catalog = _resolve_donor_catalog()
     active_catalog = [d for d in catalog if d.get("active", True)]
@@ -2037,7 +2010,9 @@ async def donors_status():
         channels[channel] = channels.get(channel, 0) + 1
 
     return {
-        "enabled": EXTERNAL_CONSENSUS_ENABLED,
+        "enabled": _external_donors_active(),
+        "ingestion_enabled": EXTERNAL_DONOR_INGESTION_ENABLED,
+        "consensus_enabled": EXTERNAL_CONSENSUS_ENABLED,
         "catalog_total": len(catalog),
         "active_total": len(active),
         "channels": channels,
