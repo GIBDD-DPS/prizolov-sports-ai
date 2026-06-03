@@ -135,3 +135,9 @@ Use sport-specific or `/live` paths instead of bare `/sports?...` for server-sid
 - The backend parses `itemprop="homeTeam"` / `awayTeam` from SSR HTML (Googlebot User-Agent).
 - For full odds, run a Playwright worker and POST to `/api/ingest/bookmaker-events` with header `X-Bookmaker-Ingest-Secret`.
 
+### Amvera: скрап Pari без ручных переменных
+
+На Amvera задана системная переменная `AMVERA=1`. Если `BOOKMAKER_SCRAPE_ENABLED` не указана,
+скрап **включается автоматически** после деплоя `main` (PR #13+).
+
+Явно отключить: `BOOKMAKER_SCRAPE_ENABLED=false`.

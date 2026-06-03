@@ -18,12 +18,20 @@ from urllib.error import HTTPError, URLError
 
 logger = logging.getLogger("PrizolovSportsAI.BookmakerScrape")
 
-BOOKMAKER_SCRAPE_ENABLED = os.getenv("BOOKMAKER_SCRAPE_ENABLED", "false").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
+
+def _is_truthy_env(name: str) -> bool:
+    return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _bookmaker_scrape_enabled_from_env() -> bool:
+    """Explicit BOOKMAKER_SCRAPE_ENABLED wins; on Amvera default to enabled."""
+    explicit = os.getenv("BOOKMAKER_SCRAPE_ENABLED")
+    if explicit is not None and explicit.strip() != "":
+        return _is_truthy_env("BOOKMAKER_SCRAPE_ENABLED")
+    return _is_truthy_env("AMVERA")
+
+
+BOOKMAKER_SCRAPE_ENABLED = _bookmaker_scrape_enabled_from_env()
 BOOKMAKER_SCRAPE_URLS = [
     part.strip()
     for part in (
