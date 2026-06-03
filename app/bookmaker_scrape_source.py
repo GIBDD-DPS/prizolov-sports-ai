@@ -28,7 +28,7 @@ BOOKMAKER_SCRAPE_URLS = [
     part.strip()
     for part in (
         os.getenv("BOOKMAKER_SCRAPE_URLS")
-        or "https://pari.ru/sports/football,https://pari.ru/live/football"
+        or "https://pari.ru/live?dateInterval=5,https://pari.ru/sports/football?dateInterval=5,https://pari.ru/live/football?dateInterval=5"
     ).split(",")
     if part.strip()
 ]

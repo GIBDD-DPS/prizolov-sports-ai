@@ -120,7 +120,18 @@ BOOKMAKER_SCRAPE_URLS=https://pari.ru/sports/football,https://pari.ru/live/footb
 BOOKMAKER_SCRAPE_INTERVAL_SECONDS=300
 ```
 
-- `https://pari.ru/sports/top` is mostly a JS shell; use football/live URLs instead.
+- `https://pari.ru/sports/top` is mostly a JS shell
+### Pari URL query parameters
+
+| URL | HTTP scrape (Googlebot UA) |
+|-----|----------------------------|
+| `https://pari.ru/live?dateInterval=5` | Works (~100+ live events) |
+| `https://pari.ru/sports/football?dateInterval=5` | Works (~170 prematch/live football) |
+| `https://pari.ru/sports?dateInterval=5` | Does **not** work (SPA shell, no teams in HTML) |
+| `https://pari.ru/sports?mode=1&dateInterval=5` | Does **not** work (same shell) |
+
+Use sport-specific or `/live` paths instead of bare `/sports?...` for server-side HTML.
+; use football/live URLs instead.
 - The backend parses `itemprop="homeTeam"` / `awayTeam` from SSR HTML (Googlebot User-Agent).
 - For full odds, run a Playwright worker and POST to `/api/ingest/bookmaker-events` with header `X-Bookmaker-Ingest-Secret`.
 
