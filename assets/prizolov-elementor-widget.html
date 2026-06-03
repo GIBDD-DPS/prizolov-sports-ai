@@ -73,7 +73,7 @@
   </div>
 
   <div class="pz-widget" id="all-events-section" style="margin-top:30px;">
-    <h2 style="margin-bottom:20px;">📋 Все ставки (коэф. от 1.40, сортировка по проходимости)</h2>
+    <h2 style="margin-bottom:20px;">📋 Все ставки (коэф. от 1.40, проходимость от 55%)</h2>
     <div id="all-events-list"></div>
   </div>
 </div>
@@ -488,13 +488,14 @@
   var API_URL = "/get-ai-sports.php";
   var API_BASE = window.PRIZOLOV_API_BASE || "https://prizolov-sports-dmandreyanov.amvera.io";
   var ALL_EVENTS_URL = "/api/all-events";
-  var WIDGET_BUILD = "2026-06-03-all-bets-table";
+  var WIDGET_BUILD = "2026-06-03-all-bets-55pct";
 
   var WINDOW_HOURS = 24;
   var MIN_PROBABILITY = 0.6;
   var MIN_COEFFICIENT = 1.5;
   var MIN_CONSENSUS_SOURCES = 3;
   var MIN_TABLE_COEFFICIENT = 1.4;
+  var MIN_TABLE_PROBABILITY = 0.55;
   var MAX_LIVE_EVENT_AGE_MS = 4 * 60 * 60 * 1000;
   var AUTO_ROTATE_MS = 10000;
   var AUTO_REFRESH_MS = 45000;
@@ -928,7 +929,8 @@
     }
 
     function isTableBet(rec) {
-      return asNum(rec && rec.coefficient, 0) >= MIN_TABLE_COEFFICIENT;
+      return asNum(rec && rec.probability, 0) >= MIN_TABLE_PROBABILITY
+        && asNum(rec && rec.coefficient, 0) >= MIN_TABLE_COEFFICIENT;
     }
 
     function collectAllBetRows() {
@@ -954,7 +956,7 @@
 
       var betRows = collectAllBetRows();
       if (!betRows.length) {
-        tableEl.innerHTML = "<div class='pz-loading'>Нет ставок с коэффициентом от " + MIN_TABLE_COEFFICIENT.toFixed(2) + "</div>";
+        tableEl.innerHTML = "<div class='pz-loading'>Нет ставок: коэф. от " + MIN_TABLE_COEFFICIENT.toFixed(2) + ", проходимость от " + Math.round(MIN_TABLE_PROBABILITY * 100) + "%</div>";
         return;
       }
 
