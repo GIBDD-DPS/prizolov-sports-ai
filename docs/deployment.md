@@ -89,7 +89,8 @@ After deploy, verify:
 
 Задайте в переменных окружения Amvera (не в git):
 
-- `THE_ODDS_API_KEY` — ключ с https://the-odds-api.com/
+- `ODDSPAPI_API_KEY` — ключ с https://oddspapi.io/ (приоритетный источник, если задан)
+- `THE_ODDS_API_KEY` — ключ с https://the-odds-api.com/ (fallback)
 - `REAL_EVENTS_ENABLED=true`
 
 Проверка: `GET /api/source-status` → `real_events.api_key_present: true`, `last_error: null`.

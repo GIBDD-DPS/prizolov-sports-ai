@@ -2039,7 +2039,15 @@ async def source_status():
             "external_donor_rss_item_limit": EXTERNAL_DONOR_RSS_ITEM_LIMIT,
             "external_donor_text_item_limit": EXTERNAL_DONOR_TEXT_ITEM_LIMIT,
                         "storefront_demo_events_enabled": STOREFRONT_DEMO_EVENTS_ENABLED,
-            "storefront_events_source": "demo_templates" if STOREFRONT_DEMO_EVENTS_ENABLED else ("odds_api" if REAL_EVENTS_ENABLED else "none"),
+            "storefront_events_source": (
+                "demo_templates"
+                if STOREFRONT_DEMO_EVENTS_ENABLED
+                else (
+                    get_status_snapshot().get("source")
+                    if REAL_EVENTS_ENABLED and get_status_snapshot().get("source") not in {None, "none"}
+                    else ("odds_api" if REAL_EVENTS_ENABLED else "none")
+                )
+            ),
             "external_donor_ingestion_enabled": EXTERNAL_DONOR_INGESTION_ENABLED,
             "external_donor_pack_defaults_loaded": bool(_ENV_PACK_DEFAULTS),
         },
