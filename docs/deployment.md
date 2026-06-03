@@ -97,3 +97,15 @@ After deploy, verify:
 Проверка: `GET /api/source-status` → `real_events.api_key_present: true`, `last_error: null`.
 
 Если `OUT_OF_USAGE_CREDITS` — бесплатные credits закончились; дождитесь сброса или подключите платный план.
+
+### Если в логах OddsPapi HTTP 403
+
+Запросы с IP Amvera могут блокироваться Cloudflare. Варианты:
+
+- Задать `ODDSPAPI_HTTP_PROXY` (HTTPS-прокси с «белым» IP)
+- Попросить OddsPapi whitelist egress IP вашего контейнера
+- После 403 запросы к OddsPapi паузятся на 15 мин (`ODDSPAPI_BLOCK_SECONDS`)
+
+### Если API-Football `account is suspended`
+
+Аккаунт нужно восстановить на https://dashboard.api-football.com — до этого API не отдаёт матчи. Повторные запросы к API-Football приостанавливаются на 1 час (`API_FOOTBALL_BLOCK_SECONDS`), чтобы не спамить логи.

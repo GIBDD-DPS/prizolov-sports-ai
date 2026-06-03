@@ -13,6 +13,7 @@ from urllib import request as urllib_request
 from urllib.error import HTTPError, URLError
 
 logger = logging.getLogger("PrizolovSportsAI.OddsPapi")
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 ODDSPAPI_BASE_URL = "https://api.oddspapi.io/v4"
 ODDSPAPI_BOOKMAKER = (os.getenv("ODDSPAPI_BOOKMAKER") or "pinnacle").strip()
@@ -25,6 +26,11 @@ ODDSPAPI_MAX_TOURNAMENTS_PER_REQUEST = min(5, int(os.getenv("ODDSPAPI_MAX_TOURNA
 ODDSPAPI_FIXTURE_HORIZON_HOURS = int(os.getenv("ODDSPAPI_FIXTURE_HORIZON_HOURS", "72"))
 ODDSPAPI_PRIORITY_MARKETS = ("101", "104", "1010")
 ODDSPAPI_REQUEST_PAUSE_SECONDS = float(os.getenv("ODDSPAPI_REQUEST_PAUSE_SECONDS", "0.55"))
+ODDSPAPI_BLOCK_SECONDS = int(os.getenv("ODDSPAPI_BLOCK_SECONDS", "900"))
+ODDSPAPI_HTTP_PROXY = (os.getenv("ODDSPAPI_HTTP_PROXY") or os.getenv("HTTPS_PROXY") or "").strip() or None
+
+_ODDSPAPI_BLOCK_UNTIL = 0.0
+_ODDSPAPI_LAST_BLOCK_REASON: Optional[str] = None
 
 ODDSPAPI_SPORT_ID_TO_KEY = {
     10: "football",
@@ -56,19 +62,78 @@ ODDSPAPI_HTTP_HEADERS = {
 }
 
 
+
+
+def _oddspapi_is_blocked() -> bool:
+    return time.time() < _ODDSPAPI_BLOCK_UNTIL
+
+
+def _oddspapi_mark_blocked(reason: str) -> None:
+    global _ODDSPAPI_BLOCK_UNTIL, _ODDSPAPI_LAST_BLOCK_REASON
+    _ODDSPAPI_BLOCK_UNTIL = time.time() + max(60, ODDSPAPI_BLOCK_SECONDS)
+    _ODDSPAPI_LAST_BLOCK_REASON = reason
+
+
+def _oddspapi_curl_get(url: str, timeout: float = 14.0) -> Tuple[int, str]:
+    import subprocess
+
+    cmd = [
+        "curl",
+        "-sS",
+        "-L",
+        "--max-time",
+        str(int(max(5, timeout))),
+        "-A",
+        ODDSPAPI_HTTP_HEADERS["User-Agent"],
+        "-H",
+        "Accept: application/json",
+        "-w",
+        "\n%{http_code}",
+        url,
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 5, check=False)
+    except Exception as exc:
+        logger.debug("OddsPapi curl fallback failed: %s", exc)
+        return 0, ""
+    out = (proc.stdout or "").rsplit("\n", 1)
+    if len(out) == 2:
+        body, code_raw = out[0], out[1].strip()
+        try:
+            return int(code_raw), body
+        except ValueError:
+            pass
+    return 0, proc.stdout or ""
+
+
 def _oddspapi_http_get(url: str, timeout: float = 14.0) -> Tuple[int, str]:
-    """HTTP GET with httpx when available (better Cloudflare compatibility)."""
+    """HTTP GET with httpx, optional proxy, curl fallback on 403."""
     if _httpx is not None:
-        response = _httpx.get(
-            url,
-            headers=ODDSPAPI_HTTP_HEADERS,
-            timeout=timeout,
-            follow_redirects=True,
-        )
-        return int(response.status_code), response.text or ""
+        client_kwargs: Dict[str, Any] = {
+            "headers": ODDSPAPI_HTTP_HEADERS,
+            "timeout": timeout,
+            "follow_redirects": True,
+        }
+        if ODDSPAPI_HTTP_PROXY:
+            client_kwargs["proxy"] = ODDSPAPI_HTTP_PROXY
+        response = _httpx.get(url, **client_kwargs)
+        status = int(response.status_code)
+        body = response.text or ""
+        if status == 403:
+            curl_status, curl_body = _oddspapi_curl_get(url, timeout=timeout)
+            if curl_status and curl_status < 400:
+                return curl_status, curl_body
+        return status, body
     req = urllib_request.Request(url, headers=ODDSPAPI_HTTP_HEADERS)
-    with urllib_request.urlopen(req, timeout=timeout) as response:
-        return int(getattr(response, "status", 200)), response.read().decode("utf-8", errors="ignore")
+    try:
+        with urllib_request.urlopen(req, timeout=timeout) as response:
+            return int(getattr(response, "status", 200)), response.read().decode("utf-8", errors="ignore")
+    except HTTPError as exc:
+        if exc.code == 403:
+            curl_status, curl_body = _oddspapi_curl_get(url, timeout=timeout)
+            if curl_status and curl_status < 400:
+                return curl_status, curl_body
+        raise
 
 _RATE_LIMITED = {"__oddspapi_rate_limited__": True}
 
@@ -155,7 +220,16 @@ def _oddspapi_get(endpoint: str, params: Dict[str, Any]) -> Tuple[Any, Optional[
         if status >= 400:
             error_code = f"http_{status}"
             last_error = f"oddspapi_{error_code}"
-            logger.warning("OddsPapi HTTP %s", status)
+            if status == 403:
+                _oddspapi_mark_blocked(last_error)
+                logger.warning(
+                    "OddsPapi HTTP 403 (blocked %ss). Use ODDSPAPI_HTTP_PROXY or ask OddsPapi to whitelist server IP.",
+                    ODDSPAPI_BLOCK_SECONDS,
+                )
+            elif status == 429:
+                logger.warning("OddsPapi HTTP 429")
+            else:
+                logger.warning("OddsPapi HTTP %s", status)
             if status == 429:
                 return _RATE_LIMITED, last_error
             return None, last_error
@@ -308,6 +382,8 @@ def transform_oddspapi_event(
 def fetch_oddspapi_events_sync(limit: int = 80) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     if not resolve_oddspapi_key():
         return [], None
+    if _oddspapi_is_blocked():
+        return [], _ODDSPAPI_LAST_BLOCK_REASON or "oddspapi_blocked"
 
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     from_dt = (now_utc - datetime.timedelta(hours=6)).date().isoformat()
@@ -413,3 +489,13 @@ def fetch_oddspapi_events_sync(limit: int = 80) -> Tuple[List[Dict[str, Any]], O
     if not odds_by_fixture:
         return [], last_error or "oddspapi_no_odds"
     return [], last_error or "oddspapi_no_matching_odds"
+
+
+def get_oddspapi_status() -> Dict[str, Any]:
+    return {
+        "blocked": _oddspapi_is_blocked(),
+        "blocked_until_ts": _ODDSPAPI_BLOCK_UNTIL if _oddspapi_is_blocked() else None,
+        "last_block_reason": _ODDSPAPI_LAST_BLOCK_REASON,
+        "http_proxy_configured": bool(ODDSPAPI_HTTP_PROXY),
+        "client": "httpx" if _httpx else "urllib",
+    }

@@ -20,6 +20,10 @@ REAL_EVENTS_CACHE_TTL_SECONDS = int(os.getenv("REAL_EVENTS_CACHE_TTL_SECONDS", "
 REAL_EVENTS_FETCH_LIMIT = int(os.getenv("REAL_EVENTS_FETCH_LIMIT", "80"))
 
 _cache_lock = threading.Lock()
+_API_FOOTBALL_BLOCK_UNTIL = 0.0
+_API_FOOTBALL_BLOCK_SECONDS = int(os.getenv("API_FOOTBALL_BLOCK_SECONDS", "3600"))
+_API_FOOTBALL_LAST_WARN_TS = 0.0
+
 _cache: Dict[str, Any] = {
     "ts": 0.0,
     "events": [],
@@ -320,9 +324,16 @@ def _api_football_headers() -> Dict[str, str]:
     }
 
 
+def _api_football_is_blocked() -> bool:
+    return time.time() < _API_FOOTBALL_BLOCK_UNTIL
+
+
 def fetch_api_football_events_sync(limit: int = REAL_EVENTS_FETCH_LIMIT) -> List[Dict[str, Any]]:
     api_key = _api_football_key()
     if not api_key:
+        return []
+    if _api_football_is_blocked():
+        logger.debug("API-Football skipped: account blocked/suspended cooldown active")
         return []
 
     now_utc = datetime.datetime.now(datetime.timezone.utc)
@@ -339,9 +350,18 @@ def fetch_api_football_events_sync(limit: int = REAL_EVENTS_FETCH_LIMIT) -> List
             payload = json.loads(body)
             errors = payload.get("errors")
             if errors:
-                logger.warning("API-Football %s errors: %s", endpoint, errors)
+                global _API_FOOTBALL_BLOCK_UNTIL, _API_FOOTBALL_LAST_WARN_TS
+                err_text = str(errors).lower()
                 with _cache_lock:
                     _cache["last_error"] = f"api_football_{errors}"
+                if "suspend" in err_text or "access" in err_text:
+                    _API_FOOTBALL_BLOCK_UNTIL = time.time() + max(300, _API_FOOTBALL_BLOCK_SECONDS)
+                now_ts = time.time()
+                if now_ts - _API_FOOTBALL_LAST_WARN_TS > 300:
+                    _API_FOOTBALL_LAST_WARN_TS = now_ts
+                    logger.warning("API-Football %s errors: %s", endpoint, errors)
+                else:
+                    logger.debug("API-Football %s errors: %s", endpoint, errors)
                 return []
             data = payload.get("response") or []
             return data if isinstance(data, list) else []
@@ -471,7 +491,7 @@ def get_cached_odds_events(force_refresh: bool = False) -> List[Dict[str, Any]]:
 
 
 def get_status_snapshot() -> Dict[str, Any]:
-    from oddspapi_events import resolve_oddspapi_key
+    from oddspapi_events import resolve_oddspapi_key, get_oddspapi_status
 
     with _cache_lock:
         return {
@@ -486,4 +506,6 @@ def get_status_snapshot() -> Dict[str, Any]:
             "cache_ttl_seconds": REAL_EVENTS_CACHE_TTL_SECONDS,
             "last_error": _cache.get("last_error"),
             "last_http_status": _cache.get("last_http_status"),
+            "oddspapi": get_oddspapi_status(),
+            "api_football_blocked": _api_football_is_blocked(),
         }
