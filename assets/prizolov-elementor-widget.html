@@ -73,7 +73,7 @@
   </div>
 
   <div class="pz-widget" id="all-events-section" style="margin-top:30px;">
-    <h2 style="margin-bottom:20px;">📋 Все события (сортировка по проходимости)</h2>
+    <h2 style="margin-bottom:20px;">📋 Все ставки (коэф. от 1.40, сортировка по проходимости)</h2>
     <div id="all-events-list"></div>
   </div>
 </div>
@@ -488,12 +488,13 @@
   var API_URL = "/get-ai-sports.php";
   var API_BASE = window.PRIZOLOV_API_BASE || "https://prizolov-sports-dmandreyanov.amvera.io";
   var ALL_EVENTS_URL = "/api/all-events";
-  var WIDGET_BUILD = "2026-06-03-clear-bet-labels";
+  var WIDGET_BUILD = "2026-06-03-all-bets-table";
 
   var WINDOW_HOURS = 24;
   var MIN_PROBABILITY = 0.6;
   var MIN_COEFFICIENT = 1.5;
   var MIN_CONSENSUS_SOURCES = 3;
+  var MIN_TABLE_COEFFICIENT = 1.4;
   var MAX_LIVE_EVENT_AGE_MS = 4 * 60 * 60 * 1000;
   var AUTO_ROTATE_MS = 10000;
   var AUTO_REFRESH_MS = 45000;
@@ -680,7 +681,12 @@
 
     function normalizeEvent(event) {
       if (!event || typeof event !== "object") return null;
-      var recs = Array.isArray(event.recommendations) ? event.recommendations : [];
+      var recs = [];
+      if (Array.isArray(event.all_recommendations) && event.all_recommendations.length) {
+        recs = event.all_recommendations;
+      } else if (Array.isArray(event.recommendations)) {
+        recs = event.recommendations;
+      }
       var allRecs = recs.map(function (r) {
         return {
           line: r && r.line ? r.line : "Исход",
@@ -921,25 +927,46 @@
       }).join("");
     }
 
+    function isTableBet(rec) {
+      return asNum(rec && rec.coefficient, 0) >= MIN_TABLE_COEFFICIENT;
+    }
+
+    function collectAllBetRows() {
+      var rows = [];
+      allEvents.forEach(function (event) {
+        var recs = event.allRecommendations || [];
+        recs.forEach(function (rec) {
+          if (!isTableBet(rec)) return;
+          rows.push({ event: event, rec: rec });
+        });
+      });
+      rows.sort(function (a, b) {
+        var p = (b.rec.probability || 0) - (a.rec.probability || 0);
+        if (Math.abs(p) > 0.0001) return p;
+        return (b.rec.coefficient || 0) - (a.rec.coefficient || 0);
+      });
+      return rows;
+    }
+
     function renderTable() {
       var tableEl = byId("all-events-list");
       if (!tableEl) return;
-      if (!allEvents.length) {
-        tableEl.innerHTML = "<div class='pz-loading'>Нет событий</div>";
+
+      var betRows = collectAllBetRows();
+      if (!betRows.length) {
+        tableEl.innerHTML = "<div class='pz-loading'>Нет ставок с коэффициентом от " + MIN_TABLE_COEFFICIENT.toFixed(2) + "</div>";
         return;
       }
 
       var html = "<div class='pz-events-table-wrap'><table class='pz-events-table'><thead><tr>" +
-        "<th>Время</th><th>Вид спорта</th><th>Матч</th><th>Лига</th><th>Рекомендация</th><th>Проходимость</th><th>Коэф</th><th>Консенсус доноров</th><th>Статус</th>" +
+        "<th>Время</th><th>Вид спорта</th><th>Матч</th><th>Лига</th><th>Ставка</th><th>Проходимость</th><th>Коэф</th><th>Консенсус доноров</th>" +
         "</tr></thead><tbody>";
 
-      allEvents.forEach(function (event, idx) {
-        var bestPass = event.passableRecommendations && event.passableRecommendations.length ? event.passableRecommendations[0] : null;
-        var bestAny = event.allRecommendations && event.allRecommendations.length ? event.allRecommendations[0] : null;
-        var best = bestPass || bestAny;
-        var bestProb = best ? Math.round((best.probability || 0) * 100) : 0;
-        var bestCoef = best ? asNum(best.coefficient, 0).toFixed(2) : "—";
-        var bestLine = best ? formatBetHtml(best) : "—";
+      betRows.forEach(function (row, idx) {
+        var event = row.event;
+        var rec = row.rec;
+        var prob = Math.round((rec.probability || 0) * 100);
+        var coef = asNum(rec.coefficient, 0).toFixed(2);
         var consensus = event.externalConsensus;
         var consensusText = "—";
         if (consensus) {
@@ -958,11 +985,10 @@
             (event.score && event.score !== "—" ? " (" + escapeHtml(event.score) + ")" : "") +
             "</strong></td>" +
           "<td>" + escapeHtml(event.league) + "</td>" +
-          "<td>" + bestLine + "</td>" +
-          "<td><span class='pz-passability'>" + bestProb + "%</span></td>" +
-          "<td>" + bestCoef + "</td>" +
+          "<td>" + formatBetHtml(rec) + "</td>" +
+          "<td><span class='pz-passability'>" + prob + "%</span></td>" +
+          "<td>" + coef + "</td>" +
           "<td>" + consensusText + "</td>" +
-          "<td>" + (bestPass ? "✅ Проходная" : "<span class='pz-no-pass'>⚠ Нет проходной</span>") + "</td>" +
         "</tr>";
       });
 
@@ -988,6 +1014,8 @@
         min_coefficient: "1",
         include_consensus: "true",
         min_consensus_sources: String(MIN_CONSENSUS_SOURCES),
+        include_watch: "true",
+        limit: "200",
         sort_by: "passability",
         refresh: "true"
       }), null, function (payload) {
