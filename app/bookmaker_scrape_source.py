@@ -48,7 +48,7 @@ BOOKMAKER_SCRAPE_URLS = [
 ]
 BOOKMAKER_SCRAPE_INTERVAL_SECONDS = int(os.getenv("BOOKMAKER_SCRAPE_INTERVAL_SECONDS", "300"))
 BOOKMAKER_SCRAPE_CACHE_TTL_SECONDS = int(os.getenv("BOOKMAKER_SCRAPE_CACHE_TTL_SECONDS", "300"))
-BOOKMAKER_SCRAPE_LIMIT = int(os.getenv("BOOKMAKER_SCRAPE_LIMIT", "80"))
+BOOKMAKER_SCRAPE_LIMIT = int(os.getenv("BOOKMAKER_SCRAPE_LIMIT", "120"))
 BOOKMAKER_SCRAPE_USER_AGENT = (
     os.getenv("BOOKMAKER_SCRAPE_USER_AGENT")
     or "Mozilla/5.0 (compatible; Googlebot/2.1; +https://prizolov.ru/bot)"
@@ -87,7 +87,7 @@ _PARI_SUB_EVENT_RE = re.compile(
     r'sport-sub-event-name[^"]*"[^>]*>([^<]+)<',
     re.IGNORECASE,
 )
-BOOKMAKER_MAX_RECOMMENDATIONS = int(os.getenv("BOOKMAKER_MAX_RECOMMENDATIONS", "18"))
+BOOKMAKER_MAX_RECOMMENDATIONS = int(os.getenv("BOOKMAKER_MAX_RECOMMENDATIONS", "40"))
 
 _MAIN_MARKET_COLUMNS = ["1", "Х", "2", "ФОРА 1", "ФОРА 2", "Тотал", "Б", "М"]
 
@@ -160,65 +160,68 @@ def _double_chance_odds(c1: float, cx: float, c2: float, mode: str) -> Optional[
     return min(50.0, (1.0 / combined) * 0.97)
 
 
-def _recommendations_from_pari_chunk(
+def _context_sub_name(chunk: str, position: int) -> str:
+    best = ""
+    for match in _PARI_SUB_EVENT_RE.finditer(chunk):
+        if match.start() >= position:
+            break
+        name = unescape(match.group(1)).strip()
+        if not name or name.lower() == "что раньше":
+            continue
+        best = name
+    return best
+
+
+def _append_main_market_group(
+    recommendations: List[Dict[str, Any]],
+    *,
     home: str,
     away: str,
-    chunk: str,
+    group_values: List[float],
+    params: List[float],
     sport: str,
     now_utc: datetime.datetime,
-) -> List[Dict[str, Any]]:
-    recommendations: List[Dict[str, Any]] = []
-    values = [float(v) for v in _PARI_FACTOR_VALUE_RE.findall(chunk)]
-    if len(values) < 3:
-        return []
-
-    params = []
-    for raw in _PARI_PARAM_RE.findall(chunk):
-        try:
-            params.append(float(raw))
-        except ValueError:
-            continue
+    group_index: int,
+) -> None:
+    if len(group_values) < 3:
+        return
 
     handicap1, handicap2 = _pick_handicap_lines(params)
     total_line = _pick_total_line(params, sport)
+    suffix = "" if group_index == 0 else f" (маркет {group_index + 1})"
 
-    # Основная линия 1X2 + фора + тотал (первые 8 коэффициентов)
-    main_values = values[:8]
     column_map = {
-        "1": f"Победа {home}",
-        "Х": "Ничья",
-        "X": "Ничья",
-        "2": f"Победа {away}",
-        "ФОРА 1": f"Фора 1 ({home}" + (f" {handicap1:+.1f})" if handicap1 is not None else ")"),
-        "ФОРА 2": f"Фора 2 ({away}" + (f" {handicap2:+.1f})" if handicap2 is not None else ")"),
-        "Б": f"Тотал больше {total_line}",
-        "М": f"Тотал меньше {total_line}",
+        "1": f"Победа {home}{suffix}",
+        "Х": f"Ничья{suffix}",
+        "X": f"Ничья{suffix}",
+        "2": f"Победа {away}{suffix}",
+        "ФОРА 1": f"Фора 1 ({home}" + (f" {handicap1:+.1f})" if handicap1 is not None else ")") + suffix,
+        "ФОРА 2": f"Фора 2 ({away}" + (f" {handicap2:+.1f})" if handicap2 is not None else ")") + suffix,
+        "Б": f"Тотал больше {total_line}{suffix}",
+        "М": f"Тотал меньше {total_line}{suffix}",
     }
 
     outcome_probs: Dict[str, float] = {}
-    if len(main_values) >= 3:
-        inv_sum = sum(1.0 / coef for coef in main_values[:3])
-        if inv_sum > 0:
-            outcome_probs = {
-                "1": (1.0 / main_values[0]) / inv_sum,
-                "Х": (1.0 / main_values[1]) / inv_sum,
-                "2": (1.0 / main_values[2]) / inv_sum,
-            }
+    inv_sum = sum(1.0 / coef for coef in group_values[:3])
+    if inv_sum > 0:
+        outcome_probs = {
+            "1": (1.0 / group_values[0]) / inv_sum,
+            "Х": (1.0 / group_values[1]) / inv_sum,
+            "2": (1.0 / group_values[2]) / inv_sum,
+        }
 
     for idx, column in enumerate(_MAIN_MARKET_COLUMNS):
         if column == "Тотал":
             continue
-        if idx >= len(main_values):
+        if idx >= len(group_values):
             break
         line = column_map.get(column)
         if not line:
             continue
-        prob = outcome_probs.get(column)
-        _append_rec(recommendations, line, main_values[idx], now_utc, probability=prob)
+        _append_rec(recommendations, line, group_values[idx], now_utc, probability=outcome_probs.get(column))
 
-    # Двойной шанс из 1X2
-    if len(main_values) >= 3:
-        c1, cx, c2 = main_values[0], main_values[1], main_values[2]
+    if group_index == 0 and len(group_values) >= 3:
+        c1, cx, c2 = group_values[0], group_values[1], group_values[2]
         for mode, label in (
             ("1X", f"Двойной шанс 1X ({home} или ничья)"),
             ("X2", f"Двойной шанс X2 (ничья или {away})"),
@@ -228,28 +231,88 @@ def _recommendations_from_pari_chunk(
             if combo:
                 _append_rec(recommendations, label, combo, now_utc)
 
-    # Доп. рынки (угловые, фолы, карточки и т.д.)
-    for sub_match in _PARI_SUB_EVENT_RE.finditer(chunk):
-        sub_name = unescape(sub_match.group(1)).strip()
-        if not sub_name:
-            continue
-        seg = chunk[sub_match.end() : sub_match.end() + 2200]
-        sub_values = [float(v) for v in _PARI_FACTOR_VALUE_RE.findall(seg)[:4]]
-        if len(sub_values) >= 2:
-            _append_rec(recommendations, f"{sub_name}: больше", sub_values[0], now_utc)
-            _append_rec(recommendations, f"{sub_name}: меньше", sub_values[1], now_utc)
-        elif len(sub_values) == 1:
-            _append_rec(recommendations, f"{sub_name}: исход", sub_values[0], now_utc)
 
-    # Теннис/двухисходные — если ничья с коэф. > 20, оставляем только 2 исхода
-    if sport == "tennis" and len(main_values) >= 2 and (len(main_values) < 3 or main_values[1] > 15):
+    if len(sub_values) >= 3:
+        labels = ("1", "X", "2")
+        for label, coef in zip(labels, sub_values[:3]):
+            _append_rec(recommendations, f"{sub_name}: исход {label}", coef, now_utc)
+        if len(sub_values) >= 6:
+            for label, coef in zip(labels, sub_values[3:6]):
+                _append_rec(recommendations, f"{sub_name} (доп.): исход {label}", coef, now_utc)
+        if len(sub_values) >= 8:
+            _append_rec(recommendations, f"{sub_name}: тотал больше", sub_values[6], now_utc)
+            _append_rec(recommendations, f"{sub_name}: тотал меньше", sub_values[7], now_utc)
+        return
+
+    if len(sub_values) >= 2:
+        _append_rec(recommendations, f"{sub_name}: больше", sub_values[0], now_utc)
+        _append_rec(recommendations, f"{sub_name}: меньше", sub_values[1], now_utc)
+        for idx, coef in enumerate(sub_values[2:8], start=3):
+            _append_rec(recommendations, f"{sub_name}: линия {idx}", coef, now_utc)
+    elif len(sub_values) == 1:
+        _append_rec(recommendations, f"{sub_name}: исход", sub_values[0], now_utc)
+
+
+def _recommendations_from_pari_chunk(
+    home: str,
+    away: str,
+    chunk: str,
+    sport: str,
+    now_utc: datetime.datetime,
+) -> List[Dict[str, Any]]:
+    recommendations: List[Dict[str, Any]] = []
+    params: List[float] = []
+    for raw in _PARI_PARAM_RE.findall(chunk):
+        try:
+            params.append(float(raw))
+        except ValueError:
+            continue
+
+    value_hits = [(m.start(), float(m.group(1))) for m in _PARI_FACTOR_VALUE_RE.finditer(chunk)]
+    if len(value_hits) < 3:
+        return []
+
+    values = [coef for _, coef in value_hits]
+    for group_index in range(0, len(values), 8):
+        group_values = values[group_index : group_index + 8]
+        if len(group_values) < 3:
+            continue
+        pos = value_hits[group_index][0]
+        sub_name = _context_sub_name(chunk, pos)
+        if sub_name:
+            prefix = f"{sub_name}: "
+            for idx, column in enumerate(("1", "X", "2")[: len(group_values)]):
+                _append_rec(
+                    recommendations,
+                    f"{prefix}исход {column}",
+                    group_values[idx],
+                    now_utc,
+                )
+            if len(group_values) >= 5:
+                _append_rec(recommendations, f"{prefix}больше", group_values[3], now_utc)
+                _append_rec(recommendations, f"{prefix}меньше", group_values[4], now_utc)
+            for extra_idx, coef in enumerate(group_values[5:8], start=6):
+                _append_rec(recommendations, f"{prefix}линия {extra_idx}", coef, now_utc)
+            continue
+
+        _append_main_market_group(
+            recommendations,
+            home=home,
+            away=away,
+            group_values=group_values,
+            params=params,
+            sport=sport,
+            now_utc=now_utc,
+            group_index=group_index // 8,
+        )
+
+    if sport == "tennis":
         recommendations = [
             rec
             for rec in recommendations
             if "Ничья" not in rec["line"] and "X2" not in rec["line"] and "1X" not in rec["line"]
         ]
 
-    # Дедуп по названию линии
     deduped: List[Dict[str, Any]] = []
     seen_lines = set()
     for rec in sorted(recommendations, key=lambda item: (-item["probability"], -item["coefficient"])):
@@ -491,6 +554,21 @@ def scrape_bookmaker_urls_sync(urls: Optional[List[str]] = None, limit: int = BO
         if len(merged) >= limit:
             break
 
+    if os.getenv("WINLINE_SCRAPE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}:
+        try:
+            from winline_scrape_source import scrape_winline_events_sync
+
+            winline_events, winline_err = scrape_winline_events_sync()
+            if winline_err:
+                last_error = last_error or winline_err
+            for event in winline_events:
+                if event.get("id") in seen_ids:
+                    continue
+                seen_ids.add(event["id"])
+                merged.append(event)
+        except Exception as exc:
+            logger.warning("Winline scrape hook failed: %s", exc)
+
     if merged:
         return merged[:limit], None
     return [], last_error or "bookmaker_no_events_in_html"
@@ -574,4 +652,16 @@ def get_status_snapshot() -> Dict[str, Any]:
             "source": _cache.get("source"),
             "last_error": _cache.get("last_error"),
             "ingest_configured": bool(BOOKMAKER_INGEST_SECRET),
+            "max_recommendations_per_event": BOOKMAKER_MAX_RECOMMENDATIONS,
+            "winline": _winline_status_snapshot(),
         }
+
+
+def _winline_status_snapshot() -> Dict[str, Any]:
+    try:
+        from winline_scrape_source import get_status_snapshot as winline_status
+
+        return winline_status()
+    except Exception as exc:
+        return {"enabled": False, "error": str(exc)}
+

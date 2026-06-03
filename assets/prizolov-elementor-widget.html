@@ -470,7 +470,7 @@
   var API_URL = "/get-ai-sports.php";
   var API_BASE = window.PRIZOLOV_API_BASE || "https://prizolov-sports-dmandreyanov.amvera.io";
   var ALL_EVENTS_URL = "/api/all-events";
-  var WIDGET_BUILD = "2026-06-03-expanded-lines";
+  var WIDGET_BUILD = "2026-06-03-lines-40";
 
   var WINDOW_HOURS = 24;
   var MIN_PROBABILITY = 0.6;
@@ -853,7 +853,7 @@
         return;
       }
 
-      recsEl.innerHTML = recs.slice(0, 15).map(function (r) {
+      recsEl.innerHTML = recs.slice(0, 20).map(function (r) {
         var prob = Math.round((r.probability || 0) * 100);
         var confClass = r.confidence === "high" ? "high" : "med";
         var confText = r.confidence === "high" ? "Выбор" : "Ср";

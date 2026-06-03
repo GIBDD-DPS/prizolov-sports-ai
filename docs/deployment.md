@@ -141,3 +141,10 @@ Use sport-specific or `/live` paths instead of bare `/sports?...` for server-sid
 скрап **включается автоматически** после деплоя `main` (PR #13+).
 
 Явно отключить: `BOOKMAKER_SCRAPE_ENABLED=false`.
+
+### Winline.ru /nearest
+
+Проверено: `https://winline.ru/nearest` отдаёт Angular SPA (~130 KB), **без матчей в HTML**.
+Линия подгружается через WebSocket `wss://wss.winline.ru/data_ng?client=newsite&nb=true`.
+HTTP-скрап сейчас **не даёт событий** (`WINLINE_SCRAPE_ENABLED=false` по умолчанию).
+Статус: `GET /api/source-status` → `bookmaker_scrape.winline.probe`.

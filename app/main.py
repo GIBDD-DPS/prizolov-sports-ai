@@ -508,7 +508,7 @@ def _generate_recommendation_donor_signals(events: List[Dict[str, Any]]) -> List
         if not event_id:
             continue
         recs = event.get("all_recommendations") or event.get("recommendations") or []
-        for idx, rec in enumerate(recs[:8]):
+        for idx, rec in enumerate(recs[:12]):
             donor_id, donor_name, donor_weight = donor_templates[min(idx, len(donor_templates) - 1)]
             probability = _coerce_float(rec.get("adjusted_probability", rec.get("probability", 0.0)), 0.0, minimum=0.02, maximum=0.98)
             coefficient = _coerce_float(rec.get("coefficient", 1.5), 1.5, minimum=1.01, maximum=50.0)
