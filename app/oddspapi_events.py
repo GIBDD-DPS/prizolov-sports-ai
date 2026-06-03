@@ -16,7 +16,6 @@ logger = logging.getLogger("PrizolovSportsAI.OddsPapi")
 
 ODDSPAPI_BASE_URL = "https://api.oddspapi.io/v4"
 ODDSPAPI_BOOKMAKER = (os.getenv("ODDSPAPI_BOOKMAKER") or "pinnacle").strip()
-ODDSPAPI_USER_AGENT = (os.getenv("ODDSPAPI_USER_AGENT") or "PrizolovSportsAI/14.0 (+https://prizolov.ru)").strip()
 ODDSPAPI_SPORT_IDS = [
     int(part)
     for part in (os.getenv("ODDSPAPI_SPORT_IDS") or "10").split(",")
@@ -40,6 +39,36 @@ ODDSPAPI_OUTCOME_LABELS: Dict[str, Dict[str, str]] = {
     "104": {"104": "Обе забьют — ДА", "105": "Обе забьют — НЕТ"},
     "1010": {"1010": "Тотал больше 2.5", "1011": "Тотал меньше 2.5"},
 }
+
+
+try:
+    import httpx as _httpx
+except ImportError:  # pragma: no cover
+    _httpx = None
+
+ODDSPAPI_HTTP_HEADERS = {
+    "User-Agent": (
+        os.getenv("ODDSPAPI_USER_AGENT")
+        or "Mozilla/5.0 (compatible; PrizolovSportsAI/14.0; +https://prizolov.ru)"
+    ),
+    "Accept": "application/json",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
+def _oddspapi_http_get(url: str, timeout: float = 14.0) -> Tuple[int, str]:
+    """HTTP GET with httpx when available (better Cloudflare compatibility)."""
+    if _httpx is not None:
+        response = _httpx.get(
+            url,
+            headers=ODDSPAPI_HTTP_HEADERS,
+            timeout=timeout,
+            follow_redirects=True,
+        )
+        return int(response.status_code), response.text or ""
+    req = urllib_request.Request(url, headers=ODDSPAPI_HTTP_HEADERS)
+    with urllib_request.urlopen(req, timeout=timeout) as response:
+        return int(getattr(response, "status", 200)), response.read().decode("utf-8", errors="ignore")
 
 _RATE_LIMITED = {"__oddspapi_rate_limited__": True}
 
@@ -101,41 +130,35 @@ def _oddspapi_get(endpoint: str, params: Dict[str, Any]) -> Tuple[Any, Optional[
     query = dict(params)
     query["apiKey"] = api_key
     url = f"{ODDSPAPI_BASE_URL}/{endpoint.lstrip('/')}?{urllib_parse.urlencode(query)}"
-    req = urllib_request.Request(url, headers={"User-Agent": ODDSPAPI_USER_AGENT, "Accept": "application/json"})
 
     last_error: Optional[str] = None
     for attempt in range(2):
         try:
-            with urllib_request.urlopen(req, timeout=14) as response:
-                status = getattr(response, "status", 200)
-                body = response.read().decode("utf-8", errors="ignore")
-        except HTTPError as exc:
-            error_code = f"http_{exc.code}"
-            try:
-                err_body = exc.read().decode("utf-8", errors="ignore")
-                err_payload = json.loads(err_body)
-                if isinstance(err_payload, dict):
-                    err_obj = err_payload.get("error") if isinstance(err_payload.get("error"), dict) else err_payload
-                    error_code = str(
-                        err_payload.get("error_code")
-                        or (err_obj or {}).get("code")
-                        or (err_obj or {}).get("message")
-                        or error_code
-                    )
-            except Exception:
-                pass
-            last_error = f"oddspapi_{error_code}"
-            if exc.code == 429 and attempt == 0:
-                logger.warning("OddsPapi rate limited, retrying in 2s")
-                time.sleep(2.0)
-                continue
-            logger.warning("OddsPapi HTTP %s (%s)", exc.code, error_code)
-            if exc.code == 429:
-                return _RATE_LIMITED, last_error
-            return None, last_error
-        except (URLError, TimeoutError, ValueError) as exc:
+            status, body = _oddspapi_http_get(url)
+        except (HTTPError, URLError, TimeoutError, ValueError) as exc:
             logger.warning("OddsPapi request failed: %s", exc)
             return None, f"oddspapi_request_error: {exc}"
+        except Exception as exc:
+            if _httpx is not None and hasattr(exc, "response"):
+                status = int(getattr(exc.response, "status_code", 500))
+                body = getattr(exc.response, "text", "") or ""
+            else:
+                logger.warning("OddsPapi request failed: %s", exc)
+                return None, f"oddspapi_request_error: {exc}"
+
+        if status == 429 and attempt == 0:
+            logger.warning("OddsPapi rate limited, retrying in 2s")
+            time.sleep(2.0)
+            last_error = "oddspapi_RATE_LIMITED"
+            continue
+
+        if status >= 400:
+            error_code = f"http_{status}"
+            last_error = f"oddspapi_{error_code}"
+            logger.warning("OddsPapi HTTP %s", status)
+            if status == 429:
+                return _RATE_LIMITED, last_error
+            return None, last_error
 
         try:
             payload = json.loads(body)
@@ -146,9 +169,6 @@ def _oddspapi_get(endpoint: str, params: Dict[str, Any]) -> Tuple[Any, Optional[
             err_obj = payload.get("error")
             code = err_obj.get("code") if isinstance(err_obj, dict) else payload.get("error")
             return None, f"oddspapi_{code}"
-
-        if status >= 400:
-            return None, f"oddspapi_http_{status}"
 
         return payload, None
 

@@ -460,6 +460,7 @@ def get_status_snapshot() -> Dict[str, Any]:
             "api_football_key_present": bool(_api_football_key()),
             "source": _cache.get("source"),
             "fallback_chain": ["oddspapi", "odds_api", "api_football"],
+            "oddspapi_client": "httpx" if __import__("oddspapi_events")._httpx else "urllib",
             "cached_events": len(_cache.get("events") or []),
             "cache_ttl_seconds": REAL_EVENTS_CACHE_TTL_SECONDS,
             "last_error": _cache.get("last_error"),
