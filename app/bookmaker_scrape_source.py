@@ -51,6 +51,13 @@ PARI_SPORT_PAGES: Dict[str, str] = {
 }
 
 
+_LEGACY_FOOTBALL_ONLY_URLS = {
+    "https://pari.ru/live?dateInterval=5",
+    "https://pari.ru/sports/football?dateInterval=5",
+    "https://pari.ru/live/football?dateInterval=5",
+}
+
+
 def _default_bookmaker_scrape_urls() -> List[str]:
     urls = ["https://pari.ru/live?dateInterval=5"]
     for slug in PARI_SPORT_PAGES:
@@ -58,11 +65,34 @@ def _default_bookmaker_scrape_urls() -> List[str]:
     return urls
 
 
-BOOKMAKER_SCRAPE_URLS = [
-    part.strip()
-    for part in (os.getenv("BOOKMAKER_SCRAPE_URLS") or ",".join(_default_bookmaker_scrape_urls())).split(",")
-    if part.strip()
-]
+def _normalize_scrape_url(url: str) -> str:
+    return url.strip().rstrip("/")
+
+
+def _resolve_bookmaker_scrape_urls() -> List[str]:
+    """Use full multi-sport Pari pages unless caller overrides with a non-legacy list."""
+    raw = (os.getenv("BOOKMAKER_SCRAPE_URLS") or "").strip()
+    if not raw:
+        return _default_bookmaker_scrape_urls()
+
+    urls = [part.strip() for part in raw.split(",") if part.strip()]
+    normalized = {_normalize_scrape_url(u) for u in urls}
+    football_only = normalized.issubset(_LEGACY_FOOTBALL_ONLY_URLS) or (
+        len(normalized) <= 3 and all("football" in u for u in normalized)
+    )
+    if football_only:
+        logger.warning(
+            "BOOKMAKER_SCRAPE_URLS contains football-only legacy URLs; expanding to %s Pari sport pages",
+            len(PARI_SPORT_PAGES) + 1,
+        )
+        return _default_bookmaker_scrape_urls()
+    return urls
+
+
+BOOKMAKER_SCRAPE_URLS = _resolve_bookmaker_scrape_urls()
+BOOKMAKER_SCRAPE_URLS_EXPANDED_FROM_LEGACY = (os.getenv("BOOKMAKER_SCRAPE_URLS") or "").strip() != "" and set(
+    _normalize_scrape_url(u) for u in BOOKMAKER_SCRAPE_URLS
+) != {_normalize_scrape_url(u) for u in (os.getenv("BOOKMAKER_SCRAPE_URLS") or "").split(",") if u.strip()}
 BOOKMAKER_SCRAPE_INTERVAL_SECONDS = int(os.getenv("BOOKMAKER_SCRAPE_INTERVAL_SECONDS", "300"))
 BOOKMAKER_SCRAPE_CACHE_TTL_SECONDS = int(os.getenv("BOOKMAKER_SCRAPE_CACHE_TTL_SECONDS", "300"))
 BOOKMAKER_SCRAPE_LIMIT = int(os.getenv("BOOKMAKER_SCRAPE_LIMIT", "280"))
@@ -793,6 +823,22 @@ def scrape_bookmaker_urls_sync(urls: Optional[List[str]] = None, limit: int = BO
         except Exception as exc:
             logger.warning("Winline scrape hook failed: %s", exc)
 
+    if os.getenv("MELBET_SCRAPE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}:
+        try:
+            from melbet_scrape_source import scrape_melbet_events_sync
+
+            melbet_events, melbet_err = scrape_melbet_events_sync(limit=max(20, limit - len(merged)))
+            if melbet_err:
+                last_error = last_error or melbet_err
+            for event in melbet_events:
+                eid = event.get("id")
+                if eid in seen_ids:
+                    continue
+                seen_ids.add(eid)
+                merged.append(event)
+        except Exception as exc:
+            logger.warning("Melbet scrape hook failed: %s", exc)
+
     if merged:
         return merged[:limit], None
     return [], last_error or "bookmaker_no_events_in_html"
@@ -879,7 +925,9 @@ def get_status_snapshot() -> Dict[str, Any]:
             "max_recommendations_per_event": BOOKMAKER_MAX_RECOMMENDATIONS,
             "sport_pages": list(PARI_SPORT_PAGES.keys()),
             "scrape_per_url_limit": BOOKMAKER_SCRAPE_PER_URL_LIMIT,
+            "urls_expanded_from_legacy": BOOKMAKER_SCRAPE_URLS_EXPANDED_FROM_LEGACY,
             "winline": _winline_status_snapshot(),
+            "melbet": _melbet_status_snapshot(),
         }
 
 
