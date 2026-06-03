@@ -19,7 +19,7 @@ ODDSPAPI_BOOKMAKER = (os.getenv("ODDSPAPI_BOOKMAKER") or "pinnacle").strip()
 ODDSPAPI_USER_AGENT = (os.getenv("ODDSPAPI_USER_AGENT") or "PrizolovSportsAI/14.0 (+https://prizolov.ru)").strip()
 ODDSPAPI_SPORT_IDS = [
     int(part)
-    for part in (os.getenv("ODDSPAPI_SPORT_IDS") or "10,11,15").split(",")
+    for part in (os.getenv("ODDSPAPI_SPORT_IDS") or "10").split(",")
     if part.strip().isdigit()
 ]
 ODDSPAPI_MAX_TOURNAMENTS_PER_REQUEST = min(5, int(os.getenv("ODDSPAPI_MAX_TOURNAMENTS_PER_REQUEST", "5")))
@@ -103,47 +103,57 @@ def _oddspapi_get(endpoint: str, params: Dict[str, Any]) -> Tuple[Any, Optional[
     url = f"{ODDSPAPI_BASE_URL}/{endpoint.lstrip('/')}?{urllib_parse.urlencode(query)}"
     req = urllib_request.Request(url, headers={"User-Agent": ODDSPAPI_USER_AGENT, "Accept": "application/json"})
 
-    try:
-        with urllib_request.urlopen(req, timeout=14) as response:
-            status = getattr(response, "status", 200)
-            body = response.read().decode("utf-8", errors="ignore")
-    except HTTPError as exc:
-        error_code = f"http_{exc.code}"
+    last_error: Optional[str] = None
+    for attempt in range(2):
         try:
-            err_body = exc.read().decode("utf-8", errors="ignore")
-            err_payload = json.loads(err_body)
-            if isinstance(err_payload, dict):
-                err_obj = err_payload.get("error") if isinstance(err_payload.get("error"), dict) else err_payload
-                error_code = str(
-                    err_payload.get("error_code")
-                    or (err_obj or {}).get("code")
-                    or (err_obj or {}).get("message")
-                    or error_code
-                )
-        except Exception:
-            pass
-        logger.warning("OddsPapi HTTP %s (%s)", exc.code, error_code)
-        if exc.code == 429:
-            return _RATE_LIMITED, f"oddspapi_{error_code}"
-        return None, f"oddspapi_{error_code}"
-    except (URLError, TimeoutError, ValueError) as exc:
-        logger.warning("OddsPapi request failed: %s", exc)
-        return None, f"oddspapi_request_error: {exc}"
+            with urllib_request.urlopen(req, timeout=14) as response:
+                status = getattr(response, "status", 200)
+                body = response.read().decode("utf-8", errors="ignore")
+        except HTTPError as exc:
+            error_code = f"http_{exc.code}"
+            try:
+                err_body = exc.read().decode("utf-8", errors="ignore")
+                err_payload = json.loads(err_body)
+                if isinstance(err_payload, dict):
+                    err_obj = err_payload.get("error") if isinstance(err_payload.get("error"), dict) else err_payload
+                    error_code = str(
+                        err_payload.get("error_code")
+                        or (err_obj or {}).get("code")
+                        or (err_obj or {}).get("message")
+                        or error_code
+                    )
+            except Exception:
+                pass
+            last_error = f"oddspapi_{error_code}"
+            if exc.code == 429 and attempt == 0:
+                logger.warning("OddsPapi rate limited, retrying in 2s")
+                time.sleep(2.0)
+                continue
+            logger.warning("OddsPapi HTTP %s (%s)", exc.code, error_code)
+            if exc.code == 429:
+                return _RATE_LIMITED, last_error
+            return None, last_error
+        except (URLError, TimeoutError, ValueError) as exc:
+            logger.warning("OddsPapi request failed: %s", exc)
+            return None, f"oddspapi_request_error: {exc}"
 
-    try:
-        payload = json.loads(body)
-    except json.JSONDecodeError:
-        return None, "oddspapi_invalid_json"
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            return None, "oddspapi_invalid_json"
 
-    if isinstance(payload, dict) and payload.get("error"):
-        err_obj = payload.get("error")
-        code = err_obj.get("code") if isinstance(err_obj, dict) else payload.get("error")
-        return None, f"oddspapi_{code}"
+        if isinstance(payload, dict) and payload.get("error"):
+            err_obj = payload.get("error")
+            code = err_obj.get("code") if isinstance(err_obj, dict) else payload.get("error")
+            return None, f"oddspapi_{code}"
 
-    if status >= 400:
-        return None, f"oddspapi_http_{status}"
+        if status >= 400:
+            return None, f"oddspapi_http_{status}"
 
-    return payload, None
+        return payload, None
+
+    return _RATE_LIMITED, last_error or "oddspapi_RATE_LIMITED"
+
 
 
 def _oddspapi_normalize_sport(sport_id: Any) -> str:
@@ -339,15 +349,12 @@ def fetch_oddspapi_events_sync(limit: int = 80) -> Tuple[List[Dict[str, Any]], O
             continue
         seen_tournaments.add(tournament_id)
         tournament_ids.append(tournament_id)
-        if len(tournament_ids) >= ODDSPAPI_MAX_TOURNAMENTS_PER_REQUEST * 2:
+        if len(tournament_ids) >= ODDSPAPI_MAX_TOURNAMENTS_PER_REQUEST:
             break
 
     odds_by_fixture: Dict[str, Dict[str, Any]] = {}
-    chunk_size = max(1, ODDSPAPI_MAX_TOURNAMENTS_PER_REQUEST)
-    for offset in range(0, len(tournament_ids), chunk_size):
-        chunk = tournament_ids[offset : offset + chunk_size]
-        if not chunk:
-            continue
+    chunk = tournament_ids[:ODDSPAPI_MAX_TOURNAMENTS_PER_REQUEST]
+    if chunk:
         payload, err = _oddspapi_get(
             "odds-by-tournaments",
             {
@@ -359,16 +366,13 @@ def fetch_oddspapi_events_sync(limit: int = 80) -> Tuple[List[Dict[str, Any]], O
         time.sleep(ODDSPAPI_REQUEST_PAUSE_SECONDS)
         if err:
             last_error = err
-        if payload == _RATE_LIMITED:
-            break
-        if not isinstance(payload, list):
-            continue
-        for row in payload:
-            if not isinstance(row, dict):
-                continue
-            fixture_id = str(row.get("fixtureId") or "")
-            if fixture_id:
-                odds_by_fixture[fixture_id] = row
+        if isinstance(payload, list):
+            for row in payload:
+                if not isinstance(row, dict):
+                    continue
+                fixture_id = str(row.get("fixtureId") or "")
+                if fixture_id:
+                    odds_by_fixture[fixture_id] = row
 
     events: List[Dict[str, Any]] = []
     for fixture in fixtures_sorted:

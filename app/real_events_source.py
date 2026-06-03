@@ -432,9 +432,9 @@ def get_cached_odds_events(force_refresh: bool = False) -> List[Dict[str, Any]]:
             with _cache_lock:
                 _cache["source"] = "oddspapi"
                 _cache["last_error"] = None
-    if not events:
+    if not events and not resolve_oddspapi_key():
         events = fetch_odds_events_sync()
-    if not events:
+    if not events and not resolve_oddspapi_key():
         events = fetch_api_football_events_sync()
     with _cache_lock:
         if events:
