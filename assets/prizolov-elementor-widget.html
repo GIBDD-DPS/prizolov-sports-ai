@@ -305,6 +305,24 @@
     color: #007aff;
   }
 
+  .pz-bet-title {
+    color: #007aff;
+    font-weight: 600;
+    display: block;
+  }
+
+  .pz-bet-detail {
+    font-size: 11px;
+    color: #9a9aa3;
+    font-weight: 400;
+    margin-top: 3px;
+    line-height: 1.35;
+  }
+
+  .pz-events-table .pz-bet-detail {
+    max-width: 280px;
+  }
+
   .pz-rec-meta {
     font-size: 12px;
     color: #888;
@@ -470,7 +488,7 @@
   var API_URL = "/get-ai-sports.php";
   var API_BASE = window.PRIZOLOV_API_BASE || "https://prizolov-sports-dmandreyanov.amvera.io";
   var ALL_EVENTS_URL = "/api/all-events";
-  var WIDGET_BUILD = "2026-06-03-multi-sport";
+  var WIDGET_BUILD = "2026-06-03-clear-bet-labels";
 
   var WINDOW_HOURS = 24;
   var MIN_PROBABILITY = 0.6;
@@ -648,12 +666,26 @@
       return parts.join("&");
     }
 
+
+    function formatBetHtml(rec) {
+      if (!rec) return "—";
+      var line = rec.line || "—";
+      var detail = rec.line_detail || "";
+      if (!detail && rec.market_scope && rec.market_scope !== line) {
+        detail = "Рынок: " + rec.market_scope;
+      }
+      if (!detail) return "<span class='pz-bet-title'>" + escapeHtml(line) + "</span>";
+      return "<div class='pz-bet-title'>" + escapeHtml(line) + "</div><div class='pz-bet-detail'>" + escapeHtml(detail) + "</div>";
+    }
+
     function normalizeEvent(event) {
       if (!event || typeof event !== "object") return null;
       var recs = Array.isArray(event.recommendations) ? event.recommendations : [];
       var allRecs = recs.map(function (r) {
         return {
           line: r && r.line ? r.line : "Исход",
+          line_detail: r && r.line_detail ? r.line_detail : "",
+          market_scope: r && r.market_scope ? r.market_scope : "",
           confidence: r && r.confidence === "high" ? "high" : "med",
           probability: Math.max(0, Math.min(1, asNum(r && (r.adjusted_probability !== undefined ? r.adjusted_probability : r.probability), 0))),
           coefficient: asNum(r && r.coefficient, 1.5),
@@ -867,7 +899,7 @@
         if (watch.length) {
           var w = watch[0];
           var wp = Math.round((w.probability || 0) * 100);
-          recsEl.innerHTML = "<div class='pz-rec-item'><div class='pz-rec-info'><div class='pz-rec-line'><span class='pz-rec-line-name'>" + escapeHtml(w.line) + "</span></div><div class='pz-rec-meta'>Вер: " + wp + "% • наблюдение (ниже порога 60%)</div></div><div class='pz-rec-coef'>" + asNum(w.coefficient, 1.5).toFixed(2) + "</div></div>";
+          recsEl.innerHTML = "<div class='pz-rec-item'><div class='pz-rec-info'><div class='pz-rec-line'>" + formatBetHtml(w) + "</div><div class='pz-rec-meta'>Вер: " + wp + "% • наблюдение (ниже порога 60%)</div></div><div class='pz-rec-coef'>" + asNum(w.coefficient, 1.5).toFixed(2) + "</div></div>";
         } else {
           recsEl.innerHTML = "<div class='pz-loading'>🤖 Для этого события нет ставок >60% и >=1.5</div>";
         }
@@ -881,7 +913,7 @@
         return "<div class='pz-rec-item'>" +
           "<div class='pz-rec-info'>" +
             "<div class='pz-rec-league'>" + escapeHtml(r.league || event.league) + " • " + asSport(r.sport || event.sport) + "</div>" +
-            "<div class='pz-rec-line'><span class='pz-rec-line-name'>" + escapeHtml(r.line) + "</span></div>" +
+            "<div class='pz-rec-line'>" + formatBetHtml(r) + "</div>" +
             "<div class='pz-rec-meta'>Вер: " + prob + "% <span class='pz-confidence " + confClass + "'>" + confText + "</span></div>" +
           "</div>" +
           "<div class='pz-rec-coef'>" + asNum(r.coefficient, 1.5).toFixed(2) + "</div>" +
@@ -898,7 +930,7 @@
       }
 
       var html = "<div class='pz-events-table-wrap'><table class='pz-events-table'><thead><tr>" +
-        "<th>Время</th><th>Вид спорта</th><th>Матч</th><th>Лига</th><th>Лучшая ставка</th><th>Проходимость</th><th>Коэф</th><th>Консенсус доноров</th><th>Статус</th>" +
+        "<th>Время</th><th>Вид спорта</th><th>Матч</th><th>Лига</th><th>Рекомендация</th><th>Проходимость</th><th>Коэф</th><th>Консенсус доноров</th><th>Статус</th>" +
         "</tr></thead><tbody>";
 
       allEvents.forEach(function (event, idx) {
@@ -907,7 +939,7 @@
         var best = bestPass || bestAny;
         var bestProb = best ? Math.round((best.probability || 0) * 100) : 0;
         var bestCoef = best ? asNum(best.coefficient, 0).toFixed(2) : "—";
-        var bestLine = best ? escapeHtml(best.line) : "—";
+        var bestLine = best ? formatBetHtml(best) : "—";
         var consensus = event.externalConsensus;
         var consensusText = "—";
         if (consensus) {

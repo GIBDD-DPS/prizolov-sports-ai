@@ -1616,6 +1616,8 @@ def _state_payload_from_event(event: Dict[str, Any], meta: Dict[str, Any]) -> Di
             "home": event.get("home"),
             "away": event.get("away"),
             "line": rec.get("line"),
+            "line_detail": rec.get("line_detail"),
+            "market_scope": rec.get("market_scope"),
             "confidence": rec.get("confidence", "med"),
             "probability": rec.get("adjusted_probability", rec.get("probability", 0.0)),
             "coefficient": rec.get("coefficient"),
