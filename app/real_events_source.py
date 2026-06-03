@@ -275,6 +275,127 @@ def fetch_odds_events_sync(limit: int = REAL_EVENTS_FETCH_LIMIT) -> List[Dict[st
     return result
 
 
+
+
+def _api_football_key() -> Optional[str]:
+    return (os.getenv("API_FOOTBALL_KEY") or os.getenv("RAPIDAPI_FOOTBALL_KEY") or "").strip() or None
+
+
+def fetch_api_football_events_sync(limit: int = REAL_EVENTS_FETCH_LIMIT) -> List[Dict[str, Any]]:
+    api_key = _api_football_key()
+    if not api_key:
+        return []
+
+    headers = {
+        "X-RapidAPI-Key": api_key,
+        "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com",
+    }
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    events: List[Dict[str, Any]] = []
+
+    def _request(endpoint: str, params: Dict[str, str]) -> List[Dict[str, Any]]:
+        query = urllib_parse.urlencode(params)
+        url = f"https://api-football-v1.p.rapidapi.com/v3/{endpoint}?{query}"
+        req = urllib_request.Request(url, headers=headers)
+        try:
+            with urllib_request.urlopen(req, timeout=12) as response:
+                body = response.read().decode("utf-8", errors="ignore")
+            payload = json.loads(body)
+            data = payload.get("response") or []
+            return data if isinstance(data, list) else []
+        except Exception as exc:
+            logger.warning("API-Football %s failed: %s", endpoint, exc)
+            return []
+
+    live_rows = _request("fixtures", {"live": "all", "timezone": "UTC"})
+    for row in live_rows:
+        if not isinstance(row, dict):
+            continue
+        fixture = row.get("fixture") or {}
+        teams = row.get("teams") or {}
+        league = row.get("league") or {}
+        goals = row.get("goals") or {}
+        commence_dt = _parse_iso_datetime(fixture.get("date"))
+        home = (teams.get("home") or {}).get("name")
+        away = (teams.get("away") or {}).get("name")
+        if not home or not away:
+            continue
+        score = f"{goals.get('home')}-{goals.get('away')}" if goals.get("home") is not None else "—"
+        events.append(
+            {
+                "id": f"af_{fixture.get('id', '')}",
+                "sport": "football",
+                "league": league.get("name") or "Football",
+                "home": home,
+                "away": away,
+                "status": "LIVE",
+                "time": "LIVE",
+                "score": score,
+                "is_live": True,
+                "start_at": commence_dt.isoformat() if commence_dt else now_utc.isoformat(),
+                "recommendations": [
+                    {
+                        "line": "Исход: 1",
+                        "coefficient": 1.75,
+                        "probability": 0.58,
+                        "confidence": "med",
+                        "bookmakers_support": 2.0,
+                    }
+                ],
+            }
+        )
+
+    today = now_utc.date().isoformat()
+    upcoming_rows = _request("fixtures", {"date": today, "timezone": "UTC"})
+    for row in upcoming_rows:
+        if len(events) >= limit:
+            break
+        if not isinstance(row, dict):
+            continue
+        fixture = row.get("fixture") or {}
+        status = (fixture.get("status") or {}).get("short") or ""
+        if status in {"FT", "AET", "PEN", "CANC", "ABD"}:
+            continue
+        teams = row.get("teams") or {}
+        league = row.get("league") or {}
+        commence_dt = _parse_iso_datetime(fixture.get("date"))
+        if not commence_dt or commence_dt < now_utc:
+            continue
+        home = (teams.get("home") or {}).get("name")
+        away = (teams.get("away") or {}).get("name")
+        if not home or not away:
+            continue
+        events.append(
+            {
+                "id": f"af_{fixture.get('id', '')}",
+                "sport": "football",
+                "league": league.get("name") or "Football",
+                "home": home,
+                "away": away,
+                "status": "UPCOMING",
+                "time": _format_event_time(fixture.get("date")),
+                "score": "—",
+                "is_live": False,
+                "start_at": commence_dt.isoformat(),
+                "recommendations": [
+                    {
+                        "line": "Исход: 1",
+                        "coefficient": 1.72,
+                        "probability": 0.57,
+                        "confidence": "med",
+                        "bookmakers_support": 2.0,
+                    }
+                ],
+            }
+        )
+
+    with _cache_lock:
+        if events:
+            _cache["source"] = "api_football"
+            _cache["last_error"] = None
+    return events[:limit]
+
+
 def get_cached_odds_events(force_refresh: bool = False) -> List[Dict[str, Any]]:
     now_ts = time.time()
     with _cache_lock:
@@ -284,10 +405,12 @@ def get_cached_odds_events(force_refresh: bool = False) -> List[Dict[str, Any]]:
             return cached
 
     events = fetch_odds_events_sync()
+    if not events:
+        events = fetch_api_football_events_sync()
     with _cache_lock:
         _cache["events"] = events
         _cache["ts"] = now_ts
-        if not events and _cache.get("source") != "odds_api":
+        if not events:
             _cache["source"] = "none"
     return events
 
@@ -297,6 +420,7 @@ def get_status_snapshot() -> Dict[str, Any]:
         return {
             "enabled": os.getenv("REAL_EVENTS_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"},
             "api_key_present": bool(resolve_odds_api_key()),
+            "api_football_key_present": bool(_api_football_key()),
             "source": _cache.get("source"),
             "cached_events": len(_cache.get("events") or []),
             "cache_ttl_seconds": REAL_EVENTS_CACHE_TTL_SECONDS,
