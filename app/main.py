@@ -98,10 +98,10 @@ DEFAULT_MIN_PROBABILITY = float(os.getenv("DEFAULT_MIN_PROBABILITY", "0.6"))
 DEFAULT_MIN_COEFFICIENT = float(os.getenv("DEFAULT_MIN_COEFFICIENT", "1.5"))
 DEFAULT_MIN_BOOKMAKERS_SUPPORT = float(os.getenv("DEFAULT_MIN_BOOKMAKERS_SUPPORT", "2.0"))
 EXTERNAL_CONSENSUS_MIN_SOURCES = int(os.getenv("EXTERNAL_CONSENSUS_MIN_SOURCES", _env_default("EXTERNAL_CONSENSUS_MIN_SOURCES", "3")))
-EXTERNAL_CONSENSUS_ENABLED = os.getenv("EXTERNAL_CONSENSUS_ENABLED", _env_default("EXTERNAL_CONSENSUS_ENABLED", "false")).strip().lower() in {"1", "true", "yes", "on"}
+EXTERNAL_CONSENSUS_ENABLED = os.getenv("EXTERNAL_CONSENSUS_ENABLED", _env_default("EXTERNAL_CONSENSUS_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "on"}
 EXTERNAL_DONOR_INGESTION_ENABLED = os.getenv(
     "EXTERNAL_DONOR_INGESTION_ENABLED",
-    _env_default("EXTERNAL_DONOR_INGESTION_ENABLED", "false"),
+    _env_default("EXTERNAL_DONOR_INGESTION_ENABLED", "true"),
 ).strip().lower() in {"1", "true", "yes", "on"}
 EXTERNAL_DONOR_RANDOM_SEED = os.getenv("EXTERNAL_DONOR_RANDOM_SEED", "prizolov-donor-seed")
 EXTERNAL_DONOR_CATALOG_EXTRA_JSON = _normalize_json_env_value(os.getenv("EXTERNAL_DONOR_CATALOG_EXTRA_JSON", _env_default("EXTERNAL_DONOR_CATALOG_EXTRA_JSON", "")))
@@ -138,6 +138,7 @@ _STOREFRONT_DEMO_EVENTS_ENV = os.getenv(
 ).strip().lower() in {"1", "true", "yes", "on"}
 # Production safety: fictional fixtures stay off unless explicitly allowed.
 _ALLOW_STOREFRONT_DEMO = os.getenv("ALLOW_STOREFRONT_DEMO", "false").strip().lower() in {"1", "true", "yes", "on"}
+REAL_EVENTS_ENABLED = os.getenv("REAL_EVENTS_ENABLED", _env_default("REAL_EVENTS_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "on"}
 STOREFRONT_DEMO_EVENTS_ENABLED = _STOREFRONT_DEMO_EVENTS_ENV and _ALLOW_STOREFRONT_DEMO
 
 
@@ -1271,13 +1272,35 @@ def _is_event_relevant_now(event: Dict[str, Any], now_utc: datetime.datetime, wi
     return now_utc <= start_at <= horizon
 
 
-def _collect_raw_events(window_hours: int, include_live: bool, include_upcoming: bool) -> List[Dict[str, Any]]:
+def _collect_raw_events(
+    window_hours: int,
+    include_live: bool,
+    include_upcoming: bool,
+    force_refresh: bool = False,
+) -> List[Dict[str, Any]]:
     now_utc = _now_utc()
     items: List[Dict[str, Any]] = []
-    if include_live:
-        items.extend(_build_live_events(now_utc))
-    if include_upcoming:
-        items.extend(_build_upcoming_events(now_utc, window_hours))
+
+    if REAL_EVENTS_ENABLED:
+        try:
+            from real_events_source import get_cached_odds_events
+
+            odds_events = get_cached_odds_events(force_refresh=force_refresh)
+            for event in odds_events:
+                is_live = _safe_bool(event.get("is_live"), False)
+                if is_live and not include_live:
+                    continue
+                if not is_live and not include_upcoming:
+                    continue
+                items.append(copy.deepcopy(event))
+        except Exception as exc:
+            logger.warning("⚠️ Real events source failed: %s", exc)
+
+    if not items and STOREFRONT_DEMO_EVENTS_ENABLED:
+        if include_live:
+            items.extend(_build_live_events(now_utc))
+        if include_upcoming:
+            items.extend(_build_upcoming_events(now_utc, window_hours))
 
     return [
         event
@@ -1404,8 +1427,14 @@ def _build_storefront_payload(
     sort_by: str,
     limit: int,
     offset: int,
+    force_refresh_events: bool = False,
 ) -> Dict[str, Any]:
-    raw_events = _collect_raw_events(window_hours, include_live, include_upcoming)
+    raw_events = _collect_raw_events(
+        window_hours,
+        include_live,
+        include_upcoming,
+        force_refresh=force_refresh_events,
+    )
     prepared = [_prepare_event(e, min_probability, min_coefficient, min_support) for e in raw_events]
 
     if recommendations_only:
@@ -1478,7 +1507,7 @@ def _build_storefront_payload(
         "consensus_top": consensus_top,
         "external_donors": donor_summary,
         "generated_at": _now_utc().isoformat(),
-        "source": "storefront-aggregated",
+        "source": "odds_api" if REAL_EVENTS_ENABLED else "storefront-aggregated",
     }
 
     _update_low_event_streak(len(prepared))
@@ -1492,7 +1521,7 @@ def _storefront_cache_entry(params: Dict[str, Any], refresh: bool = False) -> Di
         if cached is not None:
             return cached
 
-    payload = _build_storefront_payload(**params)
+    payload = _build_storefront_payload(**params, force_refresh_events=refresh)
     return _cache_put(key, payload)
 
 
@@ -1978,6 +2007,8 @@ async def api_metrics():
 
 @app.get("/api/source-status")
 async def source_status():
+    from real_events_source import get_status_snapshot
+
     alerts = _build_alerts()
     with _metrics_lock:
         cache_size = len(_cache)
@@ -2008,7 +2039,7 @@ async def source_status():
             "external_donor_rss_item_limit": EXTERNAL_DONOR_RSS_ITEM_LIMIT,
             "external_donor_text_item_limit": EXTERNAL_DONOR_TEXT_ITEM_LIMIT,
                         "storefront_demo_events_enabled": STOREFRONT_DEMO_EVENTS_ENABLED,
-            "storefront_events_source": "demo_templates" if STOREFRONT_DEMO_EVENTS_ENABLED else "none",
+            "storefront_events_source": "demo_templates" if STOREFRONT_DEMO_EVENTS_ENABLED else ("odds_api" if REAL_EVENTS_ENABLED else "none"),
             "external_donor_ingestion_enabled": EXTERNAL_DONOR_INGESTION_ENABLED,
             "external_donor_pack_defaults_loaded": bool(_ENV_PACK_DEFAULTS),
         },
@@ -2020,6 +2051,7 @@ async def source_status():
             "last_donor_coverage_ratio": donor_coverage,
         },
         "external_donors": donor_pipeline,
+        "real_events": get_status_snapshot(),
         "alerts": alerts,
         "timestamp": _now_utc().isoformat(),
     }
