@@ -109,6 +109,130 @@ BOOKMAKER_MAX_RECOMMENDATIONS = int(os.getenv("BOOKMAKER_MAX_RECOMMENDATIONS", "
 
 _MAIN_MARKET_COLUMNS = ["1", "Х", "2", "ФОРА 1", "ФОРА 2", "Тотал", "Б", "М"]
 
+_MAIN_SCOPE = "Матч"
+
+
+def _score_unit(sport: str) -> str:
+    if sport == "hockey":
+        return "шайбы"
+    if sport == "basketball":
+        return "очки"
+    if sport in ("tennis", "table_tennis", "volleyball", "badminton"):
+        return "очки/геймы"
+    return "голы"
+
+
+def _unit_dative(unit: str) -> str:
+    return {
+        "голы": "голам",
+        "шайбы": "шайбам",
+        "очки": "очкам",
+        "очки/геймы": "очкам/геймам",
+    }.get(unit, unit)
+
+
+def _sub_market_meta(sub_name: str) -> Tuple[str, str, float]:
+    """Return display scope, line_detail hint, and preferred total line for sub-markets."""
+    name = sub_name.strip()
+    low = name.lower()
+    if "углов" in low:
+        return name, "Считаются только угловые удары (не голы в ворота).", 9.5
+    if "жёлт" in low or "желт" in low or "жк" in low or "карт" in low:
+        return name, "Считаются только жёлтые карточки (не голы и не угловые).", 4.5
+    if "фол" in low:
+        return name, "Считаются только фолы (отдельный рынок от голов).", 22.5
+    if "офсайд" in low:
+        return name, "Считаются только офсайды.", 3.5
+    if "удар" in low and "створ" in low:
+        return name, "Считаются только удары в створ (не голы 1X2).", 8.5
+    if "удален" in low:
+        return name, "Считаются удаления игроков.", 0.5
+    return name, f"Отдельный рынок «{name}», не основной счёт матча.", 2.5
+
+
+def _group_suffix(group_index: int) -> str:
+    if group_index <= 0:
+        return ""
+    return f" (альтернативная линия {group_index + 1})"
+
+
+def _handicap_labels(
+    team: str,
+    handicap: Optional[float],
+    unit: str,
+    book_side: str,
+    group_suffix: str,
+) -> Tuple[str, str]:
+    if handicap is None:
+        line = f"{_MAIN_SCOPE} · Фора {book_side}: {team}{group_suffix}"
+        detail = (
+            f"Фора {book_side} = ставка на {team}. Рынок по {_unit_dative(unit)}, основное время (не угловые/ЖК)."
+        )
+        return line, detail
+    line = f"{_MAIN_SCOPE} · Фора по {_unit_dative(unit)}: {team} {handicap:+.1f}{group_suffix}"
+    detail = (
+        f"Ставка на {team} с форой {handicap:+.1f}: итог по {_unit_dative(unit)} с учётом форы, основное время."
+    )
+    return line, detail
+
+
+def _outcome_label(
+    column: str,
+    *,
+    home: str,
+    away: str,
+    unit: str,
+    group_suffix: str,
+) -> Tuple[str, str]:
+    if column == "1":
+        return (
+            f"{_MAIN_SCOPE} · Победа {home} ({unit}, основное время){group_suffix}",
+            f"Исход 1X2: победа {home} по {_unit_dative(unit)} в основное время.",
+        )
+    if column in {"Х", "X"}:
+        return (
+            f"{_MAIN_SCOPE} · Ничья ({unit}, основное время){group_suffix}",
+            f"Исход 1X2: ничья по {_unit_dative(unit)} в основное время.",
+        )
+    if column == "2":
+        return (
+            f"{_MAIN_SCOPE} · Победа {away} ({unit}, основное время){group_suffix}",
+            f"Исход 1X2: победа {away} по {_unit_dative(unit)} в основное время.",
+        )
+    return "", ""
+
+
+def _total_labels(
+    direction: str,
+    total_line: float,
+    unit: str,
+    group_suffix: str,
+) -> Tuple[str, str]:
+    if direction == "over":
+        line = f"{_MAIN_SCOPE} · Тотал {_unit_dative(unit)} больше {total_line}{group_suffix}"
+        detail = f"Сумма {_unit_dative(unit)} обеих команд больше {total_line}, основное время."
+    else:
+        line = f"{_MAIN_SCOPE} · Тотал {_unit_dative(unit)} меньше {total_line}{group_suffix}"
+        detail = f"Сумма {_unit_dative(unit)} обеих команд меньше {total_line}, основное время."
+    return line, detail
+
+
+def _sub_outcome_label(
+    column: str,
+    *,
+    scope: str,
+    home: str,
+    away: str,
+    unit_hint: str,
+) -> Tuple[str, str]:
+    if column == "1":
+        return f"{scope} · {home} (исход 1)", f"{unit_hint} Победа {home} в этом рынке."
+    if column in {"Х", "X"}:
+        return f"{scope} · Ничья", f"{unit_hint} Равный исход в этом рынке."
+    if column == "2":
+        return f"{scope} · {away} (исход 2)", f"{unit_hint} Победа {away} в этом рынке."
+    return "", ""
+
 
 def _slice_event_chunk(html: str, start: int) -> str:
     next_match = _PARI_TEAM_RE.search(html, start + 80)
@@ -151,6 +275,8 @@ def _append_rec(
     *,
     probability: Optional[float] = None,
     confidence: Optional[str] = None,
+    market_scope: Optional[str] = None,
+    line_detail: Optional[str] = None,
 ) -> None:
     if coefficient < 1.01 or coefficient > 100:
         return
@@ -158,16 +284,19 @@ def _append_rec(
         probability = min(0.97, max(0.05, (1.0 / coefficient) * 0.94))
     else:
         probability = min(0.97, max(0.05, probability))
-    recommendations.append(
-        {
-            "line": line,
-            "coefficient": round(coefficient, 2),
-            "probability": round(probability, 4),
-            "confidence": confidence or ("high" if probability >= 0.68 else "med"),
-            "bookmakers_support": 3.0,
-            "odds_updated_at": now_utc.isoformat(),
-        }
-    )
+    entry: Dict[str, Any] = {
+        "line": line,
+        "coefficient": round(coefficient, 2),
+        "probability": round(probability, 4),
+        "confidence": confidence or ("high" if probability >= 0.68 else "med"),
+        "bookmakers_support": 3.0,
+        "odds_updated_at": now_utc.isoformat(),
+    }
+    if market_scope:
+        entry["market_scope"] = market_scope
+    if line_detail:
+        entry["line_detail"] = line_detail
+    recommendations.append(entry)
 
 
 def _double_chance_odds(c1: float, cx: float, c2: float, mode: str) -> Optional[float]:
@@ -213,18 +342,8 @@ def _append_main_market_group(
 
     handicap1, handicap2 = _pick_handicap_lines(params)
     total_line = _pick_total_line(params, sport)
-    suffix = "" if group_index == 0 else f" (маркет {group_index + 1})"
-
-    column_map = {
-        "1": f"Победа {home}{suffix}",
-        "Х": f"Ничья{suffix}",
-        "X": f"Ничья{suffix}",
-        "2": f"Победа {away}{suffix}",
-        "ФОРА 1": f"Фора 1 ({home}" + (f" {handicap1:+.1f})" if handicap1 is not None else ")") + suffix,
-        "ФОРА 2": f"Фора 2 ({away}" + (f" {handicap2:+.1f})" if handicap2 is not None else ")") + suffix,
-        "Б": f"Тотал больше {total_line}{suffix}",
-        "М": f"Тотал меньше {total_line}{suffix}",
-    }
+    unit = _score_unit(sport)
+    group_suffix = _group_suffix(group_index)
 
     outcome_probs: Dict[str, float] = {}
     inv_sum = sum(1.0 / coef for coef in group_values[:3])
@@ -240,21 +359,65 @@ def _append_main_market_group(
             continue
         if idx >= len(group_values):
             break
-        line = column_map.get(column)
+        line = ""
+        detail = ""
+        if column in {"1", "Х", "X", "2"}:
+            line, detail = _outcome_label(
+                column,
+                home=home,
+                away=away,
+                unit=unit,
+                group_suffix=group_suffix,
+            )
+        elif column == "ФОРА 1":
+            line, detail = _handicap_labels(home, handicap1, unit, "1", group_suffix)
+        elif column == "ФОРА 2":
+            line, detail = _handicap_labels(away, handicap2, unit, "2", group_suffix)
+        elif column == "Б":
+            line, detail = _total_labels("over", total_line, unit, group_suffix)
+        elif column == "М":
+            line, detail = _total_labels("under", total_line, unit, group_suffix)
         if not line:
             continue
-        _append_rec(recommendations, line, group_values[idx], now_utc, probability=outcome_probs.get(column))
+        _append_rec(
+            recommendations,
+            line,
+            group_values[idx],
+            now_utc,
+            probability=outcome_probs.get(column),
+            market_scope=_MAIN_SCOPE,
+            line_detail=detail,
+        )
 
     if group_index == 0 and len(group_values) >= 3:
         c1, cx, c2 = group_values[0], group_values[1], group_values[2]
-        for mode, label in (
-            ("1X", f"Двойной шанс 1X ({home} или ничья)"),
-            ("X2", f"Двойной шанс X2 (ничья или {away})"),
-            ("12", f"Двойной шанс 12 ({home} или {away})"),
+        for mode, label, detail in (
+            (
+                "1X",
+                f"{_MAIN_SCOPE} · Двойной шанс 1X: {home} или ничья",
+                f"По {_unit_dative(unit)}: не проигрыш {home} (победа или ничья), основное время.",
+            ),
+            (
+                "X2",
+                f"{_MAIN_SCOPE} · Двойной шанс X2: ничья или {away}",
+                f"По {_unit_dative(unit)}: не проигрыш {away} (ничья или победа), основное время.",
+            ),
+            (
+                "12",
+                f"{_MAIN_SCOPE} · Двойной шанс 12: {home} или {away}",
+                f"По {_unit_dative(unit)}: победа одной из сторон без ничьей, основное время.",
+            ),
         ):
             combo = _double_chance_odds(c1, cx, c2, mode)
             if combo:
-                _append_rec(recommendations, label, combo, now_utc)
+                _append_rec(
+                    recommendations,
+                    label,
+                    combo,
+                    now_utc,
+                    market_scope=_MAIN_SCOPE,
+                    line_detail=detail,
+                )
 
 def _recommendations_from_pari_chunk(
     home: str,
@@ -283,19 +446,55 @@ def _recommendations_from_pari_chunk(
         pos = value_hits[group_index][0]
         sub_name = _context_sub_name(chunk, pos)
         if sub_name:
-            prefix = f"{sub_name}: "
+            scope, unit_hint, preferred_total = _sub_market_meta(sub_name)
+            sub_candidates = [value for value in params if 0.5 <= value <= 25.5]
+            if sub_candidates:
+                sub_total = min(sub_candidates, key=lambda value: abs(value - preferred_total))
+            else:
+                sub_total = preferred_total
             for idx, column in enumerate(("1", "X", "2")[: len(group_values)]):
+                line, detail = _sub_outcome_label(
+                    column,
+                    scope=scope,
+                    home=home,
+                    away=away,
+                    unit_hint=unit_hint,
+                )
+                if line:
+                    _append_rec(
+                        recommendations,
+                        line,
+                        group_values[idx],
+                        now_utc,
+                        market_scope=scope,
+                        line_detail=detail,
+                    )
+            if len(group_values) >= 5:
                 _append_rec(
                     recommendations,
-                    f"{prefix}исход {column}",
-                    group_values[idx],
+                    f"{scope} · Тотал больше {sub_total}",
+                    group_values[3],
                     now_utc,
+                    market_scope=scope,
+                    line_detail=f"{unit_hint} Сумма показателя больше {sub_total}.",
                 )
-            if len(group_values) >= 5:
-                _append_rec(recommendations, f"{prefix}больше", group_values[3], now_utc)
-                _append_rec(recommendations, f"{prefix}меньше", group_values[4], now_utc)
+                _append_rec(
+                    recommendations,
+                    f"{scope} · Тотал меньше {sub_total}",
+                    group_values[4],
+                    now_utc,
+                    market_scope=scope,
+                    line_detail=f"{unit_hint} Сумма показателя меньше {sub_total}.",
+                )
             for extra_idx, coef in enumerate(group_values[5:8], start=6):
-                _append_rec(recommendations, f"{prefix}линия {extra_idx}", coef, now_utc)
+                _append_rec(
+                    recommendations,
+                    f"{scope} · Доп. коэффициент (поз. {extra_idx})",
+                    coef,
+                    now_utc,
+                    market_scope=scope,
+                    line_detail=unit_hint,
+                )
             continue
 
         _append_main_market_group(
