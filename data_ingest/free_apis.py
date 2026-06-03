@@ -26,10 +26,11 @@ class FreeAPIsCollector:
         if not self.api_football_key:
             logger.debug("API_FOOTBALL_KEY не задан")
             return None
-        url = f"https://api-football-v1.p.rapidapi.com/v3/{endpoint}"
+        base = (os.getenv("API_FOOTBALL_BASE_URL") or "https://v3.football.api-sports.io").rstrip("/")
+        url = f"{base}/{endpoint}"
         headers = {
-            "X-RapidAPI-Key": self.api_football_key,
-            "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com"
+            "x-apisports-key": self.api_football_key,
+            "Accept": "application/json",
         }
         session = await self._get_session()
         try:

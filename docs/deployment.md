@@ -89,6 +89,7 @@ After deploy, verify:
 
 Задайте в переменных окружения Amvera (не в git):
 
+- `API_FOOTBALL_KEY` — ключ с https://www.api-football.com/ (заголовок `x-apisports-key`, хост `https://v3.football.api-sports.io`)
 - `ODDSPAPI_API_KEY` — ключ с https://oddspapi.io/ (приоритетный источник, если задан)
 - `THE_ODDS_API_KEY` — ключ с https://the-odds-api.com/ (fallback)
 - `REAL_EVENTS_ENABLED=true`

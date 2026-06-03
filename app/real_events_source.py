@@ -294,7 +294,30 @@ def fetch_odds_events_sync(limit: int = REAL_EVENTS_FETCH_LIMIT) -> List[Dict[st
 
 
 def _api_football_key() -> Optional[str]:
-    return (os.getenv("API_FOOTBALL_KEY") or os.getenv("RAPIDAPI_FOOTBALL_KEY") or "").strip() or None
+    for name in (
+        "API_FOOTBALL_KEY",
+        "API_SPORTS_KEY",
+        "APIFOOTBALL_API_KEY",
+        "RAPIDAPI_FOOTBALL_KEY",
+    ):
+        value = (os.getenv(name) or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _api_football_base_url() -> str:
+    return (os.getenv("API_FOOTBALL_BASE_URL") or "https://v3.football.api-sports.io").strip().rstrip("/")
+
+
+def _api_football_headers() -> Dict[str, str]:
+    api_key = _api_football_key()
+    if not api_key:
+        return {}
+    return {
+        "x-apisports-key": api_key,
+        "Accept": "application/json",
+    }
 
 
 def fetch_api_football_events_sync(limit: int = REAL_EVENTS_FETCH_LIMIT) -> List[Dict[str, Any]]:
@@ -302,32 +325,42 @@ def fetch_api_football_events_sync(limit: int = REAL_EVENTS_FETCH_LIMIT) -> List
     if not api_key:
         return []
 
-    headers = {
-        "X-RapidAPI-Key": api_key,
-        "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com",
-    }
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     events: List[Dict[str, Any]] = []
+    seen_ids = set()
 
     def _request(endpoint: str, params: Dict[str, str]) -> List[Dict[str, Any]]:
         query = urllib_parse.urlencode(params)
-        url = f"https://api-football-v1.p.rapidapi.com/v3/{endpoint}?{query}"
-        req = urllib_request.Request(url, headers=headers)
+        url = f"{_api_football_base_url()}/{endpoint.lstrip('/')}?{query}"
+        req = urllib_request.Request(url, headers=_api_football_headers())
         try:
-            with urllib_request.urlopen(req, timeout=12) as response:
+            with urllib_request.urlopen(req, timeout=14) as response:
                 body = response.read().decode("utf-8", errors="ignore")
             payload = json.loads(body)
+            errors = payload.get("errors")
+            if errors:
+                logger.warning("API-Football %s errors: %s", endpoint, errors)
+                with _cache_lock:
+                    _cache["last_error"] = f"api_football_{errors}"
+                return []
             data = payload.get("response") or []
             return data if isinstance(data, list) else []
+        except HTTPError as exc:
+            with _cache_lock:
+                _cache["last_error"] = f"api_football_http_{exc.code}"
+            logger.warning("API-Football %s HTTP %s", endpoint, exc.code)
+            return []
         except Exception as exc:
             logger.warning("API-Football %s failed: %s", endpoint, exc)
             return []
 
-    live_rows = _request("fixtures", {"live": "all", "timezone": "UTC"})
-    for row in live_rows:
-        if not isinstance(row, dict):
-            continue
+    def _append_fixture(row: Dict[str, Any], *, is_live: bool) -> None:
+        if len(events) >= limit or not isinstance(row, dict):
+            return
         fixture = row.get("fixture") or {}
+        fixture_id = fixture.get("id")
+        if fixture_id in seen_ids:
+            return
         teams = row.get("teams") or {}
         league = row.get("league") or {}
         goals = row.get("goals") or {}
@@ -335,64 +368,25 @@ def fetch_api_football_events_sync(limit: int = REAL_EVENTS_FETCH_LIMIT) -> List
         home = (teams.get("home") or {}).get("name")
         away = (teams.get("away") or {}).get("name")
         if not home or not away:
-            continue
-        score = f"{goals.get('home')}-{goals.get('away')}" if goals.get("home") is not None else "—"
-        events.append(
-            {
-                "id": f"af_{fixture.get('id', '')}",
-                "sport": "football",
-                "league": league.get("name") or "Football",
-                "home": home,
-                "away": away,
-                "status": "LIVE",
-                "time": "LIVE",
-                "score": score,
-                "is_live": True,
-                "start_at": commence_dt.isoformat() if commence_dt else now_utc.isoformat(),
-                "recommendations": [
-                    {
-                        "line": "Исход: 1",
-                        "coefficient": 1.75,
-                        "probability": 0.58,
-                        "confidence": "med",
-                        "bookmakers_support": 2.0,
-                    }
-                ],
-            }
-        )
+            return
 
-    today = now_utc.date().isoformat()
-    upcoming_rows = _request("fixtures", {"date": today, "timezone": "UTC"})
-    for row in upcoming_rows:
-        if len(events) >= limit:
-            break
-        if not isinstance(row, dict):
-            continue
-        fixture = row.get("fixture") or {}
-        status = (fixture.get("status") or {}).get("short") or ""
-        if status in {"FT", "AET", "PEN", "CANC", "ABD"}:
-            continue
-        teams = row.get("teams") or {}
-        league = row.get("league") or {}
-        commence_dt = _parse_iso_datetime(fixture.get("date"))
-        if not commence_dt or commence_dt < now_utc:
-            continue
-        home = (teams.get("home") or {}).get("name")
-        away = (teams.get("away") or {}).get("name")
-        if not home or not away:
-            continue
+        seen_ids.add(fixture_id)
+        score = "—"
+        if goals.get("home") is not None and goals.get("away") is not None:
+            score = f"{goals.get('home')}-{goals.get('away')}"
+
         events.append(
             {
-                "id": f"af_{fixture.get('id', '')}",
+                "id": f"af_{fixture_id}",
                 "sport": "football",
                 "league": league.get("name") or "Football",
                 "home": home,
                 "away": away,
-                "status": "UPCOMING",
-                "time": _format_event_time(fixture.get("date")),
-                "score": "—",
-                "is_live": False,
-                "start_at": commence_dt.isoformat(),
+                "status": "LIVE" if is_live else "UPCOMING",
+                "time": "LIVE" if is_live else _format_event_time(fixture.get("date")),
+                "score": score,
+                "is_live": is_live,
+                "start_at": commence_dt.isoformat() if commence_dt else now_utc.isoformat(),
                 "recommendations": [
                     {
                         "line": "Исход: 1",
@@ -400,10 +394,35 @@ def fetch_api_football_events_sync(limit: int = REAL_EVENTS_FETCH_LIMIT) -> List
                         "probability": 0.57,
                         "confidence": "med",
                         "bookmakers_support": 2.0,
-                    }
+                    },
+                    {
+                        "line": "Тотал больше 2.5",
+                        "coefficient": 1.68,
+                        "probability": 0.55,
+                        "confidence": "med",
+                        "bookmakers_support": 2.0,
+                    },
                 ],
             }
         )
+
+    for row in _request("fixtures", {"live": "all"}):
+        _append_fixture(row, is_live=True)
+
+    for day_offset in (0, 1):
+        day = (now_utc.date() + datetime.timedelta(days=day_offset)).isoformat()
+        for row in _request("fixtures", {"date": day, "timezone": "UTC"}):
+            if len(events) >= limit:
+                break
+            fixture = row.get("fixture") or {}
+            status = (fixture.get("status") or {}).get("short") or ""
+            if status in {"FT", "AET", "PEN", "CANC", "ABD", "PST", "SUSP"}:
+                continue
+            commence_dt = _parse_iso_datetime(fixture.get("date"))
+            if commence_dt and commence_dt < now_utc - datetime.timedelta(minutes=5):
+                continue
+            is_live = status in {"1H", "2H", "HT", "ET", "BT", "P", "LIVE"}
+            _append_fixture(row, is_live=is_live)
 
     with _cache_lock:
         if events:
@@ -434,7 +453,7 @@ def get_cached_odds_events(force_refresh: bool = False) -> List[Dict[str, Any]]:
                 _cache["last_error"] = None
     if not events and not resolve_oddspapi_key():
         events = fetch_odds_events_sync()
-    if not events and not resolve_oddspapi_key():
+    if not events:
         events = fetch_api_football_events_sync()
     with _cache_lock:
         if events:
