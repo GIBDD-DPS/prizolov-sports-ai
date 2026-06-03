@@ -74,24 +74,5 @@ async def fetch_bookmakers() -> List[Dict]:
     В реальном проекте здесь нужно вызывать BookmakersCollector()
     и возвращать реальные коэффициенты.
     """
-    # ТЕСТОВЫЕ ДАННЫЕ (заменить на реальные)
-    return [
-        {
-            "home": "ЦСКА",
-            "away": "Динамо",
-            "bookmaker": "Bet365",
-            "market": "1X2",
-            "outcome": "home",
-            "price": 2.10,
-            "timestamp": datetime.now().isoformat()
-        },
-        {
-            "home": "ЦСКА",
-            "away": "Динамо",
-            "bookmaker": "1xBet",
-            "market": "totals",
-            "outcome": "over 2.5",
-            "price": 1.85,
-            "timestamp": datetime.now().isoformat()
-        }
-    ]
+    # Demo stub disabled — return empty until real bookmaker API is wired.
+    return []

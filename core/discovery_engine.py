@@ -19,7 +19,7 @@ class DiscoveryEngine:
     В демо режиме возвращает тестовые данные.
     """
 
-    def __init__(self, demo_mode: bool = True):
+    def __init__(self, demo_mode: bool = False):
         self.demo_mode = demo_mode
         self.events: Dict[str, Dict[str, Any]] = {}
         self._initialize_demo_events()
