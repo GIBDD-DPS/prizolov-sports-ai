@@ -689,7 +689,7 @@
   var API_URL = "/get-ai-sports.php";
   var API_BASE = window.PRIZOLOV_API_BASE || "https://prizolov-sports-dmandreyanov.amvera.io";
   var ALL_EVENTS_URL = "/api/all-events";
-  var WIDGET_BUILD = "2026-06-04-prediction-1x2";
+  var WIDGET_BUILD = "2026-06-04-quality-metrics";
 
   var WINDOW_HOURS = 24;
   var MIN_PROBABILITY = 0.6;
@@ -870,6 +870,12 @@
     }
 
 
+    function formatBetScores(rec) {
+      var bd = rec && rec.bet_display;
+      if (!bd) return "";
+      return "Conf " + (bd.confidence_label || "-") + " | Value " + (bd.value_label || "-") + " | EV " + (bd.expected_value_label || "-") + " | Risk " + (bd.risk || "-") + " | Kelly " + (bd.kelly_suggested || "-");
+    }
+
     function formatBetHtml(rec) {
       if (!rec) return "—";
       var line = rec.line || "—";
@@ -897,6 +903,7 @@
           confidence: r && r.confidence === "high" ? "high" : "med",
           probability: Math.max(0, Math.min(1, asNum(r && (r.adjusted_probability !== undefined ? r.adjusted_probability : r.probability), 0))),
           coefficient: asNum(r && r.coefficient, 1.5),
+          bet_display: r && r.bet_display ? r.bet_display : null,
           league: r && r.league ? r.league : (event.league || "—"),
           sport: r && r.sport ? r.sport : (event.sport || "football"),
           home: r && r.home ? r.home : (event.home || "—"),
@@ -1160,6 +1167,7 @@
             "<div class='pz-rec-league'>" + escapeHtml(r.league || event.league) + " • " + asSport(r.sport || event.sport) + "</div>" +
             "<div class='pz-rec-line'>" + formatBetHtml(r) + "</div>" +
             "<div class='pz-rec-meta'>Вер: " + prob + "% <span class='pz-confidence " + confClass + "'>" + confText + "</span></div>" +
+            (formatBetScores(r) ? "<div class='pz-rec-meta'>" + formatBetScores(r) + "</div>" : "") +
           "</div>" +
           "<div class='pz-rec-coef'>" + asNum(r.coefficient, 1.5).toFixed(2) + "</div>" +
         "</div>";
