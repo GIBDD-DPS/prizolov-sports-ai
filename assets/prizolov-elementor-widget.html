@@ -689,7 +689,7 @@
   var API_URL = "/get-ai-sports.php";
   var API_BASE = window.PRIZOLOV_API_BASE || "https://prizolov-sports-dmandreyanov.amvera.io";
   var ALL_EVENTS_URL = "/api/all-events";
-  var WIDGET_BUILD = "2026-06-04-quality-metrics";
+  var WIDGET_BUILD = "2026-06-04-api-stable";
 
   var WINDOW_HOURS = 24;
   var MIN_PROBABILITY = 0.6;
@@ -1253,7 +1253,11 @@
       if (byId("analytics-value")) renderAnalytics(null);
     }
 
-    function fetchFromAllEvents(modeCfg, cb) {
+    var INITIAL_REFRESH_DONE = false;
+
+    function fetchFromAllEvents(modeCfg, cb, forceRefresh) {
+      var useRefresh = forceRefresh === true || !INITIAL_REFRESH_DONE;
+      INITIAL_REFRESH_DONE = true;
       requestJson("GET", withBase(ALL_EVENTS_URL) + "?" + qs({
         window_hours: String(WINDOW_HOURS),
         include_live: "true",
@@ -1264,9 +1268,9 @@
         include_consensus: "true",
         min_consensus_sources: String(MIN_CONSENSUS_SOURCES),
         include_watch: "true",
-        limit: "200",
+        limit: "80",
         sort_by: "passability",
-        refresh: "true"
+        refresh: useRefresh ? "true" : "false"
       }), null, function (payload) {
         donorsEnabled = Boolean(payload && payload.external_donors && payload.external_donors.enabled);
         cb(Array.isArray(payload && payload.events) ? payload.events : []);

@@ -1548,12 +1548,17 @@ def _build_storefront_payload(
     except Exception as exc:
         logger.warning("Analytics v15 pipeline skipped: %s", exc)
 
-    try:
-        from prediction.engine import enrich_event_with_prediction
+    if _safe_bool(os.getenv("PREDICTION_ON_STOREFRONT", "1"), True):
+        try:
+            from prediction.engine import enrich_event_with_prediction
 
-        prepared = [enrich_event_with_prediction(e) for e in prepared]
-    except Exception as exc:
-        logger.warning("Prediction ensemble skipped: %s", exc)
+            pred_cap = _coerce_int(os.getenv("PREDICTION_STOREFRONT_MAX", "60"), 60, minimum=0, maximum=200)
+            if pred_cap > 0:
+                for idx, ev in enumerate(prepared):
+                    if idx < pred_cap:
+                        prepared[idx] = enrich_event_with_prediction(ev, light=True)
+        except Exception as exc:
+            logger.warning("Prediction ensemble skipped: %s", exc)
 
     if recommendations_only:
         prepared = [e for e in prepared if e.get("has_passable")]
@@ -1639,7 +1644,9 @@ def _storefront_cache_entry(params: Dict[str, Any], refresh: bool = False) -> Di
         if cached is not None:
             return cached
 
-    payload = _build_storefront_payload(**params, force_refresh_events=refresh)
+    force_scrape = bool(params.get("force_refresh_events"))
+    build_params = {k: v for k, v in params.items() if k != "force_refresh_events"}
+    payload = _build_storefront_payload(**build_params, force_refresh_events=force_scrape)
     return _cache_put(key, payload)
 
 
@@ -1820,7 +1827,7 @@ async def get_all_events(
     normalized_min_probability = _coerce_float(min_probability, DEFAULT_MIN_PROBABILITY, minimum=0.0, maximum=1.0)
     normalized_min_coef = _coerce_float(min_coefficient, DEFAULT_MIN_COEFFICIENT, minimum=1.0, maximum=50.0)
     normalized_min_support = _coerce_float(min_bookmakers_support, DEFAULT_MIN_BOOKMAKERS_SUPPORT, minimum=0.0, maximum=20.0)
-    normalized_limit = _coerce_int(limit, 120, minimum=1, maximum=500)
+    normalized_limit = _coerce_int(limit, 120, minimum=1, maximum=120)
     normalized_offset = _coerce_int(offset, 0, minimum=0, maximum=5000)
 
     recommendations_only_final = _safe_bool(passable_only, _safe_bool(recommendations_only, False))
@@ -2271,7 +2278,7 @@ async def analytics_v15_summary(
         _safe_bool(include_live, True),
         _safe_bool(include_upcoming, True),
     )
-    prepared = [_prepare_event(e, 0.0, 1.0, 0.0) for e in raw]
+    prepared = [_prepare_event(e, 0.0, 1.0, 0.0) for e in raw[:80]]
     try:
         from analytics.pipeline import process_storefront_events, get_analytics_summary
 

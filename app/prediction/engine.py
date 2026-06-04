@@ -22,15 +22,18 @@ from core.system_monitor.latency import track_stage
 from core.features.engine import build_features
 
 
-def predict_match_outcomes(event: Dict[str, Any]) -> Dict[str, Any]:
+def predict_match_outcomes(event: Dict[str, Any], *, light: bool = False) -> Dict[str, Any]:
     """
     Full pipeline for one storefront event.
     Returns 1X2 probabilities then LLM explanation.
     """
-    record_opening_if_absent(event, "pari")
+    if not light:
+        record_opening_if_absent(event, "pari")
 
-    with track_stage("data_collection"):
-        feature_pack = build_features(event)
+    feature_pack: Dict[str, Any] = {}
+    if not light:
+        with track_stage("data_collection"):
+            feature_pack = build_features(event)
 
     context: Dict[str, Any] = {
         "elo": elo_context(event),
@@ -45,18 +48,19 @@ def predict_match_outcomes(event: Dict[str, Any]) -> Dict[str, Any]:
 
     with track_stage("ml_model"):
         ensemble = combine_ensemble(event, context)
-        try:
-            from models.ensemble import predict_ensemble
-            ml_probs = predict_ensemble(feature_pack).get("probabilities")
-            if ml_probs:
-                ep = ensemble["probabilities"]
-                for k in ep:
-                    ep[k] = round(0.7 * ep[k] + 0.3 * float(ml_probs.get(k) or 0), 4)
-                t = sum(ep.values()) or 1
-                ensemble["probabilities"] = {k: round(v / t, 4) for k, v in ep.items()}
-                ensemble["ml_ensemble"] = ml_probs
-        except Exception:
-            pass
+        if not light and feature_pack:
+            try:
+                from models.ensemble import predict_ensemble
+                ml_probs = predict_ensemble(feature_pack).get("probabilities")
+                if ml_probs:
+                    ep = ensemble["probabilities"]
+                    for k in ep:
+                        ep[k] = round(0.7 * ep[k] + 0.3 * float(ml_probs.get(k) or 0), 4)
+                    t = sum(ep.values()) or 1
+                    ensemble["probabilities"] = {k: round(v / t, 4) for k, v in ep.items()}
+                    ensemble["ml_ensemble"] = ml_probs
+            except Exception:
+                pass
     probs = ensemble["probabilities"]
     quality = score_prediction(probs, event, context)
     with track_stage("llm_analysis"):
@@ -64,11 +68,11 @@ def predict_match_outcomes(event: Dict[str, Any]) -> Dict[str, Any]:
 
     top_rec = None
     recs = event.get("all_recommendations") or event.get("recommendations") or []
-    if recs:
+    if recs and not light:
         top_rec = max(recs, key=lambda r: float(r.get("probability") or 0))
         record_prediction_odds(event, str(top_rec.get("line") or "main"), float(top_rec.get("coefficient") or 1.5))
 
-    return {
+    payload: Dict[str, Any] = {
         "match": f"{event.get('home')} vs {event.get('away')}",
         "league": event.get("league"),
         "sport": event.get("sport"),
@@ -76,7 +80,6 @@ def predict_match_outcomes(event: Dict[str, Any]) -> Dict[str, Any]:
         "draw": probs["draw"],
         "away_win": probs["away_win"],
         "probabilities": probs,
-        "ensemble": ensemble,
         "quality": {
             "confidence": quality["confidence"],
             "confidence_label": quality["confidence_label"],
@@ -86,7 +89,12 @@ def predict_match_outcomes(event: Dict[str, Any]) -> Dict[str, Any]:
             "expected_roi": quality["expected_roi_percent"],
         },
         "explanation": explanation,
-        "modules": {
+        "model_version": "prizolov_ensemble_v2_light" if light else "prizolov_ensemble_v2",
+    }
+    if not light:
+        payload["ensemble"] = ensemble
+        payload["features"] = feature_pack.get("ratings")
+        payload["modules"] = {
             "xg_football": context["xg_profile"],
             "elo": context["elo"],
             "lineup": context["lineup"],
@@ -97,17 +105,15 @@ def predict_match_outcomes(event: Dict[str, Any]) -> Dict[str, Any]:
             "line_movement": context["line_movement"],
             "clv": clv_report(),
             "learning": learning_insights(),
-        },
-        "model_version": "prizolov_ensemble_v2",
-        "features": feature_pack.get("ratings"),
-    }
+        }
+    return payload
 
 
-def enrich_event_with_prediction(event: Dict[str, Any]) -> Dict[str, Any]:
+def enrich_event_with_prediction(event: Dict[str, Any], *, light: bool = True) -> Dict[str, Any]:
     if str(event.get("sport") or "").lower() in {"esports"}:
         return event
     try:
-        pred = predict_match_outcomes(event)
+        pred = predict_match_outcomes(event, light=light)
     except Exception:
         return event
     out = dict(event)
