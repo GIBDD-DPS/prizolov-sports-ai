@@ -1441,6 +1441,12 @@ def _score_recommendation(rec: Dict[str, Any], now_utc: datetime.datetime) -> Di
     enriched["odds_age_seconds"] = age_seconds
     enriched["is_stale_odds"] = is_stale
     enriched["recommendation_type"] = "passable" if edge > 0 else "watch"
+    try:
+        from core.metrics.metrics import score_bet_display
+
+        enriched["bet_display"] = score_bet_display(adjusted_probability, coefficient)
+    except Exception:
+        pass
     return enriched
 
 
@@ -1692,12 +1698,22 @@ def _increment_fallback_usage(key: str) -> None:
 
 @app.middleware("http")
 async def _metrics_middleware(request: Request, call_next):
+    try:
+        from core.system_monitor import record_request, record_error
+        record_request()
+    except Exception:
+        pass
     started = time.perf_counter()
     status = 500
     try:
         response = await call_next(request)
         status = response.status_code
     except Exception:
+        try:
+            from core.system_monitor import record_error
+            record_error("api")
+        except Exception:
+            pass
         elapsed_ms = (time.perf_counter() - started) * 1000.0
         _record_endpoint_metric(request.url.path, elapsed_ms, status)
         raise
@@ -1737,7 +1753,12 @@ def _resolve_storefront_events_source_label() -> str:
 
 @app.on_event("startup")
 async def startup_event():
-    logger.info("🚀 PRIZOLOV SPORTS AI v14.0 - STORE-FRONT OPTIMIZED")
+    try:
+        from core.system_monitor import mark_started
+        mark_started()
+    except Exception:
+        pass
+    logger.info("🚀 PRIZOLOV SPORTS AI v16.0 - QUALITY METRICS")
     logger.info(f"📦 Storefront cache TTL: {CACHE_TTL_SECONDS}s")
     try:
         from bookmaker_scrape_source import _ensure_background_scrape_started
@@ -1761,11 +1782,19 @@ async def root():
 @app.get("/health")
 async def health():
     alerts = _build_alerts()
-    return {
-        "status": "ok",
-        "timestamp": _now_utc().isoformat(),
-        "alerts_total": len(alerts),
-    }
+    try:
+        from core.system_monitor import build_health, error_summary, latency_snapshot
+
+        payload = build_health(alerts=alerts)
+        payload["latency"] = latency_snapshot()
+        payload["errors"] = error_summary()
+        return payload
+    except Exception:
+        return {
+            "status": "ok",
+            "timestamp": _now_utc().isoformat(),
+            "alerts_total": len(alerts),
+        }
 
 
 @app.get("/api/all-events")
@@ -2412,6 +2441,87 @@ async def predict_summary(
         "generated_at": _now_utc().isoformat(),
     }
 
+
+
+
+@app.get("/api/metrics/quality")
+async def api_metrics_quality():
+    from core.metrics.roi import quality_dashboard
+
+    return quality_dashboard()
+
+
+@app.get("/api/metrics/clv")
+async def api_metrics_clv(period: str = "all", breakdown: bool = False):
+    from core.metrics.clv import clv_by_period, clv_all_periods
+
+    if breakdown or period == "breakdown":
+        return clv_all_periods()
+    allowed = {"day", "week", "month", "all"}
+    p = period if period in allowed else "all"
+    if p == "all" and breakdown is False:
+        return clv_all_periods()
+    return clv_by_period(period=p)
+
+
+@app.get("/api/system/latency")
+async def api_system_latency():
+    from core.system_monitor import latency_snapshot
+    from core.system_monitor.latency import averages
+
+    return {"last": latency_snapshot(), "averages": averages()}
+
+
+@app.get("/api/system/freshness")
+async def api_system_freshness():
+    from core.system_monitor import data_freshness
+
+    return {"sources": data_freshness()}
+
+
+@app.get("/api/agents/status")
+async def api_agents_status():
+    from agents.registry import list_agents
+
+    return {"agents": list_agents(), "total": 10}
+
+
+@app.post("/api/agents/run")
+async def api_agents_run(request: Request):
+    from agents.registry import run_all
+
+    payload = await _read_payload(request)
+    event = payload if isinstance(payload, dict) else {}
+    if isinstance(payload, dict) and isinstance(payload.get("event"), dict):
+        event = payload["event"]
+    return {"results": run_all(event)}
+
+
+@app.post("/api/metrics/result")
+async def api_metrics_result(request: Request):
+    from agents.result_tracker import ResultTrackerAgent
+
+    payload = await _read_payload(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="json_required")
+    agent = ResultTrackerAgent()
+    return agent.record_result(payload)
+
+
+@app.get("/api/features/build")
+async def api_features_build(home: str, away: str, sport: str = "football"):
+    from core.features import build_features
+
+    return build_features({"home": home, "away": away, "sport": sport})
+
+
+@app.get("/api/models/ensemble")
+async def api_models_ensemble(home: str, away: str, sport: str = "football"):
+    from core.features import build_features
+    from models.ensemble import predict_ensemble
+
+    feats = build_features({"home": home, "away": away, "sport": sport})
+    return predict_ensemble(feats)
 
 @app.get("/api/debug")
 async def debug_info():
