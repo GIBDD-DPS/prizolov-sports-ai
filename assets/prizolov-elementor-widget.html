@@ -33,6 +33,13 @@
 
       <div class="pz-consensus-box" id="main-consensus">Донорный консенсус: загрузка...</div>
 
+      <div class="pz-prediction-box" id="main-prediction">
+        <div class="pz-prediction-title">🎲 Вероятности исхода (1X2)</div>
+        <div class="pz-prediction-bars" id="main-prediction-bars"><div class="pz-loading">Расчёт...</div></div>
+        <div class="pz-prediction-meta" id="main-prediction-meta"></div>
+        <div class="pz-prediction-explain" id="main-prediction-explain"></div>
+      </div>
+
       <div class="pz-recommendations" id="main-recs">
         <div class="pz-loading">🤖 Анализирую матчи...</div>
       </div>
@@ -604,6 +611,77 @@
   }
 
 
+
+  .pz-prediction-box {
+    margin: 12px 0 16px;
+    padding: 12px;
+    background: #1a1a22;
+    border-radius: 10px;
+    border: 1px solid #2d2d38;
+  }
+
+  .pz-prediction-title {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #9aa0b5;
+    margin-bottom: 10px;
+  }
+
+  .pz-prediction-bar-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+    font-size: 12px;
+  }
+
+  .pz-prediction-bar-label {
+    width: 28px;
+    color: #ccc;
+  }
+
+  .pz-prediction-bar-track {
+    flex: 1;
+    height: 8px;
+    background: #2a2a32;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .pz-prediction-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+  }
+
+  .pz-prediction-bar-fill.home { background: #007aff; }
+  .pz-prediction-bar-fill.draw { background: #ff9500; }
+  .pz-prediction-bar-fill.away { background: #af52de; }
+
+  .pz-prediction-bar-pct {
+    width: 36px;
+    text-align: right;
+    color: #34c759;
+    font-weight: 600;
+  }
+
+  .pz-prediction-meta {
+    margin-top: 8px;
+    font-size: 11px;
+    color: #888;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .pz-prediction-explain {
+    margin-top: 8px;
+    font-size: 12px;
+    color: #b8bcc8;
+    line-height: 1.45;
+  }
+
+
 </style>
 
 <script>
@@ -611,7 +689,7 @@
   var API_URL = "/get-ai-sports.php";
   var API_BASE = window.PRIZOLOV_API_BASE || "https://prizolov-sports-dmandreyanov.amvera.io";
   var ALL_EVENTS_URL = "/api/all-events";
-  var WIDGET_BUILD = "2026-06-03-analytics-block";
+  var WIDGET_BUILD = "2026-06-04-prediction-1x2";
 
   var WINDOW_HOURS = 24;
   var MIN_PROBABILITY = 0.6;
@@ -844,7 +922,8 @@
         is_live: Boolean(event.is_live || String(event.status || "").toUpperCase() === "LIVE"),
         allRecommendations: allRecs,
         passableRecommendations: allRecs.filter(isPassable),
-        externalConsensus: normalizeConsensus(event.external_consensus)
+        externalConsensus: normalizeConsensus(event.external_consensus),
+        prediction: event.prediction || null
       };
     }
 
@@ -986,6 +1065,40 @@
       }
     }
 
+
+    function renderPrediction(event) {
+      var barsEl = byId("main-prediction-bars");
+      var metaEl = byId("main-prediction-meta");
+      var explainEl = byId("main-prediction-explain");
+      if (!barsEl) return;
+      var pred = event && event.prediction;
+      if (!pred || pred.home_win === undefined) {
+        barsEl.innerHTML = "<div class='pz-loading'>Прогноз 1X2 загружается с API...</div>";
+        if (metaEl) metaEl.textContent = "";
+        if (explainEl) explainEl.textContent = "";
+        return;
+      }
+      var h = Math.round((pred.home_win || 0) * 100);
+      var d = Math.round((pred.draw || 0) * 100);
+      var a = Math.round((pred.away_win || 0) * 100);
+      function barRow(label, pct, cls) {
+        return "<div class='pz-prediction-bar-row'><span class='pz-prediction-bar-label'>" + label +
+          "</span><div class='pz-prediction-bar-track'><div class='pz-prediction-bar-fill " + cls +
+          "' style='width:" + pct + "%'></div></div><span class='pz-prediction-bar-pct'>" + pct + "%</span></div>";
+      }
+      barsEl.innerHTML = barRow("П1", h, "home") + barRow("X", d, "draw") + barRow("П2", a, "away");
+      var q = pred.quality || {};
+      if (metaEl) {
+        metaEl.innerHTML =
+          "<span>Confidence: <strong>" + escapeHtml(q.confidence_label || "—") + "</strong></span>" +
+          "<span>Value: <strong>" + escapeHtml(q.value_label || "—") + "</strong></span>" +
+          "<span>Risk: <strong>" + escapeHtml(q.risk || "—") + "</strong></span>" +
+          "<span>Exp. ROI: <strong>" + asNum(q.expected_roi, 0).toFixed(1) + "%</strong></span>";
+      }
+      if (explainEl) explainEl.textContent = pred.explanation || "";
+    }
+
+
     function renderMain(index) {
       if (!allEvents.length) return;
       currentEventIndex = ((index % allEvents.length) + allEvents.length) % allEvents.length;
@@ -1018,6 +1131,8 @@
           consensusEl.textContent = donorsEnabled ? "Нет прогнозов от доноров" : "Внешние доноры отключены";
         }
       }
+
+      renderPrediction(event);
 
       var recsEl = byId("main-recs");
       if (!recsEl) return;

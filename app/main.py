@@ -37,7 +37,7 @@ if str(current_dir) not in sys.path:
     sys.path.insert(0, str(current_dir))
 
 # Инициализация приложения FastAPI
-app = FastAPI(title="Prizolov Sports AI", version="15.0")
+app = FastAPI(title="Prizolov Sports AI", version="16.0")
 
 # Глобальный CORS для связи с prizolov.ru
 app.add_middleware(
@@ -1542,6 +1542,13 @@ def _build_storefront_payload(
     except Exception as exc:
         logger.warning("Analytics v15 pipeline skipped: %s", exc)
 
+    try:
+        from prediction.engine import enrich_event_with_prediction
+
+        prepared = [enrich_event_with_prediction(e) for e in prepared]
+    except Exception as exc:
+        logger.warning("Prediction ensemble skipped: %s", exc)
+
     if recommendations_only:
         prepared = [e for e in prepared if e.get("has_passable")]
 
@@ -2276,6 +2283,135 @@ async def analytics_clv():
     from analytics.clv_tracker import clv_summary
 
     return clv_summary()
+
+
+def _prediction_event_from_query(
+    *,
+    home: str,
+    away: str,
+    sport: str = "football",
+    league: str = "",
+) -> Dict[str, Any]:
+    return {
+        "home": home.strip(),
+        "away": away.strip(),
+        "sport": sport.strip().lower() or "football",
+        "league": league.strip() or "—",
+        "recommendations": [],
+        "all_recommendations": [],
+    }
+
+
+@app.get("/api/predict/outcome")
+async def predict_outcome_get(
+    home: str,
+    away: str,
+    sport: str = "football",
+    league: str = "",
+):
+    if not home.strip() or not away.strip():
+        raise HTTPException(status_code=400, detail="home_and_away_required")
+    from prediction.engine import predict_match_outcomes
+
+    event = _prediction_event_from_query(home=home, away=away, sport=sport, league=league)
+    return predict_match_outcomes(event)
+
+
+@app.post("/api/predict/outcome")
+async def predict_outcome_post(request: Request):
+    payload = await _read_payload(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="json_object_required")
+    from prediction.engine import predict_match_outcomes
+
+    event = payload.get("event") if isinstance(payload.get("event"), dict) else payload
+    if not str(event.get("home") or "").strip() or not str(event.get("away") or "").strip():
+        raise HTTPException(status_code=400, detail="home_and_away_required")
+    return predict_match_outcomes(event)
+
+
+@app.get("/api/predict/learning")
+async def predict_learning_insights():
+    from prediction.learning import learning_insights
+
+    return learning_insights()
+
+
+@app.post("/api/predict/learning/result")
+async def predict_learning_record(request: Request):
+    from prediction.learning import record_match_result
+
+    payload = await _read_payload(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="json_object_required")
+    match = str(payload.get("match") or "").strip()
+    prediction = str(payload.get("prediction") or "").strip()
+    if not match or not prediction:
+        raise HTTPException(status_code=400, detail="match_and_prediction_required")
+    return record_match_result(
+        match=match,
+        prediction=prediction,
+        probability=_coerce_float(payload.get("probability"), 0.5, minimum=0.0, maximum=1.0),
+        result=str(payload.get("result") or "unknown"),
+        reason=str(payload.get("reason") or ""),
+        market=str(payload.get("market") or ""),
+        league=str(payload.get("league") or ""),
+        sport=str(payload.get("sport") or "football"),
+    )
+
+
+@app.get("/api/predict/summary")
+async def predict_summary(
+    window_hours: int = DEFAULT_WINDOW_HOURS,
+    include_live: bool = True,
+    include_upcoming: bool = True,
+    limit: int = 30,
+):
+    """Top events with ensemble 1X2 probabilities for dashboard."""
+    raw = _collect_raw_events(
+        _coerce_int(window_hours, DEFAULT_WINDOW_HOURS, minimum=1, maximum=72),
+        _safe_bool(include_live, True),
+        _safe_bool(include_upcoming, True),
+    )
+    prepared = [_prepare_event(e, 0.0, 1.0, 0.0) for e in raw]
+    try:
+        from analytics.pipeline import process_storefront_events
+
+        prepared = process_storefront_events(prepared)
+    except Exception:
+        pass
+    try:
+        from prediction.engine import enrich_event_with_prediction
+
+        prepared = [enrich_event_with_prediction(e) for e in prepared]
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"prediction_unavailable:{exc}") from exc
+
+    cap = _coerce_int(limit, 30, minimum=1, maximum=100)
+    items = []
+    for event in prepared[:cap]:
+        pred = event.get("prediction") or {}
+        if not pred:
+            continue
+        items.append(
+            {
+                "home": event.get("home"),
+                "away": event.get("away"),
+                "league": event.get("league"),
+                "sport": event.get("sport"),
+                "home_win": pred.get("home_win"),
+                "draw": pred.get("draw"),
+                "away_win": pred.get("away_win"),
+                "quality": pred.get("quality"),
+                "explanation": pred.get("explanation"),
+            }
+        )
+    return {
+        "total": len(items),
+        "events": items,
+        "generated_at": _now_utc().isoformat(),
+    }
+
 
 @app.get("/api/debug")
 async def debug_info():
