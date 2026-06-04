@@ -16,9 +16,12 @@ from analytics.value_detector import scan_events_for_value
 from analytics.xg_model import enrich_event_with_xg
 
 
+MAX_ANALYTICS_EVENTS = 80
+
+
 def process_storefront_events(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     enriched: List[Dict[str, Any]] = []
-    for raw in events:
+    for raw in events[:MAX_ANALYTICS_EVENTS]:
         event = enrich_event_with_xg(dict(raw))
         record_pari_lines_from_event(event)
         enriched.append(event)
