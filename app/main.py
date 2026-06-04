@@ -37,7 +37,7 @@ if str(current_dir) not in sys.path:
     sys.path.insert(0, str(current_dir))
 
 # Инициализация приложения FastAPI
-app = FastAPI(title="Prizolov Sports AI", version="14.0")
+app = FastAPI(title="Prizolov Sports AI", version="15.0")
 
 # Глобальный CORS для связи с prizolov.ru
 app.add_middleware(
@@ -1535,6 +1535,13 @@ def _build_storefront_payload(
     )
     prepared = [_prepare_event(e, min_probability, min_coefficient, min_support) for e in raw_events]
 
+    try:
+        from analytics.pipeline import process_storefront_events
+
+        prepared = process_storefront_events(prepared)
+    except Exception as exc:
+        logger.warning("Analytics v15 pipeline skipped: %s", exc)
+
     if recommendations_only:
         prepared = [e for e in prepared if e.get("has_passable")]
 
@@ -2214,6 +2221,61 @@ async def source_status():
         "timestamp": _now_utc().isoformat(),
     }
 
+
+
+
+@app.get("/api/analytics/v15/summary")
+async def analytics_v15_summary(
+    window_hours: int = DEFAULT_WINDOW_HOURS,
+    include_live: bool = True,
+    include_upcoming: bool = True,
+):
+    raw = _collect_raw_events(
+        _coerce_int(window_hours, DEFAULT_WINDOW_HOURS, minimum=1, maximum=72),
+        _safe_bool(include_live, True),
+        _safe_bool(include_upcoming, True),
+    )
+    prepared = [_prepare_event(e, 0.0, 1.0, 0.0) for e in raw]
+    try:
+        from analytics.pipeline import process_storefront_events, get_analytics_summary
+
+        prepared = process_storefront_events(prepared)
+        return get_analytics_summary(prepared)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"analytics_v15_unavailable:{exc}") from exc
+
+
+@app.get("/api/analytics/value-detector")
+async def analytics_value_detector(limit: int = 50):
+    events = _collect_raw_events(DEFAULT_WINDOW_HOURS, True, True)
+    prepared = [_prepare_event(e, 0.0, 1.0, 0.0) for e in events]
+    from analytics.value_detector import scan_events_for_value
+
+    return {"signals": scan_events_for_value(prepared, limit=_coerce_int(limit, 50, minimum=1, maximum=200))}
+
+
+@app.get("/api/analytics/line-movement")
+async def analytics_line_movement(limit: int = 40):
+    from analytics.line_movement import line_movement_report, line_monitor_status
+
+    return {
+        "status": line_monitor_status(),
+        "moves": line_movement_report(limit=_coerce_int(limit, 40, minimum=1, maximum=200)),
+    }
+
+
+@app.get("/api/analytics/roi")
+async def analytics_roi():
+    from analytics.roi_monitor import roi_summary
+
+    return roi_summary()
+
+
+@app.get("/api/analytics/clv")
+async def analytics_clv():
+    from analytics.clv_tracker import clv_summary
+
+    return clv_summary()
 
 @app.get("/api/debug")
 async def debug_info():
