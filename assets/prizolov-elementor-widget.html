@@ -72,6 +72,26 @@
     </div>
   </div>
 
+
+  <div class="pz-widget pz-analytics-panel" id="analytics-panel">
+    <h2 class="pz-analytics-title">📈 Аналитика ставок</h2>
+    <p class="pz-analytics-sub">Value · движение линии PARI/Pinnacle · CLV · ROI</p>
+    <div class="pz-analytics-grid">
+      <div class="pz-analytics-card">
+        <h3>Value Detector</h3>
+        <div id="analytics-value" class="pz-analytics-body"><div class="pz-loading">Загрузка...</div></div>
+      </div>
+      <div class="pz-analytics-card">
+        <h3>Движение линии</h3>
+        <div id="analytics-line" class="pz-analytics-body"><div class="pz-loading">Загрузка...</div></div>
+      </div>
+      <div class="pz-analytics-card pz-analytics-card-narrow">
+        <h3>CLV · ROI · xG</h3>
+        <div id="analytics-metrics" class="pz-analytics-body"><div class="pz-loading">Загрузка...</div></div>
+      </div>
+    </div>
+  </div>
+
   <div class="pz-widget" id="all-events-section" style="margin-top:30px;">
     <h2 style="margin-bottom:20px;">📋 Все ставки</h2>
     <div id="all-events-list"></div>
@@ -481,6 +501,109 @@
       grid-template-columns: 1fr;
     }
   }
+
+  .pz-analytics-panel {
+    margin-top: 28px;
+    padding: 18px;
+    background: #1a1a22;
+    border-radius: 12px;
+    border: 1px solid #2d2d38;
+  }
+
+  .pz-analytics-title {
+    margin: 0 0 6px;
+    font-size: 20px;
+  }
+
+  .pz-analytics-sub {
+    margin: 0 0 16px;
+    font-size: 12px;
+    color: #9a9aa3;
+  }
+
+  .pz-analytics-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 280px;
+    gap: 14px;
+  }
+
+  @media (max-width: 960px) {
+    .pz-analytics-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .pz-analytics-card {
+    background: #25252c;
+    border-radius: 10px;
+    padding: 12px;
+    border-left: 3px solid #34c759;
+  }
+
+  .pz-analytics-card h3 {
+    margin: 0 0 10px;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #aaa;
+  }
+
+  .pz-analytics-body {
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .pz-analytics-item {
+    padding: 8px 0;
+    border-bottom: 1px solid #333;
+  }
+
+  .pz-analytics-item:last-child {
+    border-bottom: none;
+  }
+
+  .pz-analytics-match {
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 3px;
+  }
+
+  .pz-analytics-meta {
+    font-size: 11px;
+    color: #888;
+  }
+
+  .pz-analytics-tag {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    margin-right: 4px;
+  }
+
+  .pz-analytics-tag.value {
+    background: rgba(52, 199, 89, 0.2);
+    color: #34c759;
+  }
+
+  .pz-analytics-tag.move {
+    background: rgba(0, 122, 255, 0.2);
+    color: #5ac8fa;
+  }
+
+  .pz-metric-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 0;
+    font-size: 12px;
+  }
+
+  .pz-metric-row strong {
+    color: #34c759;
+  }
+
+
 </style>
 
 <script>
@@ -488,7 +611,7 @@
   var API_URL = "/get-ai-sports.php";
   var API_BASE = window.PRIZOLOV_API_BASE || "https://prizolov-sports-dmandreyanov.amvera.io";
   var ALL_EVENTS_URL = "/api/all-events";
-  var WIDGET_BUILD = "2026-06-03-no-esports";
+  var WIDGET_BUILD = "2026-06-03-analytics-block";
 
   var WINDOW_HOURS = 24;
   var MIN_PROBABILITY = 0.6;
@@ -1004,6 +1127,7 @@
       if (byId("counter")) byId("counter").textContent = "Ошибка API";
       if (byId("all-events-list")) byId("all-events-list").innerHTML = "<div class='pz-loading'>" + escapeHtml(message) + "</div>";
       if (byId("sports-line")) byId("sports-line").innerHTML = "<span class='pz-sport-chip muted'>Ошибка загрузки</span>";
+      if (byId("analytics-value")) renderAnalytics(null);
     }
 
     function fetchFromAllEvents(modeCfg, cb) {
@@ -1067,12 +1191,97 @@
         renderStats();
         renderTable();
         renderMain(currentEventIndex);
+        fetchAnalytics();
 
         if (!allEvents.length) {
           showError("События не найдены для выбранного режима");
         }
       });
     }
+
+
+    var ANALYTICS_SUMMARY_URL = "/api/analytics/v15/summary";
+
+    function renderAnalytics(summary) {
+      var valueEl = byId("analytics-value");
+      var lineEl = byId("analytics-line");
+      var metricsEl = byId("analytics-metrics");
+      if (!valueEl || !lineEl || !metricsEl) return;
+
+      if (!summary || !summary.modules) {
+        var err = "<div class='pz-loading'>Аналитика недоступна</div>";
+        valueEl.innerHTML = err;
+        lineEl.innerHTML = err;
+        metricsEl.innerHTML = err;
+        return;
+      }
+
+      var vd = summary.modules.value_detector || {};
+      var signals = vd.top_signals || [];
+      if (!signals.length) {
+        valueEl.innerHTML = "<div class='pz-loading'>Нет value-сигналов</div>";
+      } else {
+        valueEl.innerHTML = signals.slice(0, 8).map(function (s) {
+          var prob = Math.round((s.model_probability || 0) * 100);
+          var edge = Math.round((s.edge || 0) * 1000) / 10;
+          return "<div class='pz-analytics-item'>" +
+            "<div class='pz-analytics-match'>" + escapeHtml(s.home) + " vs " + escapeHtml(s.away) + "</div>" +
+            "<div>" + formatBetHtml(s) + "</div>" +
+            "<div class='pz-analytics-meta'><span class='pz-analytics-tag value'>VALUE</span> вер " + prob +
+            "% · edge " + edge + "% · коэф " + asNum(s.coefficient, 0).toFixed(2) + "</div></div>";
+        }).join("");
+      }
+
+      var lm = summary.modules.line_movement || {};
+      var moves = lm.active_moves || [];
+      if (!moves.length) {
+        lineEl.innerHTML = "<div class='pz-loading'>Движений линии пока нет</div><div class='pz-analytics-meta'>PARI: " +
+          asNum(lm.pari_tracked_events, 0) + " событий в истории</div>";
+      } else {
+        lineEl.innerHTML = moves.slice(0, 6).map(function (m) {
+          var parts = (m.event_key || "").split("|");
+          var match = (parts[0] || "?") + " vs " + (parts[1] || "?");
+          var html = "<div class='pz-analytics-item'><div class='pz-analytics-match'>" + escapeHtml(match) + "</div>";
+          if (m.pari && m.pari.moves && m.pari.moves.length) {
+            html += "<div class='pz-analytics-meta'><span class='pz-analytics-tag move'>PARI</span> " +
+              m.pari.moves.slice(0, 2).map(function (mv) {
+                return escapeHtml(mv.line) + " " + mv.from + "→" + mv.to;
+              }).join(" · ") + "</div>";
+          }
+          if (m.pinnacle && m.pinnacle.moves && m.pinnacle.moves.length) {
+            html += "<div class='pz-analytics-meta'><span class='pz-analytics-tag move'>PIN</span> " +
+              m.pinnacle.moves.slice(0, 2).map(function (mv) {
+                return escapeHtml(mv.line) + " " + mv.from + "→" + mv.to;
+              }).join(" · ") + "</div>";
+          }
+          return html + "</div>";
+        }).join("");
+      }
+
+      var clv = summary.modules.clv || {};
+      var roi = summary.modules.roi_monitor || {};
+      var xg = summary.modules.xg_xga || {};
+      metricsEl.innerHTML =
+        "<div class='pz-metric-row'><span>CLV средн.</span><strong>" + asNum(clv.avg_clv_percent, 0).toFixed(2) + "%</strong></div>" +
+        "<div class='pz-metric-row'><span>CLV+ rate</span><strong>" + Math.round((clv.positive_clv_rate || 0) * 100) + "%</strong></div>" +
+        "<div class='pz-metric-row'><span>ROI</span><strong>" + asNum(roi.roi_percent, 0).toFixed(1) + "%</strong></div>" +
+        "<div class='pz-metric-row'><span>Открытых</span><strong>" + asNum(roi.open, 0) + "</strong></div>" +
+        "<div class='pz-metric-row'><span>xG событий</span><strong>" + asNum(xg.events_with_xg, 0) + "</strong></div>" +
+        "<div class='pz-metric-row'><span>Value</span><strong>" + asNum(vd.signals_total, 0) + "</strong></div>";
+    }
+
+    function fetchAnalytics() {
+      requestJson("GET", withBase(ANALYTICS_SUMMARY_URL) + "?" + qs({
+        window_hours: String(WINDOW_HOURS),
+        include_live: "true",
+        include_upcoming: "true"
+      }), null, function (data) {
+        renderAnalytics(data);
+      }, function () {
+        renderAnalytics(null);
+      });
+    }
+
 
     function bindControls() {
       var modeButtons = root.querySelectorAll(".pz-mode-btn");
@@ -1106,10 +1315,12 @@
 
     bindControls();
     reload();
+    fetchAnalytics();
     setInterval(function () {
       if (allEvents.length > 0) renderMain(currentEventIndex + 1);
     }, AUTO_ROTATE_MS);
     setInterval(reload, AUTO_REFRESH_MS);
+    setInterval(fetchAnalytics, AUTO_REFRESH_MS);
   }
 
   if (document.readyState === "loading") {
