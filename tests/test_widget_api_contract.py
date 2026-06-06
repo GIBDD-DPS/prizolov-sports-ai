@@ -171,6 +171,21 @@ class TestWidgetApiContract(unittest.TestCase):
         payload = response.json()
         self.assertTrue(payload["filters"].get("include_consensus"))
 
+    def test_get_ai_sports_supports_analytics_summary_proxy(self):
+        response = self.client.post(
+            "/get-ai-sports.php",
+            json={
+                "analytics_summary": True,
+                "window_hours": 24,
+                "include_live": True,
+                "include_upcoming": True,
+            },
+        )
+        self.assertIn(response.status_code, {200, 503})
+        if response.status_code == 200:
+            payload = response.json()
+            self.assertIn("modules", payload)
+
     def test_get_ai_sports_defaults_to_light_mode_without_consensus(self):
         response = self.client.post("/get-ai-sports.php", json={"get_all": True, "limit": 5})
         self.assertEqual(response.status_code, 200)

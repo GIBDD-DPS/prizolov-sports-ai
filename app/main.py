@@ -1905,6 +1905,17 @@ async def get_state(request: Request):
 @app.post("/get-ai-sports.php")
 async def get_ai_sports(request: Request):
     payload = await _read_payload(request)
+    if _safe_bool(payload.get("analytics_summary"), False):
+        _increment_fallback_usage("legacy_analytics_summary")
+        try:
+            return _build_analytics_v15_summary(
+                window_hours=_coerce_int(payload.get("window_hours"), DEFAULT_WINDOW_HOURS, minimum=1, maximum=72),
+                include_live=_safe_bool(payload.get("include_live"), True),
+                include_upcoming=_safe_bool(payload.get("include_upcoming"), True),
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"analytics_v15_unavailable:{exc}") from exc
+
     get_all = _safe_bool(payload.get("get_all"), False)
     if get_all:
         _increment_fallback_usage("legacy_get_all")
@@ -2246,23 +2257,36 @@ async def source_status():
 
 
 
-@app.get("/api/analytics/v15/summary")
-async def analytics_v15_summary(
-    window_hours: int = DEFAULT_WINDOW_HOURS,
-    include_live: bool = True,
-    include_upcoming: bool = True,
-):
+def _build_analytics_v15_summary(
+    *,
+    window_hours: int,
+    include_live: bool,
+    include_upcoming: bool,
+) -> Dict[str, Any]:
     raw = _collect_raw_events(
         _coerce_int(window_hours, DEFAULT_WINDOW_HOURS, minimum=1, maximum=72),
         _safe_bool(include_live, True),
         _safe_bool(include_upcoming, True),
     )
     prepared = [_prepare_event(e, 0.0, 1.0, 0.0) for e in raw[:80]]
-    try:
-        from analytics.pipeline import process_storefront_events, get_analytics_summary
+    from analytics.pipeline import process_storefront_events, get_analytics_summary
 
-        prepared = process_storefront_events(prepared)
-        return get_analytics_summary(prepared)
+    prepared = process_storefront_events(prepared)
+    return get_analytics_summary(prepared)
+
+
+@app.get("/api/analytics/v15/summary")
+async def analytics_v15_summary(
+    window_hours: int = DEFAULT_WINDOW_HOURS,
+    include_live: bool = True,
+    include_upcoming: bool = True,
+):
+    try:
+        return _build_analytics_v15_summary(
+            window_hours=window_hours,
+            include_live=include_live,
+            include_upcoming=include_upcoming,
+        )
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"analytics_v15_unavailable:{exc}") from exc
 
