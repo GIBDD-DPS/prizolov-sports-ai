@@ -4,6 +4,8 @@ from pathlib import Path
 
 os.environ.setdefault("SELF_LEARNING_STATE_PATH", "/tmp/prizolov_self_learning_state_test.json")
 os.environ.setdefault("SELF_LEARNING_MIN_FEEDBACK", "3")
+os.environ.setdefault("BOOKMAKER_SCRAPE_REQUEST_PATH_SYNC", "true")
+os.environ.setdefault("BOOKMAKER_SCRAPE_ENABLED", "true")
 
 # Чистим test-state до импорта приложения, чтобы тесты были детерминированы.
 _test_state_path = Path(os.environ["SELF_LEARNING_STATE_PATH"])

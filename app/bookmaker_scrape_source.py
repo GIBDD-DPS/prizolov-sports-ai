@@ -96,6 +96,8 @@ BOOKMAKER_SCRAPE_INTERVAL_SECONDS = int(os.getenv("BOOKMAKER_SCRAPE_INTERVAL_SEC
 BOOKMAKER_SCRAPE_CACHE_TTL_SECONDS = int(os.getenv("BOOKMAKER_SCRAPE_CACHE_TTL_SECONDS", "300"))
 BOOKMAKER_SCRAPE_LIMIT = int(os.getenv("BOOKMAKER_SCRAPE_LIMIT", "280"))
 BOOKMAKER_SCRAPE_PER_URL_LIMIT = int(os.getenv("BOOKMAKER_SCRAPE_PER_URL_LIMIT", "14"))
+# Production must keep this false so HTTP workers never block on multi-URL scrape.
+BOOKMAKER_SCRAPE_REQUEST_PATH_SYNC = _is_truthy_env("BOOKMAKER_SCRAPE_REQUEST_PATH_SYNC")
 BOOKMAKER_SCRAPE_USER_AGENT = (
     os.getenv("BOOKMAKER_SCRAPE_USER_AGENT")
     or "Mozilla/5.0 (compatible; Googlebot/2.1; +https://prizolov.ru/bot)"
@@ -857,6 +859,59 @@ def ingest_bookmaker_events(events: List[Dict[str, Any]]) -> int:
 
 
 _scrape_thread_started = False
+_scrape_in_progress = False
+_scrape_refresh_requested = threading.Event()
+_scrape_state_lock = threading.Lock()
+
+
+def _store_bookmaker_scrape_result(events: List[Dict[str, Any]], err: Optional[str], now_ts: float) -> None:
+    with _cache_lock:
+        cached = list(_cache.get("events") or [])
+        if events:
+            _cache["events"] = events
+            _cache["ts"] = now_ts
+            _cache["source"] = "bookmaker_scrape"
+            _cache["last_error"] = None
+            _cache["last_urls"] = list(BOOKMAKER_SCRAPE_URLS)
+            return
+        if cached:
+            _cache["last_error"] = err
+            return
+        _cache["events"] = []
+        _cache["ts"] = now_ts
+        _cache["last_error"] = err
+
+
+def _run_bookmaker_scrape_once() -> None:
+    global _scrape_in_progress
+    with _scrape_state_lock:
+        if _scrape_in_progress:
+            return
+        _scrape_in_progress = True
+
+    try:
+        events, err = scrape_bookmaker_urls_sync()
+        _store_bookmaker_scrape_result(events, err, time.time())
+    except Exception as exc:
+        logger.warning("Bookmaker background scrape error: %s", exc)
+        _store_bookmaker_scrape_result([], str(exc), time.time())
+    finally:
+        with _scrape_state_lock:
+            _scrape_in_progress = False
+
+
+def request_bookmaker_scrape_refresh() -> None:
+    """Non-blocking hint for the background scraper to run sooner."""
+    _scrape_refresh_requested.set()
+
+
+def _wait_for_bookmaker_scrape(timeout_seconds: float) -> None:
+    deadline = time.time() + max(0.0, timeout_seconds)
+    while time.time() < deadline:
+        with _scrape_state_lock:
+            if not _scrape_in_progress:
+                return
+        time.sleep(0.2)
 
 
 def _ensure_background_scrape_started() -> None:
@@ -867,11 +922,10 @@ def _ensure_background_scrape_started() -> None:
 
     def _loop() -> None:
         while BOOKMAKER_SCRAPE_ENABLED:
-            try:
-                scrape_bookmaker_urls_sync()
-            except Exception as exc:
-                logger.warning("Bookmaker background scrape error: %s", exc)
-            time.sleep(max(60, BOOKMAKER_SCRAPE_INTERVAL_SECONDS))
+            _run_bookmaker_scrape_once()
+            wait_seconds = max(60, BOOKMAKER_SCRAPE_INTERVAL_SECONDS)
+            if _scrape_refresh_requested.wait(timeout=wait_seconds):
+                _scrape_refresh_requested.clear()
 
     threading.Thread(target=_loop, name="bookmaker-scrape", daemon=True).start()
     logger.info(
@@ -882,32 +936,25 @@ def _ensure_background_scrape_started() -> None:
 
 
 def get_cached_bookmaker_events(force_refresh: bool = False) -> List[Dict[str, Any]]:
+    """Return cached bookmaker events without blocking HTTP workers on scrape."""
     _ensure_background_scrape_started()
-    now_ts = time.time()
+    if force_refresh:
+        request_bookmaker_scrape_refresh()
+
     with _cache_lock:
         cached = list(_cache.get("events") or [])
-        cached_ts = float(_cache.get("ts") or 0.0)
-        if cached and not force_refresh and (now_ts - cached_ts) < BOOKMAKER_SCRAPE_CACHE_TTL_SECONDS:
-            return cached
 
-    if now_ts - cached_ts < BOOKMAKER_SCRAPE_INTERVAL_SECONDS and cached:
-        return cached
-
-    events, err = scrape_bookmaker_urls_sync()
-    with _cache_lock:
-        if events:
-            _cache["events"] = events
-            _cache["ts"] = now_ts
-            _cache["source"] = "bookmaker_scrape"
-            _cache["last_error"] = None
-            _cache["last_urls"] = list(BOOKMAKER_SCRAPE_URLS)
-        elif cached:
-            return cached
+    if BOOKMAKER_SCRAPE_REQUEST_PATH_SYNC and (force_refresh or not cached):
+        with _scrape_state_lock:
+            scrape_active = _scrape_in_progress
+        if scrape_active:
+            _wait_for_bookmaker_scrape(timeout_seconds=120.0)
         else:
-            _cache["events"] = []
-            _cache["ts"] = now_ts
-            _cache["last_error"] = err
-    return events
+            _run_bookmaker_scrape_once()
+        with _cache_lock:
+            cached = list(_cache.get("events") or [])
+
+    return cached
 
 
 def get_status_snapshot() -> Dict[str, Any]:
@@ -918,8 +965,10 @@ def get_status_snapshot() -> Dict[str, Any]:
             "interval_seconds": BOOKMAKER_SCRAPE_INTERVAL_SECONDS,
             "cache_ttl_seconds": BOOKMAKER_SCRAPE_CACHE_TTL_SECONDS,
             "cached_events": len(_cache.get("events") or []),
+            "scrape_in_progress": _scrape_in_progress,
             "source": _cache.get("source"),
             "last_error": _cache.get("last_error"),
+            "cache_age_seconds": max(0, int(time.time() - float(_cache.get("ts") or 0.0))),
             "ingest_configured": bool(BOOKMAKER_INGEST_SECRET),
             "max_recommendations_per_event": BOOKMAKER_MAX_RECOMMENDATIONS,
             "sport_pages": list(PARI_SPORT_PAGES.keys()),
