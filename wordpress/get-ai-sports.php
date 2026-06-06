@@ -1,4 +1,9 @@
 <?php
+// Shared hosting may print PHP warnings before headers; keep JSON clean.
+if (!ob_get_level()) {
+    ob_start();
+}
+
 /**
  * PRIZOLOV Sports AI — same-origin proxy for prizolov.ru
  *
@@ -37,8 +42,16 @@ function prizolov_proxy_no_cache_headers(): void
     header('Pragma: no-cache');
 }
 
+function prizolov_proxy_flush_output_buffers(): void
+{
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+}
+
 function prizolov_proxy_json_response(int $status, array $payload): void
 {
+    prizolov_proxy_flush_output_buffers();
     http_response_code($status);
     header('Content-Type: application/json; charset=utf-8');
     prizolov_proxy_cors_headers();
@@ -163,7 +176,8 @@ function prizolov_proxy_forward(array $payload): void
     $responseBody = curl_exec($ch);
     $curlError = curl_error($ch);
     $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
+    // curl_close() is deprecated in PHP 8.5+ and can emit HTML warnings on shared hosting.
+    unset($ch);
 
     if ($responseBody === false) {
         prizolov_proxy_json_response(503, [
@@ -188,6 +202,7 @@ function prizolov_proxy_forward(array $payload): void
         prizolov_proxy_json_response($status, $decoded);
     }
 
+    prizolov_proxy_flush_output_buffers();
     http_response_code(200);
     header('Content-Type: application/json; charset=utf-8');
     prizolov_proxy_cors_headers();
@@ -199,6 +214,7 @@ function prizolov_proxy_forward(array $payload): void
 $method = isset($_SERVER['REQUEST_METHOD']) ? strtoupper((string) $_SERVER['REQUEST_METHOD']) : 'GET';
 
 if ($method === 'OPTIONS') {
+    prizolov_proxy_flush_output_buffers();
     http_response_code(204);
     prizolov_proxy_cors_headers();
     prizolov_proxy_no_cache_headers();
