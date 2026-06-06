@@ -23,6 +23,17 @@ _cache_lock = threading.Lock()
 _API_FOOTBALL_BLOCK_UNTIL = 0.0
 _API_FOOTBALL_BLOCK_SECONDS = int(os.getenv("API_FOOTBALL_BLOCK_SECONDS", "3600"))
 _API_FOOTBALL_LAST_WARN_TS = 0.0
+_ODDS_API_BLOCK_UNTIL = 0.0
+_ODDS_API_BLOCK_SECONDS = int(os.getenv("ODDS_API_BLOCK_SECONDS", "86400"))
+_ODDS_API_LAST_WARN_TS = 0.0
+_ODDS_API_QUOTA_ERROR_CODES = frozenset(
+    {
+        "OUT_OF_USAGE_CREDITS",
+        "INVALID_API_KEY",
+        "ACCOUNT_SUSPENDED",
+        "ACCOUNT_INACTIVE",
+    }
+)
 
 _cache: Dict[str, Any] = {
     "ts": 0.0,
@@ -46,12 +57,37 @@ def _parse_iso_datetime(value: Any) -> Optional[datetime.datetime]:
         return None
 
 
+def _odds_api_enabled() -> bool:
+    return os.getenv("THE_ODDS_API_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _odds_api_is_blocked() -> bool:
+    return time.time() < _ODDS_API_BLOCK_UNTIL
+
+
 def resolve_odds_api_key() -> Optional[str]:
+    if not _odds_api_enabled():
+        return None
     for name in ("THE_ODDS_API_KEY", "API_KEYS_ODDS", "ODDS_API_KEY"):
         value = (os.getenv(name) or "").strip()
         if value:
             return value
     return None
+
+
+def _odds_api_mark_blocked(error_code: str) -> None:
+    global _ODDS_API_BLOCK_UNTIL
+    _ODDS_API_BLOCK_UNTIL = time.time() + max(300, _ODDS_API_BLOCK_SECONDS)
+
+
+def _odds_api_log_warning(message: str, *args: Any) -> None:
+    global _ODDS_API_LAST_WARN_TS
+    now_ts = time.time()
+    if now_ts - _ODDS_API_LAST_WARN_TS > 300:
+        _ODDS_API_LAST_WARN_TS = now_ts
+        logger.warning(message, *args)
+    else:
+        logger.debug(message, *args)
 
 
 def _normalize_sport_key(sport_key: Optional[str]) -> str:
@@ -204,12 +240,18 @@ def transform_odds_event(event: Dict[str, Any], now_utc: datetime.datetime) -> O
 
 
 def fetch_odds_events_sync(limit: int = REAL_EVENTS_FETCH_LIMIT) -> List[Dict[str, Any]]:
+    if not _odds_api_enabled():
+        return []
+    if _odds_api_is_blocked():
+        logger.debug("Odds API skipped: quota/cooldown active")
+        return []
+
     api_key = resolve_odds_api_key()
     if not api_key:
         with _cache_lock:
             _cache["last_error"] = "missing_api_key"
             _cache["last_http_status"] = None
-        logger.warning("THE_ODDS_API_KEY не задан — реальные события недоступны")
+        _odds_api_log_warning("THE_ODDS_API_KEY не задан — реальные события недоступны")
         return []
 
     params = urllib_parse.urlencode(
@@ -239,13 +281,15 @@ def fetch_odds_events_sync(limit: int = REAL_EVENTS_FETCH_LIMIT) -> List[Dict[st
         with _cache_lock:
             _cache["last_error"] = error_code
             _cache["last_http_status"] = exc.code
-        logger.warning("Odds API HTTP %s (%s)", exc.code, error_code)
+        if error_code in _ODDS_API_QUOTA_ERROR_CODES or exc.code in {401, 403}:
+            _odds_api_mark_blocked(error_code)
+        _odds_api_log_warning("Odds API HTTP %s (%s)", exc.code, error_code)
         return []
     except (URLError, TimeoutError, ValueError) as exc:
         with _cache_lock:
             _cache["last_error"] = f"request_error: {exc}"
             _cache["last_http_status"] = None
-        logger.warning("Odds API request failed: %s", exc)
+        _odds_api_log_warning("Odds API request failed: %s", exc)
         return []
 
     try:
@@ -261,7 +305,9 @@ def fetch_odds_events_sync(limit: int = REAL_EVENTS_FETCH_LIMIT) -> List[Dict[st
         with _cache_lock:
             _cache["last_error"] = error_code
             _cache["last_http_status"] = status
-        logger.warning("Odds API error: %s", error_code)
+        if error_code in _ODDS_API_QUOTA_ERROR_CODES:
+            _odds_api_mark_blocked(error_code)
+        _odds_api_log_warning("Odds API error: %s", error_code)
         return []
 
     if not isinstance(payload, list):
@@ -461,7 +507,9 @@ def get_cached_odds_events(force_refresh: bool = False) -> List[Dict[str, Any]]:
         if not force_refresh and cached and (now_ts - cached_ts) < REAL_EVENTS_CACHE_TTL_SECONDS:
             return cached
 
-    events: List[Dict[str, Any]] = fetch_odds_events_sync()
+    events: List[Dict[str, Any]] = []
+    if _odds_api_enabled() and not _odds_api_is_blocked() and resolve_odds_api_key():
+        events = fetch_odds_events_sync()
     if not events:
         events = fetch_api_football_events_sync()
     with _cache_lock:
@@ -481,6 +529,7 @@ def get_status_snapshot() -> Dict[str, Any]:
     with _cache_lock:
         return {
             "enabled": os.getenv("REAL_EVENTS_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"},
+            "odds_api_enabled": _odds_api_enabled(),
             "api_key_present": bool(resolve_odds_api_key()),
             "api_football_key_present": bool(_api_football_key()),
             "source": _cache.get("source"),
@@ -489,5 +538,7 @@ def get_status_snapshot() -> Dict[str, Any]:
             "cache_ttl_seconds": REAL_EVENTS_CACHE_TTL_SECONDS,
             "last_error": _cache.get("last_error"),
             "last_http_status": _cache.get("last_http_status"),
+            "odds_api_blocked": _odds_api_is_blocked(),
+            "odds_api_blocked_until_ts": _ODDS_API_BLOCK_UNTIL if _odds_api_is_blocked() else None,
             "api_football_blocked": _api_football_is_blocked(),
         }
