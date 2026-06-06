@@ -688,8 +688,8 @@
 (function () {
   var API_URL = "/get-ai-sports.php";
   var API_BASE = window.PRIZOLOV_API_BASE || "";
-  var ALL_EVENTS_URL = "/api/all-events";
-  var WIDGET_BUILD = "2026-06-03-same-origin-light";
+  var REMOTE_API_BASE = "https://prizolov-sports-dmandreyanov.amvera.io";
+  var WIDGET_BUILD = "2026-06-06-php-proxy";
 
   var WINDOW_HOURS = 24;
   var MIN_PROBABILITY = 0.6;
@@ -1258,20 +1258,20 @@
     function fetchFromAllEvents(modeCfg, cb, forceRefresh) {
       var useRefresh = forceRefresh === true || !INITIAL_REFRESH_DONE;
       INITIAL_REFRESH_DONE = true;
-      requestJson("GET", withBase(ALL_EVENTS_URL) + "?" + qs({
-        window_hours: String(WINDOW_HOURS),
-        include_live: "true",
-        include_upcoming: "true",
-        passable_only: "false",
-        min_probability: "0",
-        min_coefficient: "1",
-        include_consensus: "false",
-        min_consensus_sources: String(MIN_CONSENSUS_SOURCES),
-        include_watch: "true",
-        limit: "80",
+      requestJson("POST", withBase(API_URL), {
+        get_all: true,
+        window_hours: WINDOW_HOURS,
+        include_live: true,
+        include_upcoming: true,
+        min_probability: 0,
+        min_coefficient: 1,
+        include_consensus: false,
+        min_consensus_sources: MIN_CONSENSUS_SOURCES,
+        include_watch: true,
+        limit: 80,
         sort_by: "passability",
-        refresh: useRefresh ? "true" : "false"
-      }), null, function (payload) {
+        refresh: useRefresh
+      }, function (payload) {
         donorsEnabled = Boolean(payload && payload.external_donors && payload.external_donors.enabled);
         cb(Array.isArray(payload && payload.events) ? payload.events : []);
       }, function () {
@@ -1398,14 +1398,21 @@
     }
 
     function fetchAnalytics() {
-      requestJson("GET", withBase(ANALYTICS_SUMMARY_URL) + "?" + qs({
+      var query = qs({
         window_hours: String(WINDOW_HOURS),
         include_live: "true",
         include_upcoming: "true"
-      }), null, function (data) {
+      });
+      var localUrl = withBase(ANALYTICS_SUMMARY_URL) + "?" + query;
+      var remoteUrl = REMOTE_API_BASE + ANALYTICS_SUMMARY_URL + "?" + query;
+      requestJson("GET", localUrl, null, function (data) {
         renderAnalytics(data);
       }, function () {
-        renderAnalytics(null);
+        requestJson("GET", remoteUrl, null, function (data) {
+          renderAnalytics(data);
+        }, function () {
+          renderAnalytics(null);
+        });
       });
     }
 
