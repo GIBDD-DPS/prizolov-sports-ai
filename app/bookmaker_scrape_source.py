@@ -987,3 +987,12 @@ def _winline_status_snapshot() -> Dict[str, Any]:
     except Exception as exc:
         return {"enabled": False, "error": str(exc)}
 
+
+def _melbet_status_snapshot() -> Dict[str, Any]:
+    try:
+        from melbet_scrape_source import get_status_snapshot as melbet_status
+
+        return melbet_status()
+    except Exception as exc:
+        return {"enabled": False, "error": str(exc)}
+
