@@ -461,20 +461,7 @@ def get_cached_odds_events(force_refresh: bool = False) -> List[Dict[str, Any]]:
         if not force_refresh and cached and (now_ts - cached_ts) < REAL_EVENTS_CACHE_TTL_SECONDS:
             return cached
 
-    from oddspapi_events import fetch_oddspapi_events_sync, resolve_oddspapi_key
-
-    events: List[Dict[str, Any]] = []
-    if resolve_oddspapi_key():
-        events, oddspapi_error = fetch_oddspapi_events_sync(limit=REAL_EVENTS_FETCH_LIMIT)
-        if oddspapi_error:
-            with _cache_lock:
-                _cache["last_error"] = oddspapi_error
-        if events:
-            with _cache_lock:
-                _cache["source"] = "oddspapi"
-                _cache["last_error"] = None
-    if not events and not resolve_oddspapi_key():
-        events = fetch_odds_events_sync()
+    events: List[Dict[str, Any]] = fetch_odds_events_sync()
     if not events:
         events = fetch_api_football_events_sync()
     with _cache_lock:
@@ -491,21 +478,16 @@ def get_cached_odds_events(force_refresh: bool = False) -> List[Dict[str, Any]]:
 
 
 def get_status_snapshot() -> Dict[str, Any]:
-    from oddspapi_events import resolve_oddspapi_key, get_oddspapi_status
-
     with _cache_lock:
         return {
             "enabled": os.getenv("REAL_EVENTS_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"},
-            "oddspapi_key_present": bool(resolve_oddspapi_key()),
             "api_key_present": bool(resolve_odds_api_key()),
             "api_football_key_present": bool(_api_football_key()),
             "source": _cache.get("source"),
-            "fallback_chain": ["oddspapi", "odds_api", "api_football"],
-            "oddspapi_client": "httpx" if __import__("oddspapi_events")._httpx else "urllib",
+            "fallback_chain": ["odds_api", "api_football"],
             "cached_events": len(_cache.get("events") or []),
             "cache_ttl_seconds": REAL_EVENTS_CACHE_TTL_SECONDS,
             "last_error": _cache.get("last_error"),
             "last_http_status": _cache.get("last_http_status"),
-            "oddspapi": get_oddspapi_status(),
             "api_football_blocked": _api_football_is_blocked(),
         }
