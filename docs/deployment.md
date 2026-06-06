@@ -85,25 +85,15 @@ After deploy, verify:
 - `GET /api/source-status` (quality + external donor runtime)
 - `GET /api/consensus/top`
 
-## The Odds API (Amvera)
+## Storefront events (Amvera)
 
-Задайте в переменных окружения Amvera (не в git):
+Источник событий для витрины — **bookmaker scrape** (Pari.ru и аналоги). The Odds API и API-Football удалены.
 
-- `API_FOOTBALL_KEY` — ключ с https://www.api-football.com/ (заголовок `x-apisports-key`, хост `https://v3.football.api-sports.io`)
-- `THE_ODDS_API_KEY` — ключ с https://the-odds-api.com/ (основной источник котировок)
-- `REAL_EVENTS_ENABLED=true`
-
-Проверка: `GET /api/source-status` → `real_events.api_key_present: true`, `last_error: null`.
-
-Если `OUT_OF_USAGE_CREDITS` — бесплатные credits закончились. Бэкенд автоматически паузит Odds API на `ODDS_API_BLOCK_SECONDS` (по умолчанию 24ч) и переходит на API-Football / bookmaker scrape без спама в логах. Полностью отключить: `THE_ODDS_API_ENABLED=false` в Amvera.
-
-### Если API-Football `account is suspended`
-
-Аккаунт нужно восстановить на https://dashboard.api-football.com — до этого API не отдаёт матчи. Повторные запросы к API-Football приостанавливаются на 1 час (`API_FOOTBALL_BLOCK_SECONDS`), чтобы не спамить логи.
+Проверка: `GET /api/source-status` → `events_source.primary: "bookmaker_scrape"`, `bookmaker_scrape.cached_events > 0`.
 
 ## Bookmaker scrape (Pari.ru)
 
-When The Odds API/API-Football are unavailable, enable periodic scrape of bookmaker line pages:
+Основной источник линии и событий:
 
 ```env
 BOOKMAKER_SCRAPE_ENABLED=true
