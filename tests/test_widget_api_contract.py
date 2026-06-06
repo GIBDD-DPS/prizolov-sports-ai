@@ -151,6 +151,34 @@ class TestWidgetApiContract(unittest.TestCase):
         self.assertIn("readiness_flags", payload)
         self.assertIn("value_only_premium_lines", payload["readiness_flags"])
 
+    def test_all_events_defaults_to_light_mode_without_consensus(self):
+        response = self.client.get("/api/all-events?limit=10&refresh=false")
+        self.assertEqual(response.status_code, 200)
+
+        payload = response.json()
+        self.assertIn("events", payload)
+        self.assertIn("filters", payload)
+        self.assertFalse(payload["filters"].get("include_consensus"))
+        self.assertIn("external_donors", payload)
+        self.assertFalse(payload["external_donors"].get("enabled", True))
+
+    def test_all_events_explicit_consensus_can_be_enabled(self):
+        response = self.client.get(
+            "/api/all-events?include_consensus=true&limit=5&refresh=false"
+        )
+        self.assertEqual(response.status_code, 200)
+
+        payload = response.json()
+        self.assertTrue(payload["filters"].get("include_consensus"))
+
+    def test_get_ai_sports_defaults_to_light_mode_without_consensus(self):
+        response = self.client.post("/get-ai-sports.php", json={"get_all": True, "limit": 5})
+        self.assertEqual(response.status_code, 200)
+
+        payload = response.json()
+        self.assertIn("filters", payload)
+        self.assertFalse(payload["filters"].get("include_consensus"))
+
     def test_all_events_supports_filters_and_top_recommendations(self):
         response = self.client.get(
             "/api/all-events?lang=en&sport=football&min_probability=0.6&sort_by=auto&limit=3&policy_mode=degraded&adaptive_policy=true"

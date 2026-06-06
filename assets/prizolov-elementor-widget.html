@@ -687,9 +687,9 @@
 <script>
 (function () {
   var API_URL = "/get-ai-sports.php";
-  var API_BASE = window.PRIZOLOV_API_BASE || "https://prizolov-sports-dmandreyanov.amvera.io";
+  var API_BASE = window.PRIZOLOV_API_BASE || "";
   var ALL_EVENTS_URL = "/api/all-events";
-  var WIDGET_BUILD = "2026-06-04-api-stable";
+  var WIDGET_BUILD = "2026-06-03-same-origin-light";
 
   var WINDOW_HOURS = 24;
   var MIN_PROBABILITY = 0.6;
@@ -1265,7 +1265,7 @@
         passable_only: "false",
         min_probability: "0",
         min_coefficient: "1",
-        include_consensus: "true",
+        include_consensus: "false",
         min_consensus_sources: String(MIN_CONSENSUS_SOURCES),
         include_watch: "true",
         limit: "80",

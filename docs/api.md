@@ -231,7 +231,7 @@ Value-only premium lines режим:
 `GET /api/all-events` now supports and returns donor consensus fields:
 
 Query params:
-- `include_consensus` (bool, default `true`)
+- `include_consensus` (bool, default `false` for storefront; pass `true` to enable donor consensus)
 - `min_consensus_sources` (int, default from env)
 
 Response additions:
