@@ -90,21 +90,12 @@ After deploy, verify:
 Задайте в переменных окружения Amvera (не в git):
 
 - `API_FOOTBALL_KEY` — ключ с https://www.api-football.com/ (заголовок `x-apisports-key`, хост `https://v3.football.api-sports.io`)
-- `ODDSPAPI_API_KEY` — ключ с https://oddspapi.io/ (приоритетный источник, если задан)
-- `THE_ODDS_API_KEY` — ключ с https://the-odds-api.com/ (fallback)
+- `THE_ODDS_API_KEY` — ключ с https://the-odds-api.com/ (основной источник котировок)
 - `REAL_EVENTS_ENABLED=true`
 
 Проверка: `GET /api/source-status` → `real_events.api_key_present: true`, `last_error: null`.
 
 Если `OUT_OF_USAGE_CREDITS` — бесплатные credits закончились; дождитесь сброса или подключите платный план.
-
-### Если в логах OddsPapi HTTP 403
-
-Запросы с IP Amvera могут блокироваться Cloudflare. Варианты:
-
-- Задать `ODDSPAPI_HTTP_PROXY` (HTTPS-прокси с «белым» IP)
-- Попросить OddsPapi whitelist egress IP вашего контейнера
-- После 403 запросы к OddsPapi паузятся на 15 мин (`ODDSPAPI_BLOCK_SECONDS`)
 
 ### Если API-Football `account is suspended`
 
@@ -112,7 +103,7 @@ After deploy, verify:
 
 ## Bookmaker scrape (Pari.ru)
 
-When OddsPapi/API-Football are unavailable, enable periodic scrape of bookmaker line pages:
+When The Odds API/API-Football are unavailable, enable periodic scrape of bookmaker line pages:
 
 ```env
 BOOKMAKER_SCRAPE_ENABLED=true
