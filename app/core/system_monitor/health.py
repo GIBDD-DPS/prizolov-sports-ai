@@ -46,14 +46,6 @@ def data_freshness() -> Dict[str, str]:
             out["odds"] = _ago_label(float(last))
     except Exception:
         pass
-    try:
-        from real_events_source import get_status_snapshot
-
-        re = get_status_snapshot()
-        if re.get("last_fetch_ts"):
-            out["news"] = _ago_label(float(re["last_fetch_ts"]))
-    except Exception:
-        pass
     out["injuries"] = "2 min ago"
     return out
 

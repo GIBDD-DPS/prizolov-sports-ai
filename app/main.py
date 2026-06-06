@@ -143,7 +143,6 @@ _STOREFRONT_DEMO_EVENTS_ENV = os.getenv(
 ).strip().lower() in {"1", "true", "yes", "on"}
 # Production safety: fictional fixtures stay off unless explicitly allowed.
 _ALLOW_STOREFRONT_DEMO = os.getenv("ALLOW_STOREFRONT_DEMO", "false").strip().lower() in {"1", "true", "yes", "on"}
-REAL_EVENTS_ENABLED = os.getenv("REAL_EVENTS_ENABLED", _env_default("REAL_EVENTS_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "on"}
 STOREFRONT_DEMO_EVENTS_ENABLED = _STOREFRONT_DEMO_EVENTS_ENV and _ALLOW_STOREFRONT_DEMO
 
 
@@ -1363,21 +1362,6 @@ def _collect_raw_events(
     now_utc = _now_utc()
     items: List[Dict[str, Any]] = []
 
-    if REAL_EVENTS_ENABLED:
-        try:
-            from real_events_source import get_cached_odds_events
-
-            odds_events = get_cached_odds_events(force_refresh=force_refresh)
-            for event in odds_events:
-                is_live = _safe_bool(event.get("is_live"), False)
-                if is_live and not include_live:
-                    continue
-                if not is_live and not include_upcoming:
-                    continue
-                items.append(copy.deepcopy(event))
-        except Exception as exc:
-            logger.warning("⚠️ Real events source failed: %s", exc)
-
     if not items:
         try:
             from bookmaker_scrape_source import get_cached_bookmaker_events
@@ -1630,7 +1614,7 @@ def _build_storefront_payload(
         "consensus_top": consensus_top,
         "external_donors": donor_summary,
         "generated_at": _now_utc().isoformat(),
-        "source": "odds_api" if REAL_EVENTS_ENABLED else "storefront-aggregated",
+        "source": _resolve_storefront_events_source_label(),
     }
 
     _update_low_event_streak(len(prepared))
@@ -1737,22 +1721,16 @@ def _resolve_storefront_events_source_label() -> str:
     if STOREFRONT_DEMO_EVENTS_ENABLED:
         return "demo_templates"
     try:
-        from real_events_source import get_status_snapshot as real_status
-
-        real_source = real_status().get("source")
-        if REAL_EVENTS_ENABLED and real_source not in {None, "none"}:
-            return str(real_source)
-    except Exception:
-        pass
-    try:
         from bookmaker_scrape_source import get_status_snapshot as bookmaker_status
 
         bk = bookmaker_status()
-        if bk.get("enabled") and int(bk.get("cached_events") or 0) > 0:
-            return str(bk.get("source") or "bookmaker_scrape")
+        if bk.get("enabled"):
+            if int(bk.get("cached_events") or 0) > 0:
+                return str(bk.get("source") or "bookmaker_scrape")
+            return "bookmaker_scrape"
     except Exception:
         pass
-    return "odds_api" if REAL_EVENTS_ENABLED else "none"
+    return "none"
 
 # ============================================
 # API
@@ -2212,8 +2190,6 @@ async def ingest_bookmaker_events(request: Request):
 
 @app.get("/api/source-status")
 async def source_status():
-    from real_events_source import get_status_snapshot
-
     alerts = _build_alerts()
     with _metrics_lock:
         cache_size = len(_cache)
@@ -2256,7 +2232,10 @@ async def source_status():
             "last_donor_coverage_ratio": donor_coverage,
         },
         "external_donors": donor_pipeline,
-        "real_events": get_status_snapshot(),
+        "events_source": {
+            "primary": "bookmaker_scrape",
+            "removed_providers": ["the_odds_api", "api_football"],
+        },
         "bookmaker_scrape": (
             __import__("bookmaker_scrape_source", fromlist=["get_status_snapshot"]).get_status_snapshot()
         ),
