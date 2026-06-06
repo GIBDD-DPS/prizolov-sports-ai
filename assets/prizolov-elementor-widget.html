@@ -688,8 +688,7 @@
 (function () {
   var API_URL = "/get-ai-sports.php";
   var API_BASE = window.PRIZOLOV_API_BASE || "";
-  var REMOTE_API_BASE = "https://prizolov-sports-dmandreyanov.amvera.io";
-  var WIDGET_BUILD = "2026-06-06-php-proxy";
+  var WIDGET_BUILD = "2026-06-06-analytics-proxy";
 
   var WINDOW_HOURS = 24;
   var MIN_PROBABILITY = 0.6;
@@ -1327,8 +1326,6 @@
     }
 
 
-    var ANALYTICS_SUMMARY_URL = "/api/analytics/v15/summary";
-
     function renderAnalytics(summary) {
       var valueEl = byId("analytics-value");
       var lineEl = byId("analytics-line");
@@ -1398,21 +1395,15 @@
     }
 
     function fetchAnalytics() {
-      var query = qs({
-        window_hours: String(WINDOW_HOURS),
-        include_live: "true",
-        include_upcoming: "true"
-      });
-      var localUrl = withBase(ANALYTICS_SUMMARY_URL) + "?" + query;
-      var remoteUrl = REMOTE_API_BASE + ANALYTICS_SUMMARY_URL + "?" + query;
-      requestJson("GET", localUrl, null, function (data) {
+      requestJson("POST", withBase(API_URL), {
+        analytics_summary: true,
+        window_hours: WINDOW_HOURS,
+        include_live: true,
+        include_upcoming: true
+      }, function (data) {
         renderAnalytics(data);
       }, function () {
-        requestJson("GET", remoteUrl, null, function (data) {
-          renderAnalytics(data);
-        }, function () {
-          renderAnalytics(null);
-        });
+        renderAnalytics(null);
       });
     }
 
