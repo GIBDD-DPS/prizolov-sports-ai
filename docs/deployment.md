@@ -95,7 +95,7 @@ After deploy, verify:
 
 Проверка: `GET /api/source-status` → `real_events.api_key_present: true`, `last_error: null`.
 
-Если `OUT_OF_USAGE_CREDITS` — бесплатные credits закончились; дождитесь сброса или подключите платный план.
+Если `OUT_OF_USAGE_CREDITS` — бесплатные credits закончились. Бэкенд автоматически паузит Odds API на `ODDS_API_BLOCK_SECONDS` (по умолчанию 24ч) и переходит на API-Football / bookmaker scrape без спама в логах. Полностью отключить: `THE_ODDS_API_ENABLED=false` в Amvera.
 
 ### Если API-Football `account is suspended`
 
