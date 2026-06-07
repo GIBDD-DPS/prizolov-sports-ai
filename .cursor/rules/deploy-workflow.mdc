@@ -1,0 +1,18 @@
+---
+description: Auto commit, merge, and deploy after every file change
+alwaysApply: true
+---
+
+# Deploy & Git Workflow
+
+After **every** batch of file changes in this project:
+
+1. Bump version in changed file headers (+0.02 small / +1.02 global) and `VERSION`.
+2. Update `CHANGELOG.md`.
+3. `git add` relevant files → commit with clear message.
+4. Pull/merge `origin/main` if diverged → resolve conflicts → push `origin main`.
+5. Amvera deploys from GitHub push automatically (root `amvera.yaml` + `Dockerfile`).
+
+Do not ask the user to commit, push, or deploy — do it autonomously.
+
+Never force-push to `main`. Never skip git hooks.

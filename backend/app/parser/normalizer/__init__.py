@@ -1,0 +1,6 @@
+# ============================================
+# Copyright (c) 2026
+# PRIZOLOV SPORTS AI v14.06 (STORE-FRONT OPTIMIZED)
+# Author: Dm.Andreyanov
+# Organization: Prizolov Market / Prizolov Lab
+# ============================================
