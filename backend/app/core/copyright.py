@@ -1,6 +1,6 @@
 # ============================================
 # Copyright (c) 2026
-# PRIZOLOV SPORTS AI v14.08 (STORE-FRONT OPTIMIZED)
+# PRIZOLOV SPORTS AI v14.10 (STORE-FRONT OPTIMIZED)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
@@ -10,13 +10,13 @@
 COPYRIGHT_HEADER = """\
 # ============================================
 # Copyright (c) 2026
-# PRIZOLOV SPORTS AI v14.08 (STORE-FRONT OPTIMIZED)
+# PRIZOLOV SPORTS AI v14.10 (STORE-FRONT OPTIMIZED)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
 """
 
 PRODUCT_NAME = "PRIZOLOV SPORTS AI"
-PRODUCT_VERSION = "14.08"
+PRODUCT_VERSION = "14.10"
 AUTHOR = "Dm.Andreyanov"
 ORGANIZATION = "Prizolov Market / Prizolov Lab"

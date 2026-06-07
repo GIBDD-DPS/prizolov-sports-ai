@@ -11,7 +11,8 @@ After **every** batch of file changes in this project:
 2. Update `CHANGELOG.md`.
 3. `git add` relevant files → commit with clear message.
 4. Pull/merge `origin/main` if diverged → resolve conflicts → push `origin main`.
-5. Amvera project **`prizolov-sports`** deploys from GitHub push (root `amvera.yaml` + `Dockerfile`).
+5. Run `python scripts/verify_project.py` before push.
+6. Amvera project **`prizolov-sports`** deploys from GitHub push (root `amvera.yaml` + `Dockerfile`).
 
 Do not ask the user to commit, push, or deploy — do it autonomously.
 

@@ -1,6 +1,6 @@
 <!-- ============================================
 Copyright (c) 2026
-PRIZOLOV SPORTS AI v14.06 (STORE-FRONT OPTIMIZED)
+PRIZOLOV SPORTS AI v14.10 (STORE-FRONT OPTIMIZED)
 Author: Dm.Andreyanov
 Organization: Prizolov Market / Prizolov Lab
 ============================================ -->
@@ -39,6 +39,13 @@ uvicorn app.main:app --reload --port 8080
 
 # Manual parser run
 python -m app.parser.runner
+```
+
+## Проверка проекта (автоматически)
+
+```bash
+python scripts/verify_project.py
+python scripts/sync_copyright.py   # синхронизация v14.x в headers
 ```
 
 ## Amvera — одно приложение
@@ -87,6 +94,12 @@ GET https://prizolov-sports-dmandreyanov.amvera.io/api/v1/health
 POST https://prizolov-sports-dmandreyanov.amvera.io/api/v1/admin/parse
 Header: X-Api-Secret: <API_SECRET>
 ```
+
+### Если health возвращает 503
+
+1. Amvera → проект **`prizolov-sports`** → **Логи сборки** и **Логи приложения**
+2. Проверьте Secrets: `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`
+3. Убедитесь, что репозиторий привязан к корню (`amvera.yaml` + `Dockerfile`)
 
 ## Disclaimer
 

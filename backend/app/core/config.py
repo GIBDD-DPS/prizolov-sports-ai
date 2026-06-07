@@ -1,6 +1,6 @@
 # ============================================
 # Copyright (c) 2026
-# PRIZOLOV SPORTS AI v14.06 (STORE-FRONT OPTIMIZED)
+# PRIZOLOV SPORTS AI v14.10 (STORE-FRONT OPTIMIZED)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     app_name: str = "PRIZOLOV SPORTS AI"
-    app_version: str = "14.08"
+    app_version: str = "14.10"
     amvera_app_name: str = "prizolov-sports"
     public_url: str = "https://prizolov-sports-dmandreyanov.amvera.io"
     api_prefix: str = "/api/v1"
@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     parser_interval_minutes: int = 30
     parser_run_on_startup: bool = True
     parser_user_agent: str = (
-        "PRIZOLOV-Sports-AI/14.08 (+https://prizolov-sports-dmandreyanov.amvera.io)"
+        "PRIZOLOV-Sports-AI/14.10 (+https://prizolov-sports-dmandreyanov.amvera.io)"
     )
 
     @cached_property

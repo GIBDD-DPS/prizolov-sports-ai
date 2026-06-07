@@ -1,6 +1,6 @@
 # ============================================
 # Copyright (c) 2026
-# PRIZOLOV SPORTS AI v14.06 (STORE-FRONT OPTIMIZED)
+# PRIZOLOV SPORTS AI v14.10 (STORE-FRONT OPTIMIZED)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 
-from app.core.config import settings
+from app.parser.http_client import DEFAULT_HEADERS
 from app.parser.sources.base import BaseSourceParser
 
 
@@ -20,8 +20,9 @@ class PredictzParser(BaseSourceParser):
     base_url = "https://www.predictz.com/predictions/"
 
     async def fetch_football_events(self) -> list[dict[str, Any]]:
-        headers = {"User-Agent": settings.parser_user_agent}
-        async with httpx.AsyncClient(timeout=30.0, headers=headers, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=30.0, headers=DEFAULT_HEADERS, follow_redirects=True
+        ) as client:
             response = await client.get(self.base_url)
             response.raise_for_status()
             return [{"source_id": self.source_id, "raw_length": len(response.text)}]

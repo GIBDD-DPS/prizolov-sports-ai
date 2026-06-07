@@ -1,11 +1,22 @@
 <!-- ============================================
 Copyright (c) 2026
-PRIZOLOV SPORTS AI v14.0 (STORE-FRONT OPTIMIZED)
+PRIZOLOV SPORTS AI v14.10 (STORE-FRONT OPTIMIZED)
 Author: Dm.Andreyanov
 Organization: Prizolov Market / Prizolov Lab
 ============================================ -->
 
 # Changelog
+
+## [14.10] - 2026-06-07
+
+### Added
+- `scripts/verify_project.py` — autonomous file/link/import checks.
+- `scripts/sync_copyright.py` — sync copyright version headers.
+- Parser shared HTTP headers (`app/parser/http_client.py`) for source sites.
+
+### Changed
+- All project file headers synced to v14.10.
+- Frontend/static placeholders updated to v14.10.
 
 ## [14.08] - 2026-06-07
 
