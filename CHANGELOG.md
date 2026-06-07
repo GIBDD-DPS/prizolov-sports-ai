@@ -7,6 +7,12 @@ Organization: Prizolov Market / Prizolov Lab
 
 # Changelog
 
+## [14.12] - 2026-06-07
+
+### Fixed
+- Amvera build: restored root `requirements.txt` with pinned `beautifulsoup4==4.12.3`.
+- Dockerfile: upgrade pip/setuptools/wheel before install.
+
 ## [14.10] - 2026-06-07
 
 ### Added

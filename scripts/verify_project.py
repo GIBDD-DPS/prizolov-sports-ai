@@ -19,6 +19,7 @@ BACKEND = ROOT / "backend"
 REQUIRED_ROOT_FILES = [
     "amvera.yaml",
     "Dockerfile",
+    "requirements.txt",
     "VERSION",
     "README.md",
     "CHANGELOG.md",

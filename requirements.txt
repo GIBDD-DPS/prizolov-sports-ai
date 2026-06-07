@@ -4,6 +4,8 @@
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
+# Root requirements for Amvera python-pip builds.
+# Docker build uses backend/requirements.txt (keep in sync).
 
 fastapi>=0.111.0
 uvicorn[standard]>=0.30.0
