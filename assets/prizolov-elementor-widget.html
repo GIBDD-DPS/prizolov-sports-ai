@@ -488,7 +488,7 @@
   var API_URL = "/get-ai-sports.php";
   var API_BASE = window.PRIZOLOV_API_BASE || "https://prizolov-sports-dmandreyanov.amvera.io";
   var ALL_EVENTS_URL = "/api/all-events";
-  var WIDGET_BUILD = "2026-06-03-no-esports";
+  var WIDGET_BUILD = "2026-06-07-light-bookmaker";
 
   var WINDOW_HOURS = 24;
   var MIN_PROBABILITY = 0.6;
@@ -1014,12 +1014,12 @@
         passable_only: "false",
         min_probability: "0",
         min_coefficient: "1",
-        include_consensus: "true",
+        include_consensus: "false",
         min_consensus_sources: String(MIN_CONSENSUS_SOURCES),
         include_watch: "true",
-        limit: "200",
+        limit: "80",
         sort_by: "passability",
-        refresh: "true"
+        refresh: "false"
       }), null, function (payload) {
         donorsEnabled = Boolean(payload && payload.external_donors && payload.external_donors.enabled);
         cb(Array.isArray(payload && payload.events) ? payload.events : []);

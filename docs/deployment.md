@@ -85,34 +85,33 @@ After deploy, verify:
 - `GET /api/source-status` (quality + external donor runtime)
 - `GET /api/consensus/top`
 
-## The Odds API (Amvera)
+## Events source (Amvera)
 
-Задайте в переменных окружения Amvera (не в git):
+The Odds API, API-Football и OddsPapi удалены из бэкенда. События витрины берутся из **bookmaker scrape** (Pari.ru и ingest).
 
-- `API_FOOTBALL_KEY` — ключ с https://www.api-football.com/ (заголовок `x-apisports-key`, хост `https://v3.football.api-sports.io`)
-- `ODDSPAPI_API_KEY` — ключ с https://oddspapi.io/ (приоритетный источник, если задан)
-- `THE_ODDS_API_KEY` — ключ с https://the-odds-api.com/ (fallback)
-- `REAL_EVENTS_ENABLED=true`
+Проверка после деплоя:
 
-Проверка: `GET /api/source-status` → `real_events.api_key_present: true`, `last_error: null`.
+```bash
+curl -s https://YOUR_APP/api/source-status | jq '.events_source'
+```
 
-Если `OUT_OF_USAGE_CREDITS` — бесплатные credits закончились; дождитесь сброса или подключите платный план.
+Ожидается: `primary: "bookmaker_scrape"`, `removed_providers` содержит `the_odds_api`, `api_football`, `oddspapi`.
 
-### Если в логах OddsPapi HTTP 403
+Удалите из переменных Amvera (если ещё заданы): `THE_ODDS_API_KEY`, `API_FOOTBALL_KEY`, `ODDSPAPI_*`, `REAL_EVENTS_*`.
 
-Запросы с IP Amvera могут блокироваться Cloudflare. Варианты:
+Рекомендуемый лёгкий режим для CPU:
 
-- Задать `ODDSPAPI_HTTP_PROXY` (HTTPS-прокси с «белым» IP)
-- Попросить OddsPapi whitelist egress IP вашего контейнера
-- После 403 запросы к OddsPapi паузятся на 15 мин (`ODDSPAPI_BLOCK_SECONDS`)
-
-### Если API-Football `account is suspended`
-
-Аккаунт нужно восстановить на https://dashboard.api-football.com — до этого API не отдаёт матчи. Повторные запросы к API-Football приостанавливаются на 1 час (`API_FOOTBALL_BLOCK_SECONDS`), чтобы не спамить логи.
+```env
+BOOKMAKER_SCRAPE_ENABLED=true
+BOOKMAKER_SCRAPE_REQUEST_PATH_SYNC=false
+BOOKMAKER_SCRAPE_INTERVAL_SECONDS=900
+EXTERNAL_CONSENSUS_ENABLED=false
+STORE_CACHE_TTL_SECONDS=120
+```
 
 ## Bookmaker scrape (Pari.ru)
 
-When OddsPapi/API-Football are unavailable, enable periodic scrape of bookmaker line pages:
+Primary source for storefront events — periodic scrape of bookmaker line pages:
 
 ```env
 BOOKMAKER_SCRAPE_ENABLED=true
