@@ -74,3 +74,4 @@ python main.py
 
 **Автор**: Dm.Andreyanov (GIBDD-DPS)  
 **Проект**: Prizolov Lab
+
