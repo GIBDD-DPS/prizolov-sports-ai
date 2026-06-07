@@ -21,6 +21,15 @@ def _is_truthy_env(name: str) -> bool:
     return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _is_amvera_runtime() -> bool:
+    return _is_truthy_env("AMVERA")
+
+
+def _amvera_light_scrape() -> bool:
+    """Low-CPU profile on Amvera unless full multi-sport scrape is explicitly requested."""
+    return _is_amvera_runtime() and not _is_truthy_env("BOOKMAKER_SCRAPE_FULL_SPORTS")
+
+
 def _bookmaker_scrape_enabled_from_env() -> bool:
     """Explicit BOOKMAKER_SCRAPE_ENABLED wins; on Amvera default to enabled."""
     explicit = os.getenv("BOOKMAKER_SCRAPE_ENABLED")
@@ -57,7 +66,19 @@ _LEGACY_FOOTBALL_ONLY_URLS = {
 }
 
 
+def _light_bookmaker_scrape_urls() -> List[str]:
+    return [
+        "https://pari.ru/live?dateInterval=5",
+        "https://pari.ru/sports/football?dateInterval=5",
+        "https://pari.ru/sports/hockey?dateInterval=5",
+        "https://pari.ru/sports/basketball?dateInterval=5",
+    ]
+
+
 def _default_bookmaker_scrape_urls() -> List[str]:
+    if _amvera_light_scrape():
+        return _light_bookmaker_scrape_urls()
+
     urls = ["https://pari.ru/live?dateInterval=5"]
     for slug in PARI_SPORT_PAGES:
         urls.append(f"https://pari.ru/sports/{slug}?dateInterval=5")
@@ -80,6 +101,12 @@ def _resolve_bookmaker_scrape_urls() -> List[str]:
         len(normalized) <= 3 and all("football" in u for u in normalized)
     )
     if football_only:
+        if _amvera_light_scrape():
+            logger.info(
+                "Amvera light scrape: keeping %s legacy Pari URLs (set BOOKMAKER_SCRAPE_FULL_SPORTS=true for 16 pages)",
+                len(urls),
+            )
+            return urls
         logger.warning(
             "BOOKMAKER_SCRAPE_URLS contains football-only legacy URLs; expanding to %s Pari sport pages",
             len(PARI_SPORT_PAGES) + 1,
@@ -92,10 +119,24 @@ BOOKMAKER_SCRAPE_URLS = _resolve_bookmaker_scrape_urls()
 BOOKMAKER_SCRAPE_URLS_EXPANDED_FROM_LEGACY = (os.getenv("BOOKMAKER_SCRAPE_URLS") or "").strip() != "" and set(
     _normalize_scrape_url(u) for u in BOOKMAKER_SCRAPE_URLS
 ) != {_normalize_scrape_url(u) for u in (os.getenv("BOOKMAKER_SCRAPE_URLS") or "").split(",") if u.strip()}
-BOOKMAKER_SCRAPE_INTERVAL_SECONDS = int(os.getenv("BOOKMAKER_SCRAPE_INTERVAL_SECONDS", "300"))
+_AMVERA_LIGHT = _amvera_light_scrape()
+BOOKMAKER_SCRAPE_INTERVAL_SECONDS = int(
+    os.getenv("BOOKMAKER_SCRAPE_INTERVAL_SECONDS", "1800" if _AMVERA_LIGHT else "300")
+)
 BOOKMAKER_SCRAPE_CACHE_TTL_SECONDS = int(os.getenv("BOOKMAKER_SCRAPE_CACHE_TTL_SECONDS", "300"))
-BOOKMAKER_SCRAPE_LIMIT = int(os.getenv("BOOKMAKER_SCRAPE_LIMIT", "280"))
-BOOKMAKER_SCRAPE_PER_URL_LIMIT = int(os.getenv("BOOKMAKER_SCRAPE_PER_URL_LIMIT", "14"))
+BOOKMAKER_SCRAPE_LIMIT = int(os.getenv("BOOKMAKER_SCRAPE_LIMIT", "80" if _AMVERA_LIGHT else "280"))
+BOOKMAKER_SCRAPE_PER_URL_LIMIT = int(os.getenv("BOOKMAKER_SCRAPE_PER_URL_LIMIT", "8" if _AMVERA_LIGHT else "14"))
+BOOKMAKER_SCRAPE_BATCH_SIZE = int(
+    os.getenv(
+        "BOOKMAKER_SCRAPE_BATCH_SIZE",
+        "3" if _AMVERA_LIGHT else str(max(len(BOOKMAKER_SCRAPE_URLS), 1)),
+    )
+)
+BOOKMAKER_SCRAPE_URL_PAUSE_SECONDS = float(
+    os.getenv("BOOKMAKER_SCRAPE_URL_PAUSE_SECONDS", "1.0" if _AMVERA_LIGHT else "0.35")
+)
+BOOKMAKER_FETCH_TIMEOUT_SECONDS = int(os.getenv("BOOKMAKER_FETCH_TIMEOUT_SECONDS", "12" if _AMVERA_LIGHT else "18"))
+BOOKMAKER_FETCH_MAX_BYTES = int(os.getenv("BOOKMAKER_FETCH_MAX_BYTES", "1000000" if _AMVERA_LIGHT else "2500000"))
 BOOKMAKER_SCRAPE_REQUEST_PATH_SYNC = _is_truthy_env("BOOKMAKER_SCRAPE_REQUEST_PATH_SYNC")
 BOOKMAKER_SCRAPE_USER_AGENT = (
     os.getenv("BOOKMAKER_SCRAPE_USER_AGENT")
@@ -135,7 +176,7 @@ _PARI_SUB_EVENT_RE = re.compile(
     r'sport-sub-event-name[^"]*"[^>]*>([^<]+)<',
     re.IGNORECASE,
 )
-BOOKMAKER_MAX_RECOMMENDATIONS = int(os.getenv("BOOKMAKER_MAX_RECOMMENDATIONS", "40"))
+BOOKMAKER_MAX_RECOMMENDATIONS = int(os.getenv("BOOKMAKER_MAX_RECOMMENDATIONS", "20" if _AMVERA_LIGHT else "40"))
 
 _MAIN_MARKET_COLUMNS = ["1", "Х", "2", "ФОРА 1", "ФОРА 2", "Тотал", "Б", "М"]
 
@@ -763,10 +804,10 @@ def _fetch_url(url: str) -> Tuple[Optional[str], Optional[str]]:
         },
     )
     try:
-        with urllib_request.urlopen(req, timeout=18) as response:
-            body = response.read(2_500_000 + 1)
-            if len(body) > 2_500_000:
-                body = body[:2_500_000]
+        with urllib_request.urlopen(req, timeout=BOOKMAKER_FETCH_TIMEOUT_SECONDS) as response:
+            body = response.read(BOOKMAKER_FETCH_MAX_BYTES + 1)
+            if len(body) > BOOKMAKER_FETCH_MAX_BYTES:
+                body = body[:BOOKMAKER_FETCH_MAX_BYTES]
             charset = response.headers.get_content_charset() or "utf-8"
             return body.decode(charset, errors="ignore"), None
     except HTTPError as exc:
@@ -788,8 +829,8 @@ def scrape_bookmaker_urls_sync(urls: Optional[List[str]] = None, limit: int = BO
     last_error: Optional[str] = None
 
     for index, url in enumerate(targets):
-        if index > 0:
-            time.sleep(0.35)
+        if index > 0 and BOOKMAKER_SCRAPE_URL_PAUSE_SECONDS > 0:
+            time.sleep(BOOKMAKER_SCRAPE_URL_PAUSE_SECONDS)
         html, err = _fetch_url(url)
         if err:
             last_error = f"bookmaker_{err}"
@@ -861,19 +902,60 @@ def ingest_bookmaker_events(events: List[Dict[str, Any]]) -> int:
 
 _scrape_thread_started = False
 _scrape_in_progress = False
+_scrape_batch_rotation_index = 0
 _scrape_refresh_requested = threading.Event()
 _scrape_state_lock = threading.Lock()
 
 
-def _store_bookmaker_scrape_result(events: List[Dict[str, Any]], err: Optional[str], now_ts: float) -> None:
+def _merge_bookmaker_events(
+    existing: List[Dict[str, Any]],
+    incoming: List[Dict[str, Any]],
+    limit: int,
+) -> List[Dict[str, Any]]:
+    merged: Dict[str, Dict[str, Any]] = {}
+    for event in existing:
+        event_id = str(event.get("id") or "")
+        if event_id:
+            merged[event_id] = event
+    for event in incoming:
+        event_id = str(event.get("id") or "")
+        if event_id:
+            merged[event_id] = event
+    return list(merged.values())[: max(1, limit)]
+
+
+def _urls_for_scrape_cycle() -> List[str]:
+    global _scrape_batch_rotation_index
+    all_urls = list(BOOKMAKER_SCRAPE_URLS)
+    if not all_urls:
+        return []
+
+    batch_size = max(1, min(BOOKMAKER_SCRAPE_BATCH_SIZE, len(all_urls)))
+    if batch_size >= len(all_urls):
+        return all_urls
+
+    start = _scrape_batch_rotation_index % len(all_urls)
+    selected = [all_urls[(start + index) % len(all_urls)] for index in range(batch_size)]
+    _scrape_batch_rotation_index = (start + batch_size) % len(all_urls)
+    return selected
+
+
+def _store_bookmaker_scrape_result(
+    events: List[Dict[str, Any]],
+    err: Optional[str],
+    now_ts: float,
+    scraped_urls: Optional[List[str]] = None,
+) -> None:
     with _cache_lock:
         cached = list(_cache.get("events") or [])
         if events:
+            if BOOKMAKER_SCRAPE_BATCH_SIZE < len(BOOKMAKER_SCRAPE_URLS):
+                events = _merge_bookmaker_events(cached, events, BOOKMAKER_SCRAPE_LIMIT)
             _cache["events"] = events
             _cache["ts"] = now_ts
             _cache["source"] = "bookmaker_scrape"
             _cache["last_error"] = None
-            _cache["last_urls"] = list(BOOKMAKER_SCRAPE_URLS)
+            _cache["last_urls"] = list(scraped_urls or BOOKMAKER_SCRAPE_URLS)
             return
         if cached:
             _cache["last_error"] = err
@@ -891,11 +973,12 @@ def _run_bookmaker_scrape_once() -> None:
         _scrape_in_progress = True
 
     try:
-        events, err = scrape_bookmaker_urls_sync()
-        _store_bookmaker_scrape_result(events, err, time.time())
+        targets = _urls_for_scrape_cycle()
+        events, err = scrape_bookmaker_urls_sync(urls=targets)
+        _store_bookmaker_scrape_result(events, err, time.time(), targets)
     except Exception as exc:
         logger.warning("Bookmaker background scrape error: %s", exc)
-        _store_bookmaker_scrape_result([], str(exc), time.time())
+        _store_bookmaker_scrape_result([], str(exc), time.time(), [])
     finally:
         with _scrape_state_lock:
             _scrape_in_progress = False
@@ -924,7 +1007,7 @@ def _ensure_background_scrape_started() -> None:
         startup_delay = int(
             os.getenv(
                 "BOOKMAKER_SCRAPE_STARTUP_DELAY_SECONDS",
-                "60" if os.getenv("AMVERA", "").strip() in {"1", "true", "yes", "on"} else "5",
+                "90" if _is_amvera_runtime() else "5",
             )
         )
         if startup_delay > 0:
@@ -939,9 +1022,11 @@ def _ensure_background_scrape_started() -> None:
 
     threading.Thread(target=_loop, name="bookmaker-scrape", daemon=True).start()
     logger.info(
-        "Bookmaker background scrape started (interval=%ss, urls=%s)",
+        "Bookmaker background scrape started (interval=%ss, urls=%s, batch=%s, light_mode=%s)",
         BOOKMAKER_SCRAPE_INTERVAL_SECONDS,
         BOOKMAKER_SCRAPE_URLS,
+        BOOKMAKER_SCRAPE_BATCH_SIZE,
+        _AMVERA_LIGHT,
     )
 
 
@@ -984,6 +1069,9 @@ def get_status_snapshot() -> Dict[str, Any]:
             "sport_pages": list(PARI_SPORT_PAGES.keys()),
             "scrape_per_url_limit": BOOKMAKER_SCRAPE_PER_URL_LIMIT,
             "urls_expanded_from_legacy": BOOKMAKER_SCRAPE_URLS_EXPANDED_FROM_LEGACY,
+            "batch_size": BOOKMAKER_SCRAPE_BATCH_SIZE,
+            "light_mode": _AMVERA_LIGHT,
+            "last_scraped_urls": list(_cache.get("last_urls") or []),
             "winline": _winline_status_snapshot(),
             "melbet": _melbet_status_snapshot(),
         }

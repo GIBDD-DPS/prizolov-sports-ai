@@ -102,12 +102,26 @@ EXCLUDED_STOREFRONT_SPORTS = frozenset(
     for s in (os.getenv("EXCLUDED_STOREFRONT_SPORTS") or "esports").split(",")
     if s.strip()
 )
+def _runtime_bool_default(name: str, *, local_default: str, amvera_default: str) -> bool:
+    explicit = os.getenv(name)
+    if explicit is not None and explicit.strip() != "":
+        return explicit.strip().lower() in {"1", "true", "yes", "on"}
+    if os.getenv("AMVERA", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return amvera_default.strip().lower() in {"1", "true", "yes", "on"}
+    return _env_default(name, local_default).strip().lower() in {"1", "true", "yes", "on"}
+
+
 EXTERNAL_CONSENSUS_MIN_SOURCES = int(os.getenv("EXTERNAL_CONSENSUS_MIN_SOURCES", _env_default("EXTERNAL_CONSENSUS_MIN_SOURCES", "3")))
-EXTERNAL_CONSENSUS_ENABLED = os.getenv("EXTERNAL_CONSENSUS_ENABLED", _env_default("EXTERNAL_CONSENSUS_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "on"}
-EXTERNAL_DONOR_INGESTION_ENABLED = os.getenv(
+EXTERNAL_CONSENSUS_ENABLED = _runtime_bool_default(
+    "EXTERNAL_CONSENSUS_ENABLED",
+    local_default="true",
+    amvera_default="false",
+)
+EXTERNAL_DONOR_INGESTION_ENABLED = _runtime_bool_default(
     "EXTERNAL_DONOR_INGESTION_ENABLED",
-    _env_default("EXTERNAL_DONOR_INGESTION_ENABLED", "true"),
-).strip().lower() in {"1", "true", "yes", "on"}
+    local_default="true",
+    amvera_default="false",
+)
 EXTERNAL_DONOR_RANDOM_SEED = os.getenv("EXTERNAL_DONOR_RANDOM_SEED", "prizolov-donor-seed")
 EXTERNAL_DONOR_CATALOG_EXTRA_JSON = _normalize_json_env_value(os.getenv("EXTERNAL_DONOR_CATALOG_EXTRA_JSON", _env_default("EXTERNAL_DONOR_CATALOG_EXTRA_JSON", "")))
 EXTERNAL_DONOR_JSON_FEEDS = _normalize_json_env_value(os.getenv("EXTERNAL_DONOR_JSON_FEEDS", _env_default("EXTERNAL_DONOR_JSON_FEEDS", "")))

@@ -104,10 +104,17 @@ curl -s https://YOUR_APP/api/source-status | jq '.events_source'
 ```env
 BOOKMAKER_SCRAPE_ENABLED=true
 BOOKMAKER_SCRAPE_REQUEST_PATH_SYNC=false
-BOOKMAKER_SCRAPE_INTERVAL_SECONDS=900
+BOOKMAKER_SCRAPE_FULL_SPORTS=false
+BOOKMAKER_SCRAPE_BATCH_SIZE=3
+BOOKMAKER_SCRAPE_INTERVAL_SECONDS=1800
+BOOKMAKER_SCRAPE_STARTUP_DELAY_SECONDS=90
+BOOKMAKER_SCRAPE_LIMIT=80
 EXTERNAL_CONSENSUS_ENABLED=false
+EXTERNAL_DONOR_INGESTION_ENABLED=false
 STORE_CACHE_TTL_SECONDS=120
 ```
+
+При `AMVERA=1` код автоматически включает **light scrape**: 3–4 URL за цикл (ротация), интервал 30 мин, без RSS-доноров. CPU должен оставаться <85%. Для полного охвата 16 видов спорта: `BOOKMAKER_SCRAPE_FULL_SPORTS=true` (дороже по CPU).
 
 ## Bookmaker scrape (Pari.ru)
 
