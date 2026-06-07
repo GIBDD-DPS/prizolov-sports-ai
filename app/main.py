@@ -1703,8 +1703,12 @@ async def startup_event():
     logger.info("🚀 PRIZOLOV SPORTS AI v14.0 - STORE-FRONT OPTIMIZED")
     logger.info(f"📦 Storefront cache TTL: {CACHE_TTL_SECONDS}s")
     try:
-        from bookmaker_scrape_source import _ensure_background_scrape_started
+        from bookmaker_scrape_source import BOOKMAKER_SCRAPE_REQUEST_PATH_SYNC, _ensure_background_scrape_started
 
+        if BOOKMAKER_SCRAPE_REQUEST_PATH_SYNC:
+            logger.warning(
+                "BOOKMAKER_SCRAPE_REQUEST_PATH_SYNC=true — HTTP requests may block on scrape; set false on Amvera"
+            )
         _ensure_background_scrape_started()
     except Exception as exc:
         logger.warning("Bookmaker scrape startup hook failed: %s", exc)

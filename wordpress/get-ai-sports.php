@@ -189,6 +189,22 @@ function prizolov_proxy_forward(array $payload): void
 
     $decoded = json_decode($responseBody, true);
     if (!is_array($decoded)) {
+        if ($httpCode >= 500 || $httpCode === 0) {
+            prizolov_proxy_json_response(200, [
+                'events' => [],
+                'total' => 0,
+                'window_hours' => 24,
+                'sports' => [],
+                'sports_line' => [],
+                'meta' => [
+                    'upstream_error' => 'upstream_unavailable',
+                    'upstream_status' => $httpCode,
+                    'message' => 'PRIZOLOV API временно недоступен. Повторите через 1–2 минуты.',
+                    'retry_after_seconds' => 60,
+                ],
+            ]);
+        }
+
         prizolov_proxy_json_response(502, [
             'error' => 'invalid_upstream_json',
             'message' => 'Upstream returned non-JSON response',

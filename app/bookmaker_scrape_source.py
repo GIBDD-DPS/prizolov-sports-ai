@@ -787,7 +787,9 @@ def scrape_bookmaker_urls_sync(urls: Optional[List[str]] = None, limit: int = BO
     seen_ids = set()
     last_error: Optional[str] = None
 
-    for url in targets:
+    for index, url in enumerate(targets):
+        if index > 0:
+            time.sleep(0.35)
         html, err = _fetch_url(url)
         if err:
             last_error = f"bookmaker_{err}"
@@ -919,6 +921,16 @@ def _ensure_background_scrape_started() -> None:
     _scrape_thread_started = True
 
     def _loop() -> None:
+        startup_delay = int(
+            os.getenv(
+                "BOOKMAKER_SCRAPE_STARTUP_DELAY_SECONDS",
+                "60" if os.getenv("AMVERA", "").strip() in {"1", "true", "yes", "on"} else "5",
+            )
+        )
+        if startup_delay > 0:
+            logger.info("Bookmaker scrape first run delayed by %ss (let HTTP workers pass health checks)", startup_delay)
+            time.sleep(startup_delay)
+
         while BOOKMAKER_SCRAPE_ENABLED:
             _run_bookmaker_scrape_once()
             wait_seconds = max(60, BOOKMAKER_SCRAPE_INTERVAL_SECONDS)

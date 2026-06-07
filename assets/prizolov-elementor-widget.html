@@ -486,7 +486,7 @@
 <script>
 (function () {
   var API_URL = window.PRIZOLOV_API_URL || "/get-ai-sports.php";
-  var WIDGET_BUILD = "2026-06-07-same-origin-proxy";
+  var WIDGET_BUILD = "2026-06-07-graceful-upstream";
 
   var WINDOW_HOURS = 24;
   var MIN_PROBABILITY = 0.6;
@@ -1016,9 +1016,15 @@
         sort_by: "passability",
         refresh: false
       }, function (payload) {
+        if (payload && payload.meta && payload.meta.upstream_error) {
+          showError(payload.meta.message || "API временно недоступен. Обновите страницу через минуту.");
+          cb([]);
+          return;
+        }
         donorsEnabled = Boolean(payload && payload.external_donors && payload.external_donors.enabled);
         cb(Array.isArray(payload && payload.events) ? payload.events : []);
       }, function () {
+        showError("Не удалось загрузить данные. Проверьте get-ai-sports.php и обновите страницу.");
         cb([]);
       });
     }
