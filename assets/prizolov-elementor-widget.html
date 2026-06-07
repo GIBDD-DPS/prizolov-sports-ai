@@ -486,7 +486,7 @@
 <script>
 (function () {
   var API_URL = window.PRIZOLOV_API_URL || "/get-ai-sports.php";
-  var WIDGET_BUILD = "2026-06-07-graceful-upstream";
+  var WIDGET_BUILD = "2026-06-07-low-cpu-refresh";
 
   var WINDOW_HOURS = 24;
   var MIN_PROBABILITY = 0.6;
@@ -497,7 +497,7 @@
   var EXCLUDED_SPORTS = { esports: true };
   var MAX_LIVE_EVENT_AGE_MS = 4 * 60 * 60 * 1000;
   var AUTO_ROTATE_MS = 10000;
-  var AUTO_REFRESH_MS = 45000;
+  var AUTO_REFRESH_MS = 120000;
 
   var MODES = {
     all24: { label: "LIVE + 24ч", includeLive: true, onlyLive: false, onlyUpcoming: false },

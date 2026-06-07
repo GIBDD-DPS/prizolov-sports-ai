@@ -86,8 +86,12 @@ _ENV_PACK_DEFAULTS = _load_env_pack_defaults()
 # КОНФИГ
 # ============================================
 
-CACHE_TTL_SECONDS = int(os.getenv("STORE_CACHE_TTL_SECONDS", "30"))
-DONOR_CACHE_TTL_SECONDS = int(os.getenv("DONOR_CACHE_TTL_SECONDS", "45"))
+def _amvera_runtime() -> bool:
+    return (os.getenv("AMVERA") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+CACHE_TTL_SECONDS = int(os.getenv("STORE_CACHE_TTL_SECONDS", "300" if _amvera_runtime() else "30"))
+DONOR_CACHE_TTL_SECONDS = int(os.getenv("DONOR_CACHE_TTL_SECONDS", "300" if _amvera_runtime() else "45"))
 LOW_EVENT_ALERT_THRESHOLD = int(os.getenv("LOW_EVENT_ALERT_THRESHOLD", "4"))
 LOW_EVENT_STREAK_ALERT = int(os.getenv("LOW_EVENT_STREAK_ALERT", "3"))
 LOW_DONOR_COVERAGE_THRESHOLD = float(os.getenv("LOW_DONOR_COVERAGE_THRESHOLD", "0.35"))

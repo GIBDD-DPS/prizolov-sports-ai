@@ -67,12 +67,13 @@ _LEGACY_FOOTBALL_ONLY_URLS = {
 
 
 def _light_bookmaker_scrape_urls() -> List[str]:
-    return [
-        "https://pari.ru/live?dateInterval=5",
-        "https://pari.ru/sports/football?dateInterval=5",
-        "https://pari.ru/sports/hockey?dateInterval=5",
-        "https://pari.ru/sports/basketball?dateInterval=5",
-    ]
+    # Single live page keeps CPU lowest; football prematch added only in non-ultra mode.
+    if _is_truthy_env("BOOKMAKER_SCRAPE_INCLUDE_PREMATCH"):
+        return [
+            "https://pari.ru/live?dateInterval=5",
+            "https://pari.ru/sports/football?dateInterval=5",
+        ]
+    return ["https://pari.ru/live?dateInterval=5"]
 
 
 def _default_bookmaker_scrape_urls() -> List[str]:
@@ -121,22 +122,27 @@ BOOKMAKER_SCRAPE_URLS_EXPANDED_FROM_LEGACY = (os.getenv("BOOKMAKER_SCRAPE_URLS")
 ) != {_normalize_scrape_url(u) for u in (os.getenv("BOOKMAKER_SCRAPE_URLS") or "").split(",") if u.strip()}
 _AMVERA_LIGHT = _amvera_light_scrape()
 BOOKMAKER_SCRAPE_INTERVAL_SECONDS = int(
-    os.getenv("BOOKMAKER_SCRAPE_INTERVAL_SECONDS", "1800" if _AMVERA_LIGHT else "300")
+    os.getenv("BOOKMAKER_SCRAPE_INTERVAL_SECONDS", "3600" if _AMVERA_LIGHT else "300")
 )
-BOOKMAKER_SCRAPE_CACHE_TTL_SECONDS = int(os.getenv("BOOKMAKER_SCRAPE_CACHE_TTL_SECONDS", "300"))
-BOOKMAKER_SCRAPE_LIMIT = int(os.getenv("BOOKMAKER_SCRAPE_LIMIT", "80" if _AMVERA_LIGHT else "280"))
-BOOKMAKER_SCRAPE_PER_URL_LIMIT = int(os.getenv("BOOKMAKER_SCRAPE_PER_URL_LIMIT", "8" if _AMVERA_LIGHT else "14"))
+BOOKMAKER_SCRAPE_CACHE_TTL_SECONDS = int(
+    os.getenv("BOOKMAKER_SCRAPE_CACHE_TTL_SECONDS", "3600" if _AMVERA_LIGHT else "300")
+)
+BOOKMAKER_SCRAPE_LIMIT = int(os.getenv("BOOKMAKER_SCRAPE_LIMIT", "60" if _AMVERA_LIGHT else "280"))
+BOOKMAKER_SCRAPE_PER_URL_LIMIT = int(os.getenv("BOOKMAKER_SCRAPE_PER_URL_LIMIT", "6" if _AMVERA_LIGHT else "14"))
 BOOKMAKER_SCRAPE_BATCH_SIZE = int(
     os.getenv(
         "BOOKMAKER_SCRAPE_BATCH_SIZE",
-        "3" if _AMVERA_LIGHT else str(max(len(BOOKMAKER_SCRAPE_URLS), 1)),
+        "1" if _AMVERA_LIGHT else str(max(len(BOOKMAKER_SCRAPE_URLS), 1)),
     )
 )
-BOOKMAKER_SCRAPE_URL_PAUSE_SECONDS = float(
-    os.getenv("BOOKMAKER_SCRAPE_URL_PAUSE_SECONDS", "1.0" if _AMVERA_LIGHT else "0.35")
+BOOKMAKER_SCRAPE_MAX_MATCHES_PER_URL = int(
+    os.getenv("BOOKMAKER_SCRAPE_MAX_MATCHES_PER_URL", "15" if _AMVERA_LIGHT else "80")
 )
-BOOKMAKER_FETCH_TIMEOUT_SECONDS = int(os.getenv("BOOKMAKER_FETCH_TIMEOUT_SECONDS", "12" if _AMVERA_LIGHT else "18"))
-BOOKMAKER_FETCH_MAX_BYTES = int(os.getenv("BOOKMAKER_FETCH_MAX_BYTES", "1000000" if _AMVERA_LIGHT else "2500000"))
+BOOKMAKER_SCRAPE_URL_PAUSE_SECONDS = float(
+    os.getenv("BOOKMAKER_SCRAPE_URL_PAUSE_SECONDS", "2.0" if _AMVERA_LIGHT else "0.35")
+)
+BOOKMAKER_FETCH_TIMEOUT_SECONDS = int(os.getenv("BOOKMAKER_FETCH_TIMEOUT_SECONDS", "10" if _AMVERA_LIGHT else "18"))
+BOOKMAKER_FETCH_MAX_BYTES = int(os.getenv("BOOKMAKER_FETCH_MAX_BYTES", "500000" if _AMVERA_LIGHT else "2500000"))
 BOOKMAKER_SCRAPE_REQUEST_PATH_SYNC = _is_truthy_env("BOOKMAKER_SCRAPE_REQUEST_PATH_SYNC")
 BOOKMAKER_SCRAPE_USER_AGENT = (
     os.getenv("BOOKMAKER_SCRAPE_USER_AGENT")
@@ -176,7 +182,7 @@ _PARI_SUB_EVENT_RE = re.compile(
     r'sport-sub-event-name[^"]*"[^>]*>([^<]+)<',
     re.IGNORECASE,
 )
-BOOKMAKER_MAX_RECOMMENDATIONS = int(os.getenv("BOOKMAKER_MAX_RECOMMENDATIONS", "20" if _AMVERA_LIGHT else "40"))
+BOOKMAKER_MAX_RECOMMENDATIONS = int(os.getenv("BOOKMAKER_MAX_RECOMMENDATIONS", "12" if _AMVERA_LIGHT else "40"))
 
 _MAIN_MARKET_COLUMNS = ["1", "Х", "2", "ФОРА 1", "ФОРА 2", "Тотал", "Б", "М"]
 
@@ -741,7 +747,11 @@ def _extract_pari_events_from_html(html: str, source_url: str) -> List[Dict[str,
     sport_hint = _sport_hint_from_url(source_url)
     by_key: Dict[str, Dict[str, Any]] = {}
 
+    matches_seen = 0
     for match in _PARI_TEAM_RE.finditer(html):
+        matches_seen += 1
+        if matches_seen > BOOKMAKER_SCRAPE_MAX_MATCHES_PER_URL:
+            break
         home = unescape(match.group(1)).strip()
         away = unescape(match.group(2)).strip()
         chunk = _slice_event_chunk(html, match.start())
@@ -965,8 +975,25 @@ def _store_bookmaker_scrape_result(
         _cache["last_error"] = err
 
 
+def _scrape_cache_is_fresh() -> bool:
+    with _cache_lock:
+        age_seconds = time.time() - float(_cache.get("ts") or 0.0)
+        cached_events = _cache.get("events") or []
+    return bool(cached_events) and age_seconds < BOOKMAKER_SCRAPE_CACHE_TTL_SECONDS
+
+
 def _run_bookmaker_scrape_once() -> None:
     global _scrape_in_progress
+    if _scrape_cache_is_fresh():
+        with _cache_lock:
+            event_count = len(_cache.get("events") or [])
+        logger.info(
+            "Skipping bookmaker scrape — cache fresh (%s events, TTL %ss)",
+            event_count,
+            BOOKMAKER_SCRAPE_CACHE_TTL_SECONDS,
+        )
+        return
+
     with _scrape_state_lock:
         if _scrape_in_progress:
             return
@@ -1007,7 +1034,7 @@ def _ensure_background_scrape_started() -> None:
         startup_delay = int(
             os.getenv(
                 "BOOKMAKER_SCRAPE_STARTUP_DELAY_SECONDS",
-                "90" if _is_amvera_runtime() else "5",
+                "180" if _is_amvera_runtime() else "5",
             )
         )
         if startup_delay > 0:

@@ -105,16 +105,17 @@ curl -s https://YOUR_APP/api/source-status | jq '.events_source'
 BOOKMAKER_SCRAPE_ENABLED=true
 BOOKMAKER_SCRAPE_REQUEST_PATH_SYNC=false
 BOOKMAKER_SCRAPE_FULL_SPORTS=false
-BOOKMAKER_SCRAPE_BATCH_SIZE=3
-BOOKMAKER_SCRAPE_INTERVAL_SECONDS=1800
-BOOKMAKER_SCRAPE_STARTUP_DELAY_SECONDS=90
-BOOKMAKER_SCRAPE_LIMIT=80
+BOOKMAKER_SCRAPE_BATCH_SIZE=1
+BOOKMAKER_SCRAPE_INTERVAL_SECONDS=3600
+BOOKMAKER_SCRAPE_CACHE_TTL_SECONDS=3600
+BOOKMAKER_SCRAPE_STARTUP_DELAY_SECONDS=180
+BOOKMAKER_SCRAPE_MAX_MATCHES_PER_URL=15
 EXTERNAL_CONSENSUS_ENABLED=false
 EXTERNAL_DONOR_INGESTION_ENABLED=false
-STORE_CACHE_TTL_SECONDS=120
+STORE_CACHE_TTL_SECONDS=300
 ```
 
-При `AMVERA=1` код автоматически включает **light scrape**: 3–4 URL за цикл (ротация), интервал 30 мин, без RSS-доноров. CPU должен оставаться <85%. Для полного охвата 16 видов спорта: `BOOKMAKER_SCRAPE_FULL_SPORTS=true` (дороже по CPU).
+При `AMVERA=1` код автоматически включает **ultra-light scrape**: 1 URL (`/live`) за цикл, интервал 60 мин, кэш 60 мин, макс. 15 матчей на страницу. CPU цель <85%. Prematch football: `BOOKMAKER_SCRAPE_INCLUDE_PREMATCH=true`. Полный охват 16 видов: `BOOKMAKER_SCRAPE_FULL_SPORTS=true` (высокий CPU).
 
 ## Bookmaker scrape (Pari.ru)
 
