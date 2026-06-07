@@ -1857,6 +1857,10 @@ async def get_ai_sports(request: Request):
     get_all = _safe_bool(payload.get("get_all"), False)
     if get_all:
         _increment_fallback_usage("legacy_get_all")
+        recommendations_only = _safe_bool(payload.get("recommendations_only"), False)
+        if payload.get("passable_only") is not None:
+            recommendations_only = _safe_bool(payload.get("passable_only"), recommendations_only)
+
         params = {
             "window_hours": _coerce_int(payload.get("window_hours"), DEFAULT_WINDOW_HOURS, minimum=1, maximum=72),
             "include_live": _safe_bool(payload.get("include_live"), True),
@@ -1864,7 +1868,7 @@ async def get_ai_sports(request: Request):
             "min_probability": _coerce_float(payload.get("min_probability"), 0.0, minimum=0.0, maximum=1.0),
             "min_coefficient": _coerce_float(payload.get("min_coefficient"), 1.0, minimum=1.0, maximum=50.0),
             "min_support": _coerce_float(payload.get("min_bookmakers_support"), 0.0, minimum=0.0, maximum=20.0),
-            "recommendations_only": _safe_bool(payload.get("recommendations_only"), False),
+            "recommendations_only": recommendations_only,
             "include_watch": _safe_bool(payload.get("include_watch"), True),
             "include_consensus": _safe_bool(payload.get("include_consensus"), True),
             "min_consensus_sources": _coerce_int(payload.get("min_consensus_sources"), EXTERNAL_CONSENSUS_MIN_SOURCES, minimum=1, maximum=25),

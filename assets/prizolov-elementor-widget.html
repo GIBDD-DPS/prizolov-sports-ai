@@ -485,10 +485,8 @@
 
 <script>
 (function () {
-  var API_URL = "/get-ai-sports.php";
-  var API_BASE = window.PRIZOLOV_API_BASE || "https://prizolov-sports-dmandreyanov.amvera.io";
-  var ALL_EVENTS_URL = "/api/all-events";
-  var WIDGET_BUILD = "2026-06-07-light-bookmaker";
+  var API_URL = window.PRIZOLOV_API_URL || "/get-ai-sports.php";
+  var WIDGET_BUILD = "2026-06-07-same-origin-proxy";
 
   var WINDOW_HOURS = 24;
   var MIN_PROBABILITY = 0.6;
@@ -534,10 +532,6 @@
 
     function byId(id) {
       return root.querySelector("#" + id);
-    }
-
-    function withBase(path) {
-      return API_BASE + path;
     }
 
     function asNum(v, fallback) {
@@ -1007,20 +1001,21 @@
     }
 
     function fetchFromAllEvents(modeCfg, cb) {
-      requestJson("GET", withBase(ALL_EVENTS_URL) + "?" + qs({
-        window_hours: String(WINDOW_HOURS),
-        include_live: "true",
-        include_upcoming: "true",
-        passable_only: "false",
-        min_probability: "0",
-        min_coefficient: "1",
-        include_consensus: "false",
-        min_consensus_sources: String(MIN_CONSENSUS_SOURCES),
-        include_watch: "true",
-        limit: "80",
+      requestJson("POST", API_URL, {
+        get_all: true,
+        window_hours: WINDOW_HOURS,
+        include_live: true,
+        include_upcoming: true,
+        passable_only: false,
+        min_probability: 0,
+        min_coefficient: 1,
+        include_consensus: false,
+        min_consensus_sources: MIN_CONSENSUS_SOURCES,
+        include_watch: true,
+        limit: 80,
         sort_by: "passability",
-        refresh: "false"
-      }), null, function (payload) {
+        refresh: false
+      }, function (payload) {
         donorsEnabled = Boolean(payload && payload.external_donors && payload.external_donors.enabled);
         cb(Array.isArray(payload && payload.events) ? payload.events : []);
       }, function () {
