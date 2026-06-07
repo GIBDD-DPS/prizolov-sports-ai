@@ -7,6 +7,12 @@ Organization: Prizolov Market / Prizolov Lab
 
 # Changelog
 
+## [14.08] - 2026-06-07
+
+### Changed
+- Amvera application name documented as `prizolov-sports`.
+- `AMVERA_APP_NAME` config and health endpoint field `amvera_app`.
+
 ## [14.06] - 2026-06-07
 
 ### Changed

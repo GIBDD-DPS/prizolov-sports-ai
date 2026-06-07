@@ -35,6 +35,7 @@ def health(db: Session = Depends(get_db)) -> dict:
         "public_url": settings.public_url,
         "database": db_status,
         "postgres_host": settings.postgres_host if db_status == "ok" else None,
+        "amvera_app": settings.amvera_app_name,
         "parser_enabled": settings.parser_enabled,
         "parser_interval_minutes": settings.parser_interval_minutes,
     }

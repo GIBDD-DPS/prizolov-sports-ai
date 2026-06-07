@@ -4,7 +4,8 @@
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
-# Single Amvera app: FastAPI web + background parser scheduler
+# Amvera project name: prizolov-sports
+# Production domain: prizolov-sports-dmandreyanov.amvera.io
 
 meta:
   environment: docker

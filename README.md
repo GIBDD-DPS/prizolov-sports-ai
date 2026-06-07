@@ -5,7 +5,7 @@ Author: Dm.Andreyanov
 Organization: Prizolov Market / Prizolov Lab
 ============================================ -->
 
-# PRIZOLOV SPORTS AI v14.06
+# PRIZOLOV SPORTS AI v14.08
 
 Public sports prediction platform with weighted forecasts for football (MVP), hockey, basketball, and other sports.
 
@@ -44,11 +44,10 @@ python -m app.parser.runner
 ## Amvera — одно приложение
 
 ### 1. Создать проект
-- [cloud.amvera.ru](https://cloud.amvera.ru) → **Создать проект** → тип **Приложение**
-- Имя, например: `prizolov-sports-ai`
+- [cloud.amvera.ru](https://cloud.amvera.ru) → проект **`prizolov-sports`** (тип **Приложение**)
 
 ### 2. Подключить GitHub
-- Привязать репозиторий `prizolov-sports-ai`
+- Привязать репозиторий `GIBDD-DPS/prizolov-sports-ai`
 - Amvera найдёт **`amvera.yaml`** и **`Dockerfile`** в **корне** репозитория
 
 ### 3. Переменные окружения (Secrets)
