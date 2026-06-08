@@ -1,11 +1,9 @@
 # ============================================
 # Copyright (c) 2026
-# PRIZOLOV SPORTS AI v14.18 (STORE-FRONT OPTIMIZED)
+# PRIZOLOV SPORTS AI v14.22 (STORE-FRONT OPTIMIZED)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
-# Amvera project name: prizolov-sports
-# Production domain: prizolov-sports-dmandreyanov.amvera.io
 
 meta:
   environment: docker
@@ -14,9 +12,6 @@ build:
   dockerfile: Dockerfile
 
 run:
+  persistenceMount: /data
   containerPort: 8080
   servicePort: 8080
-  protocol: http
-  idleTimeout: 300
-  persistence:
-    /data: persistent-volume

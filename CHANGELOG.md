@@ -7,6 +7,11 @@ Organization: Prizolov Market / Prizolov Lab
 
 # Changelog
 
+## [14.22] - 2026-06-08
+
+### Fixed
+- Simplified `amvera.yaml` / `amvera.yml`: Docker only, removed erroneous `run.command` with `cd backend`.
+
 ## [14.20] - 2026-06-08
 
 ### Fixed
