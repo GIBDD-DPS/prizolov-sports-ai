@@ -7,6 +7,13 @@ Organization: Prizolov Market / Prizolov Lab
 
 # Changelog
 
+## [14.18] - 2026-06-08
+
+### Fixed
+- Amvera pip build error on `beautifulsoup4`: removed unused dependency (parsers use httpx + selectolax).
+- Added `amvera.yml` duplicate, `ca-certificates` in Dockerfile, explicit PyPI index URL.
+- `backend/static/.gitkeep` so Docker COPY succeeds on fresh clone.
+
 ## [14.16] - 2026-06-08
 
 ### Fixed

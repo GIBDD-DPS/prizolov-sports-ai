@@ -28,7 +28,7 @@ try {
         $name -notin @("venv", ".venv", "node_modules", ".git", "deploy-amvera.zip")
     }
     Compress-Archive -Path @(
-        "amvera.yaml", "Dockerfile", "requirements.txt", "VERSION",
+        "amvera.yaml", "amvera.yml", "Dockerfile", "requirements.txt", "VERSION",
         "backend", "shared", "scripts", "docs", "README.md", "CHANGELOG.md", ".env.example"
     ) -DestinationPath $Out -Force
     Write-Host "OK: $Out"

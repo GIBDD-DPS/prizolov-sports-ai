@@ -51,10 +51,30 @@ Amvera **сама** создаёт окружение из `requirements.txt`.
 
 После успешного деплоя в логах:
 ```
-=== PRIZOLOV DOCKER START v14.14 ===
-PRIZOLOV SPORTS AI v14.14
+=== PRIZOLOV DOCKER START v14.18 ===
+PRIZOLOV SPORTS AI v14.14+
 ```
 **Не должно быть:** `v16.0`, `pari.ru`, `Bookmaker background`
+
+---
+
+## Ошибка `beautifulsoup4>=4.12.0 (from versions: none)`
+
+Это значит Amvera собирает **старый архив в режиме pip**, а не Docker из GitHub.
+
+| Признак | Старый архив (pip) | Правильный деплой (Docker) |
+|---------|-------------------|----------------------------|
+| В логах | `pip install`, `beautifulsoup4>=4.12.0` | `=== PRIZOLOV DOCKER START ===` |
+| Конфиг | нет `amvera.yaml` / `Dockerfile` в корне ZIP | `amvera.yaml` + `Dockerfile` в корне |
+| Источник | ручная загрузка старого ZIP | GitHub `main` |
+
+**Что сделать:**
+1. Привязать GitHub `GIBDD-DPS/prizolov-sports-ai`, ветка `main`
+2. Или загрузить свежий ZIP: `.\scripts\make_amvera_zip.ps1`
+3. Заморозить проект 20 сек (очистить venv в Artifacts)
+4. Пересобрать
+
+В v14.18 `beautifulsoup4` удалён из requirements — он не использовался в коде.
 
 ---
 
