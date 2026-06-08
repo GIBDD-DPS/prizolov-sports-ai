@@ -7,6 +7,11 @@ Organization: Prizolov Market / Prizolov Lab
 
 # Changelog
 
+## [14.14] - 2026-06-08
+
+### Added
+- Loud startup banner in logs to distinguish v14.14 from legacy v16/pari.ru builds.
+
 ## [14.12] - 2026-06-07
 
 ### Fixed
