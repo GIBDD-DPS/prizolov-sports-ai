@@ -7,6 +7,12 @@ Organization: Prizolov Market / Prizolov Lab
 
 # Changelog
 
+## [14.20] - 2026-06-08
+
+### Fixed
+- Documented Amvera UI misconfiguration: pip mode pointed at removed root `app/main.py`.
+- Added `amvera.pip.yaml` fallback and `docs/AMVERA_UI_FIX.md` with Docker vs pip settings.
+
 ## [14.18] - 2026-06-08
 
 ### Fixed
