@@ -1,6 +1,6 @@
 # ============================================
 # Copyright (c) 2026
-# PRIZOLOV SPORTS AI v14.10 (STORE-FRONT OPTIMIZED)
+# PRIZOLOV SPORTS AI v14.14 (STORE-FRONT OPTIMIZED)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -35,6 +36,10 @@ SOURCE_URLS = {
 PRODUCTION_HEALTH = "https://prizolov-sports-dmandreyanov.amvera.io/api/v1/health"
 VERSION_FILE = ROOT / "VERSION"
 COPYRIGHT_RE = re.compile(r"PRIZOLOV SPORTS AI v14\.\d+ \(STORE-FRONT OPTIMIZED\)")
+DOCKERFILES = [
+    (ROOT / "Dockerfile", ROOT),
+    (BACKEND / "Dockerfile", BACKEND),
+]
 
 
 def check_required_files() -> list[str]:
@@ -110,6 +115,56 @@ def check_links() -> list[str]:
     return notes
 
 
+def display_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
+def check_docker_copy_sources() -> list[str]:
+    errors: list[str] = []
+    for dockerfile, context_dir in DOCKERFILES:
+        if not dockerfile.exists():
+            errors.append(f"Missing Dockerfile: {display_path(dockerfile)}")
+            continue
+        dockerfile_label = display_path(dockerfile)
+
+        for line_no, line in enumerate(dockerfile.read_text(encoding="utf-8").splitlines(), 1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if not stripped.upper().startswith("COPY "):
+                continue
+
+            try:
+                parts = shlex.split(stripped)
+            except ValueError as exc:
+                errors.append(f"{dockerfile_label}:{line_no}: invalid COPY syntax: {exc}")
+                continue
+
+            args = parts[1:]
+            if any(arg == "--from" or arg.startswith("--from=") for arg in args):
+                continue
+            while args and args[0].startswith("--"):
+                args = args[2:] if "=" not in args[0] and len(args) > 1 else args[1:]
+            if len(args) < 2:
+                continue
+
+            for source in args[:-1]:
+                if any(char in source for char in "*?["):
+                    if not list(context_dir.glob(source)):
+                        errors.append(
+                            f"{dockerfile_label}:{line_no}: COPY source '{source}' matches no files"
+                        )
+                    continue
+                if not (context_dir / source).exists():
+                    errors.append(
+                        f"{dockerfile_label}:{line_no}: missing COPY source '{source}'"
+                    )
+    return errors
+
+
 def check_imports() -> list[str]:
     sys.path.insert(0, str(BACKEND))
     try:
@@ -125,7 +180,12 @@ def check_imports() -> list[str]:
 
 def main() -> int:
     print("PRIZOLOV SPORTS AI — verify_project")
-    errors = check_required_files() + check_version_sync() + check_imports()
+    errors = (
+        check_required_files()
+        + check_version_sync()
+        + check_docker_copy_sources()
+        + check_imports()
+    )
     print("\n## Links")
     for line in check_links():
         print(line)

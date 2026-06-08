@@ -1,6 +1,6 @@
 # ============================================
 # Copyright (c) 2026
-# PRIZOLOV SPORTS AI v14.10 (STORE-FRONT OPTIMIZED)
+# PRIZOLOV SPORTS AI v14.14 (STORE-FRONT OPTIMIZED)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
@@ -16,7 +16,6 @@ RUN pip install --upgrade pip setuptools wheel \
 COPY backend/alembic.ini .
 COPY backend/alembic ./alembic
 COPY backend/app ./app
-COPY backend/static ./static
 
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8080
