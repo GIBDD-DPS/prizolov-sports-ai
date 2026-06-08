@@ -77,3 +77,36 @@ Bookmaker background scrape ... pari.ru ...
 ```
 
 Это старый контейнер v16; он исчезнет только после успешной сборки v14.
+
+---
+
+## Как читать лог сборки Docker
+
+### Правильный билд (из GitHub `main`)
+
+```
+=== PRIZOLOV DOCKERFILE v14.24 (port 8080, no appuser) ===
+COPY backend/requirements.txt
+EXPOSE 8080
+=== PRIZOLOV DOCKER START v14.24 ===
+```
+
+### Неправильный билд (старый код в Artifacts Amvera)
+
+```
+COPY . .
+USER appuser
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", ..., "--port", "8000"]
+HEALTHCHECK ... localhost:8000/health
+```
+
+Если видите **8000** и **appuser** — Amvera **не взяла** `Dockerfile` из GitHub.
+
+**Что сделать:**
+1. **Настройки → Git** — репозиторий `GIBDD-DPS/prizolov-sports-ai`, ветка **`main`**
+2. Отключить/удалить ручную загрузку архива в **Code**
+3. **Заморозить** проект ~20 сек (очистка Artifacts)
+4. **Пересобрать** и снова проверить лог
+
+`containerPort` и `servicePort` должны быть **8080** (не 8000).
