@@ -1,11 +1,17 @@
 <!-- ============================================
 Copyright (c) 2026
-PRIZOLOV SPORTS AI v14.10 (STORE-FRONT OPTIMIZED)
+PRIZOLOV SPORTS AI v14.14 (STORE-FRONT OPTIMIZED)
 Author: Dm.Andreyanov
 Organization: Prizolov Market / Prizolov Lab
 ============================================ -->
 
 # Changelog
+
+## [14.14] - 2026-06-08
+
+### Fixed
+- Amvera Docker builds no longer require missing optional `backend/static` assets.
+- `verify_project.py` now checks Dockerfile `COPY` sources so missing build-context files are caught before deploy.
 
 ## [14.12] - 2026-06-07
 
