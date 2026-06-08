@@ -1,6 +1,6 @@
 <!-- ============================================
 Copyright (c) 2026
-PRIZOLOV SPORTS AI v14.10 (STORE-FRONT OPTIMIZED)
+PRIZOLOV SPORTS AI v14.18 (STORE-FRONT OPTIMIZED)
 Author: Dm.Andreyanov
 Organization: Prizolov Market / Prizolov Lab
 ============================================ -->
@@ -13,6 +13,7 @@ Organization: Prizolov Market / Prizolov Lab
 - Amvera pip build error on `beautifulsoup4`: removed unused dependency (parsers use httpx + selectolax).
 - Added `amvera.yml` duplicate, `ca-certificates` in Dockerfile, explicit PyPI index URL.
 - `backend/static/.gitkeep` so Docker COPY succeeds on fresh clone.
+- Synced copyright headers to v14.18 across project files.
 
 ## [14.16] - 2026-06-08
 
