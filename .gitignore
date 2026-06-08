@@ -13,8 +13,11 @@ venv/
 env/
 ENV/
 Lib/
-Scripts/
 pyvenv.cfg
+venv/Scripts/
+.venv/Scripts/
+**/venv/Scripts/
+**/.venv/Scripts/
 
 __pycache__/
 *.py[cod]
