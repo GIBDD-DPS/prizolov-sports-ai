@@ -7,6 +7,12 @@ Organization: Prizolov Market / Prizolov Lab
 
 # Changelog
 
+## [14.16] - 2026-06-08
+
+### Fixed
+- Amvera venv conflict: expanded `.gitignore` / `.dockerignore`, deploy docs and `make_amvera_zip.ps1`.
+- `verify_project.py` warns if local venv folder exists before upload.
+
 ## [14.14] - 2026-06-08
 
 ### Added

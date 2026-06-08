@@ -44,6 +44,12 @@ def check_required_files() -> list[str]:
             errors.append(f"Missing required file: {name}")
     if not (BACKEND / "app" / "main.py").exists():
         errors.append("Missing backend/app/main.py")
+    for venv_path in [ROOT / "venv", ROOT / ".venv", BACKEND / "venv"]:
+        if venv_path.is_dir():
+            errors.append(
+                f"Local venv found at {venv_path.relative_to(ROOT)} — "
+                "delete before Amvera upload (see docs/DEPLOY_AMVERA.md)"
+            )
     return errors
 
 

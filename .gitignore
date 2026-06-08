@@ -1,23 +1,32 @@
 # ============================================
 # Copyright (c) 2026
-# PRIZOLOV SPORTS AI v14.0 (STORE-FRONT OPTIMIZED)
+# PRIZOLOV SPORTS AI v14.16 (STORE-FRONT OPTIMIZED)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
 
-# Python
+# Python virtual environments — DO NOT commit or upload to Amvera
+venv/
+.venv/
+**/venv/
+**/.venv/
+env/
+ENV/
+Lib/
+Scripts/
+pyvenv.cfg
+
 __pycache__/
 *.py[cod]
 *.egg-info/
-.venv/
-venv/
+.eggs/
 .env
+.env.*
 
 # Node
 node_modules/
 frontend/.next/
 frontend/out/
-*.log
 
 # IDE / OS
 .idea/
@@ -25,8 +34,10 @@ frontend/out/
 .DS_Store
 Thumbs.db
 
-# Build artifacts
-backend/static/
-dist/
-*.sqlite3
+# Build / local DB
 backend/test_prizolov.db
+*.sqlite3
+dist/
+
+# Optional: frontend build output only in backend/static when ready
+# backend/static/

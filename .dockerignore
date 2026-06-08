@@ -1,17 +1,45 @@
 # ============================================
 # Copyright (c) 2026
-# PRIZOLOV SPORTS AI v14.10 (STORE-FRONT OPTIMIZED)
+# PRIZOLOV SPORTS AI v14.16 (STORE-FRONT OPTIMIZED)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
 
-.git
-.github
-frontend/node_modules
-frontend/.next
-**/__pycache__
-**/*.pyc
+# Python — NEVER upload venv to Amvera (Amvera builds its own)
+venv/
+.venv/
+**/venv/
+**/.venv/
+env/
+ENV/
+**/__pycache__/
+**/*.py[cod]
+*.egg-info/
 .env
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Git / IDE
+.git/
+.github/
+.idea/
+.vscode/
+
+# Local / test
 backend/test_prizolov.db
-parser/
+*.sqlite3
+*.log
+
+# Docs not needed in container
 *.md
+!README.md
+
+# Legacy parser folder (integrated in backend/app/parser)
+parser/
+
+# Frontend source (static served from backend/static when built)
+frontend/
