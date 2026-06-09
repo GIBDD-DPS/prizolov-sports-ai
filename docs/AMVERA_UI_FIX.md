@@ -47,7 +47,7 @@ PRIZOLOV SPORTS AI v14.18
 
 ## Вариант B: остаться на pip
 
-Если Docker в UI недоступен, замените конфиг на содержимое файла **`amvera.pip.yaml`**:
+Если Docker в UI недоступен, используйте pip-конфиг из раздела ниже («Вариант B» в `docs/DEPLOY_AMVERA.md`).
 
 ```yaml
 meta:
@@ -110,3 +110,17 @@ HEALTHCHECK ... localhost:8000/health
 4. **Пересобрать** и снова проверить лог
 
 `containerPort` и `servicePort` должны быть **8080** (не 8000).
+
+---
+
+## GitHub: ветка `main` vs `master`
+
+Amvera по умолчанию делает pull из ветки **`master`**.  
+В репозитории основная ветка — **`main`**, поэтому папка **Code** на Amvera могла **не обновляться** и собирать старый `Dockerfile` (appuser, порт 8000).
+
+**Проверьте в Amvera → Репозиторий → подключение GitHub:**
+- целевая ветка: **`main`** (или **`master`**, если создали алиас)
+
+**Проверьте Dockerfile в Amvera → Репозиторий → Code:**
+- должна быть строка `PRIZOLOV DOCKERFILE v14.24` и `EXPOSE 8080`
+- если видите `appuser` и `8000` — замените файл содержимым из GitHub `main` и сохраните

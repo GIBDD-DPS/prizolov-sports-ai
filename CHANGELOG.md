@@ -7,6 +7,13 @@ Organization: Prizolov Market / Prizolov Lab
 
 # Changelog
 
+## [14.26] - 2026-06-09
+
+### Removed
+- Legacy `parser/` tree (integrated in `backend/app/parser/`).
+- Duplicate `backend/Dockerfile`, `backend/amvera.yaml`, `amvera.yml`, `amvera.pip.yaml`.
+- Unused `shared/` schemas (not imported; markets live in backend).
+
 ## [14.22] - 2026-06-08
 
 ### Fixed

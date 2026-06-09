@@ -28,8 +28,8 @@ try {
         $name -notin @("venv", ".venv", "node_modules", ".git", "deploy-amvera.zip")
     }
     Compress-Archive -Path @(
-        "amvera.yaml", "amvera.yml", "Dockerfile", "requirements.txt", "VERSION",
-        "backend", "shared", "scripts", "docs", "README.md", "CHANGELOG.md", ".env.example"
+        "amvera.yaml", "Dockerfile", "requirements.txt", "VERSION",
+        "backend", "scripts", "docs", "README.md", "CHANGELOG.md", ".env.example"
     ) -DestinationPath $Out -Force
     Write-Host "OK: $Out"
     Write-Host "Upload this zip to Amvera (or use GitHub main instead)."

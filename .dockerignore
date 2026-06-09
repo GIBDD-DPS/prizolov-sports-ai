@@ -38,8 +38,5 @@ backend/test_prizolov.db
 *.md
 !README.md
 
-# Legacy parser folder (integrated in backend/app/parser)
-parser/
-
 # Frontend source (static served from backend/static when built)
 frontend/

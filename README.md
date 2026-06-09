@@ -19,8 +19,7 @@ Public sports prediction platform with weighted forecasts for football (MVP), ho
 |------|------|
 | `amvera.yaml` + `Dockerfile` | **Single Amvera app** (API + parser scheduler) |
 | `backend/app/` | FastAPI, DB models, parser (`app/parser/`) |
-| `frontend/` | Next.js public storefront |
-| `shared/` | Shared market schemas |
+| `frontend/` | Next.js storefront (Step 7, not deployed yet) |
 
 ## Markets (MVP)
 
