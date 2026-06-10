@@ -7,6 +7,11 @@ Organization: Prizolov Market / Prizolov Lab
 
 # Changelog
 
+## [14.32] - 2026-06-10
+
+### Fixed
+- Allow `POST /api/v1/admin/parse` without header when `API_SECRET` is not configured.
+
 ## [14.30] - 2026-06-10
 
 ### Added

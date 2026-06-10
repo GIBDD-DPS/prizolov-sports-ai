@@ -5,7 +5,7 @@
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
 
-"""Manual parser trigger (protected by API_SECRET)."""
+"""Manual parser trigger (optional API_SECRET protection)."""
 
 from fastapi import APIRouter, Header, HTTPException
 
@@ -17,7 +17,7 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 @router.post("/parse")
 async def trigger_parse(x_api_secret: str | None = Header(default=None)) -> dict:
-    if not settings.api_secret or x_api_secret != settings.api_secret:
+    if settings.api_secret and x_api_secret != settings.api_secret:
         raise HTTPException(status_code=403, detail="Forbidden")
 
     results = await run_all()
