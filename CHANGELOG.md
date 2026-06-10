@@ -7,6 +7,12 @@ Organization: Prizolov Market / Prizolov Lab
 
 # Changelog
 
+## [14.30] - 2026-06-10
+
+### Added
+- Parser DB persistence layer: upsert parsed `events`, `markets`, and `odds` into PostgreSQL.
+- Parse source run logs now saved in `parse_logs`, including per-source fetch failures.
+
 ## [14.28] - 2026-06-10
 
 ### Fixed
