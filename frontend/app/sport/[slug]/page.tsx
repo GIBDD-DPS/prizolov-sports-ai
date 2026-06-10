@@ -1,9 +1,11 @@
 // ============================================
 // Copyright (c) 2026
-// PRIZOLOV SPORTS AI v14.18 (STORE-FRONT OPTIMIZED)
+// PRIZOLOV SPORTS AI v14.38 (STORE-FRONT OPTIMIZED)
 // Author: Dm.Andreyanov
 // Organization: Prizolov Market / Prizolov Lab
 // ============================================
+
+import Storefront from "@/components/Storefront";
 
 type Props = { params: { slug: string } };
 
@@ -26,9 +28,12 @@ export default function SportPage({ params }: Props) {
         </p>
       )}
       {active && (
-        <p style={{ color: "var(--muted)" }}>
-          Линии: П1 / X / П2, тоталы, ЖК, угловые.
-        </p>
+        <>
+          <p style={{ color: "var(--muted)" }}>
+            Линии: П1 / X / П2, тоталы, ЖК, угловые.
+          </p>
+          <Storefront sport="football" />
+        </>
       )}
     </main>
   );

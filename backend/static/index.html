@@ -1,15 +1,182 @@
-<!-- PRIZOLOV SPORTS AI v14.18 (STORE-FRONT OPTIMIZED) -->
 <!DOCTYPE html>
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>PRIZOLOV SPORTS AI v14.10</title>
+  <meta name="prizolov-api-base" content="" />
+  <title>PRIZOLOV SPORTS AI — прогнозы</title>
+  <style>
+    :root {
+      --bg: #0b1220;
+      --card: #141e33;
+      --text: #e8eefc;
+      --muted: #8fa3c7;
+      --accent: #3b82f6;
+      --accent-2: #22c55e;
+      --warn: #f59e0b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 24px; }
+    header { border-bottom: 1px solid #24324f; margin-bottom: 24px; padding-bottom: 16px; }
+    h1 { margin: 0 0 8px; font-size: 1.5rem; }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #1e3a5f;
+      color: var(--accent);
+      font-size: 12px;
+      vertical-align: middle;
+    }
+    .muted { color: var(--muted); font-size: 14px; }
+    .card {
+      background: var(--card);
+      border: 1px solid #24324f;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+    .card h3 { margin: 8px 0; font-size: 1.1rem; }
+    .status { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; }
+    .status.ok { background: #132a1a; border-left: 3px solid var(--accent-2); }
+    .status.warn { background: #2a2313; border-left: 3px solid var(--warn); }
+    .status.err { background: #2a1313; border-left: 3px solid #ef4444; }
+    footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
+    .disclaimer {
+      background: #1a2332;
+      border-left: 3px solid var(--accent-2);
+      padding: 12px 16px;
+      margin: 16px 0 24px;
+      font-size: 14px;
+      color: var(--muted);
+    }
+    a { color: var(--accent); }
+    .kickoff { font-size: 13px; color: var(--muted); }
+  </style>
 </head>
 <body>
-  <h1>PRIZOLOV SPORTS AI v14.10</h1>
-  <p>Amvera: <strong>prizolov-sports</strong></p>
-  <p>API: <a href="/api/v1/health">/api/v1/health</a> · <a href="/api/v1/events?sport=football">/api/v1/events</a></p>
-  <p><small>© 2026 Dm.Andreyanov — Prizolov Market / Prizolov Lab</small></p>
+  <div class="wrap">
+    <header>
+      <h1>PRIZOLOV SPORTS AI <span class="badge" id="version">…</span></h1>
+      <p class="muted">Взвешенные спортивные прогнозы · футбол MVP</p>
+    </header>
+
+    <div id="status" class="status warn">Загрузка данных…</div>
+
+    <div class="disclaimer">
+      Прогнозы носят информационный характер и не являются рекомендацией к ставкам.
+    </div>
+
+    <h2>Ближайшие события</h2>
+    <div id="events"><p class="muted">Ожидание API…</p></div>
+
+    <footer>
+      © 2026 Dm.Andreyanov — Prizolov Market / Prizolov Lab<br />
+      API: <a id="health-link" href="/api/v1/health">/api/v1/health</a>
+    </footer>
+  </div>
+
+  <script>
+    (function () {
+      const SEL = { "1": "П1", "X": "X", "2": "П2" };
+      const CONF = { low: "Низкая", medium: "Средняя", high: "Высокая" };
+
+      function apiBase() {
+        const meta = document.querySelector('meta[name="prizolov-api-base"]');
+        const fromMeta = meta && meta.getAttribute("content");
+        if (fromMeta) return fromMeta.replace(/\/$/, "");
+        const q = new URLSearchParams(location.search).get("api");
+        if (q) return q.replace(/\/$/, "");
+        if (location.protocol.startsWith("http")) {
+          return location.origin + "/api/v1";
+        }
+        return "https://sport-ai-dmandreyanov.amvera.io/api/v1";
+      }
+
+      async function fetchJson(path, retries) {
+        const base = apiBase();
+        const url = base + path;
+        let lastErr;
+        for (let i = 0; i <= (retries || 2); i++) {
+          try {
+            const ctrl = new AbortController();
+            const t = setTimeout(function () { ctrl.abort(); }, 15000);
+            const res = await fetch(url, { signal: ctrl.signal, headers: { Accept: "application/json" } });
+            clearTimeout(t);
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            return await res.json();
+          } catch (e) {
+            lastErr = e;
+            if (i < (retries || 2)) await new Promise(function (r) { setTimeout(r, 800 * (i + 1)); });
+          }
+        }
+        throw lastErr;
+      }
+
+      function setStatus(kind, text) {
+        const el = document.getElementById("status");
+        el.className = "status " + kind;
+        el.textContent = text;
+      }
+
+      function renderEvents(events, predByEvent) {
+        const root = document.getElementById("events");
+        if (!events.length) {
+          root.innerHTML = "<p class=\"muted\">Событий пока нет. Запустите парсер или подождите планировщик.</p>";
+          return;
+        }
+        root.innerHTML = events.map(function (ev) {
+          const p = predByEvent[ev.id];
+          const pred = p
+            ? (SEL[p.selection] || p.selection) + " (" + Math.round(p.probability * 100) + "%)"
+            : "—";
+          const conf = p ? (CONF[p.confidence] || p.confidence) : "—";
+          const kick = ev.kickoff_at ? new Date(ev.kickoff_at).toLocaleString("ru-RU") : "";
+          return (
+            "<article class=\"card\">" +
+            "<div class=\"muted\">" + (ev.league || "Футбол") + "</div>" +
+            "<h3>" + ev.home_team + " — " + ev.away_team + "</h3>" +
+            "<div class=\"kickoff\">" + kick + "</div>" +
+            "<div>Прогноз: <strong>" + pred + "</strong> <span class=\"badge\">" + conf + "</span></div>" +
+            "</article>"
+          );
+        }).join("");
+      }
+
+      async function load() {
+        const base = apiBase();
+        document.getElementById("health-link").href = base + "/health";
+        try {
+          const health = await fetchJson("/health");
+          document.getElementById("version").textContent = "v" + (health.version || "?");
+          const [eventsData, predData] = await Promise.all([
+            fetchJson("/events?sport=football&limit=20"),
+            fetchJson("/predictions?sport=football&limit=50"),
+          ]);
+          const predByEvent = {};
+          (predData.items || []).forEach(function (p) {
+            if (!predByEvent[p.event_id]) predByEvent[p.event_id] = p;
+          });
+          renderEvents(eventsData.items || [], predByEvent);
+          setStatus("ok", "Данные обновлены · событий: " + (eventsData.count || 0) + " · API: " + base);
+        } catch (e) {
+          setStatus("err", "Данные временно недоступны. API: " + base + " — " + (e.message || e));
+          document.getElementById("events").innerHTML =
+            "<p class=\"muted\">Проверьте доступность API или откройте витрину с того же домена, что и backend (Amvera).</p>" +
+            "<p class=\"muted\">Внешний хостинг: добавьте <code>?api=https://sport-ai-dmandreyanov.amvera.io/api/v1</code></p>";
+        }
+      }
+
+      load();
+      setInterval(load, 5 * 60 * 1000);
+    })();
+  </script>
 </body>
 </html>

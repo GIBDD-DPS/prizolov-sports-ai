@@ -19,9 +19,11 @@ class Settings(BaseSettings):
     app_name: str = "PRIZOLOV SPORTS AI"
     app_version: str = "14.14"
     amvera_app_name: str = "prizolov-sports"
-    public_url: str = "https://prizolov-sports-dmandreyanov.amvera.io"
+    public_url: str = "https://sport-ai-dmandreyanov.amvera.io"
     api_prefix: str = "/api/v1"
     api_secret: str = ""
+    # Comma-separated browser origins for external storefront hosting (CORS).
+    storefront_origins: str = ""
 
     database_url: str | None = None
     postgres_host: str = "amvera-dmandreyanov-cnpg-sports-rw"
@@ -58,6 +60,16 @@ class Settings(BaseSettings):
         if url.startswith("postgresql://"):
             return url.replace("postgresql://", "postgresql+psycopg2://", 1)
         return url
+
+    @cached_property
+    def cors_allow_origins(self) -> list[str]:
+        origins = {self.public_url.rstrip("/"), "http://localhost:3000"}
+        if self.storefront_origins.strip():
+            for item in self.storefront_origins.split(","):
+                origin = item.strip().rstrip("/")
+                if origin:
+                    origins.add(origin)
+        return sorted(origins)
 
 
 settings = Settings()

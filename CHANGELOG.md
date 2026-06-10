@@ -7,6 +7,16 @@ Organization: Prizolov Market / Prizolov Lab
 
 # Changelog
 
+## [14.38] - 2026-06-10
+
+### Added
+- Step 7 storefront: live events + predictions on `backend/static/index.html` (same-origin, no hosting config).
+- Next.js `Storefront` client component with retry/timeout/fallback for static export on external hosting.
+- `STOREFRONT_ORIGINS` env for CORS when vitrina is on a separate domain.
+
+### Fixed
+- `PRODUCT_VERSION` now reads from root `VERSION` file (health banner matches release).
+
 ## [14.36] - 2026-06-10
 
 ### Added
