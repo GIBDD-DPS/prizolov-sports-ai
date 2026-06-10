@@ -21,6 +21,11 @@ class ForebetParser(BaseSourceParser):
     source_id = "forebet"
     base_url = "https://www.forebet.com"
 
+    @staticmethod
+    def _slot_kickoff(idx: int) -> datetime:
+        now = datetime.now(tz=UTC)
+        return now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=idx + 3)
+
     async def fetch_football_events(self) -> list[dict[str, Any]]:
         async with httpx.AsyncClient(
             timeout=30.0, headers=DEFAULT_HEADERS, follow_redirects=True
@@ -34,7 +39,7 @@ class ForebetParser(BaseSourceParser):
             )
             events: list[dict[str, Any]] = []
             for idx, (home_team, away_team) in enumerate(pairs[:5]):
-                kickoff = datetime.now(tz=UTC) + timedelta(hours=idx + 3)
+                kickoff = self._slot_kickoff(idx)
                 base = 1.65 + (idx * 0.05)
                 events.append(
                     {
@@ -65,7 +70,7 @@ class ForebetParser(BaseSourceParser):
                     "home_team": "Forebet XI",
                     "away_team": "Forebet Stars",
                     "league": "Forebet Football",
-                    "kickoff": datetime.now(tz=UTC) + timedelta(hours=6),
+                    "kickoff": self._slot_kickoff(3),
                     "markets": [
                         {
                             "market_type": "1X2",

@@ -7,6 +7,12 @@ Organization: Prizolov Market / Prizolov Lab
 
 # Changelog
 
+## [14.34] - 2026-06-10
+
+### Improved
+- Predictz parser now degrades gracefully on 403 with fallback data instead of failing the whole source run.
+- Parser kickoff slots normalized to rounded UTC hours to reduce duplicate events on repeated runs.
+
 ## [14.32] - 2026-06-10
 
 ### Fixed
