@@ -7,6 +7,12 @@ Organization: Prizolov Market / Prizolov Lab
 
 # Changelog
 
+## [14.36] - 2026-06-10
+
+### Added
+- Step 6 weighted prediction engine now rebuilds aggregated 1X2 predictions from persisted source odds.
+- Parser runner now writes prediction count into run results after each parse cycle.
+
 ## [14.34] - 2026-06-10
 
 ### Improved

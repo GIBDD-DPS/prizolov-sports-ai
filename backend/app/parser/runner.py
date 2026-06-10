@@ -10,6 +10,8 @@
 import asyncio
 import logging
 
+from app.db.session import SessionLocal
+from app.engine.predictor import rebuild_predictions
 from app.parser.persistence import persist_source_error, persist_source_events
 from app.parser.sources import PARSERS
 
@@ -36,6 +38,14 @@ async def run_all() -> dict:
             results[parser.source_id] = f"error: {exc}"
             persist_source_error(parser.source_id, str(exc))
             logger.exception("Parser failed: %s", parser.source_id)
+
+    db = SessionLocal()
+    try:
+        predictions_written = rebuild_predictions(db)
+        results["predictions"] = predictions_written
+        logger.info("Predictions rebuilt: %d", predictions_written)
+    finally:
+        db.close()
 
     logger.info("Parser run finished")
     return results
