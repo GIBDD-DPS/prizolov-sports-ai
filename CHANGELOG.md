@@ -7,6 +7,11 @@ Organization: Prizolov Market / Prizolov Lab
 
 # Changelog
 
+## [14.28] - 2026-06-10
+
+### Fixed
+- Set Amvera `servicePort` to `80` per platform support guidance to avoid external `503` responses.
+
 ## [14.26] - 2026-06-09
 
 ### Removed
