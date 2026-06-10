@@ -12,8 +12,11 @@ venv/
 **/.venv/
 env/
 ENV/
-Lib/
 pyvenv.cfg
+venv/Lib/
+.venv/Lib/
+**/venv/Lib/
+**/.venv/Lib/
 venv/Scripts/
 .venv/Scripts/
 **/venv/Scripts/
