@@ -94,6 +94,7 @@ POST https://prizolov-sports-dmandreyanov.amvera.io/api/v1/admin/parse
 Header: X-Api-Secret: <API_SECRET>
 ```
 
+
 ### Если health возвращает 503
 
 1. Amvera → проект **`prizolov-sports`** → **Логи сборки** и **Логи приложения**
