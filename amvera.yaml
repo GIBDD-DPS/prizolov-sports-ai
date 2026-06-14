@@ -4,17 +4,9 @@
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
-# Amvera project: prizolov-sports
-# Paste this into Amvera UI → Конфигурация (Docker, no run.command)
 
-# amvera.yaml
 name: prizolov-sports-ai
 type: docker
 dockerfile: Dockerfile
-
-# Порт, на котором слушает приложение (из EXPOSE и CMD)
 port: 8080
-
-# Переменные окружения, которые нужно задать в интерфейсе Amvera:
-# SPORTS_API_KEY – ваш ключ API спортивных данных
-# DEBUG – опционально (true/false)
+command: uvicorn backend.app.main:app --host 0.0.0.0 --port 8080
