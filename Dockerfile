@@ -9,27 +9,23 @@
 
 FROM python:3.11-slim
 
-RUN echo "=== PRIZOLOV DOCKERFILE v14.24 (port 8080, no appuser) ==="
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-COPY backend/requirements.txt .
-RUN pip install --upgrade pip setuptools wheel \
-    && pip install --no-cache-dir \
-        --index-url https://pypi.org/simple \
-        -r requirements.txt
+# Зависимости
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY backend/alembic.ini .
-COPY backend/alembic ./alembic
-COPY backend/app ./app
-COPY backend/static ./static
+# Копируем ВСЁ приложение (включая папку app, если она нужна)
+COPY . .
 
-ENV PYTHONUNBUFFERED=1
-EXPOSE 8080
+# Непривилегированный пользователь
+RUN useradd -m prizolov && chown -R prizolov:prizolov /app
+USER prizolov
 
-CMD ["sh", "-c", "echo '=== PRIZOLOV DOCKER START v14.24 ===' && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8080"]
+EXPOSE 8000
 
+# Точка входа — корневой main.py
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
