@@ -4,8 +4,6 @@
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
-# VERIFY in Amvera build logs: "PRIZOLOV DOCKERFILE v14.24" and EXPOSE 8080
-# WRONG build shows: appuser, EXPOSE 8000, COPY . .
 
 FROM python:3.11-slim
 
@@ -18,14 +16,14 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем ВСЁ приложение (включая папку app, если она нужна)
+# Копируем всё приложение
 COPY . .
 
-# Непривилегированный пользователь
-RUN useradd -m prizolov && chown -R prizolov:prizolov /app
-USER prizolov
+# Пользователь без root
+RUN useradd -m appuser && chown -R appuser:appuser /app
+USER appuser
 
-EXPOSE 8000
+EXPOSE 8080
 
-# Точка входа — корневой main.py
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Правильная точка входа – приложение внутри папки backend/app
+CMD ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8080"]
