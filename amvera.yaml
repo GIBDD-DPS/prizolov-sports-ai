@@ -10,6 +10,7 @@ meta:
     type: docker
     name: docker
   name: prizolov-sports-ai
+  environment: {}
   service:
     type: backend
     port: 8080
