@@ -13,7 +13,7 @@ type: docker
 dockerfile: Dockerfile
 
 # Порт, на котором слушает приложение (из EXPOSE и CMD)
-port: 8000
+port: 8080
 
 # Переменные окружения, которые нужно задать в интерфейсе Amvera:
 # SPORTS_API_KEY – ваш ключ API спортивных данных
