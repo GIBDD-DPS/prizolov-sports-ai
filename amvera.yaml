@@ -6,8 +6,10 @@
 # ============================================
 
 meta:
+  toolchain:
+    type: docker
   name: prizolov-sports-ai
-  type: docker
-  dockerfile: Dockerfile
-  port: 8080
-  command: uvicorn backend.app.main:app --host 0.0.0.0 --port 8080
+  service:
+    type: backend
+    port: 8080
+    command: uvicorn backend.app.main:app --host 0.0.0.0 --port 8080
