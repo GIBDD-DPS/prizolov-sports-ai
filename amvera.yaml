@@ -7,15 +7,14 @@
 # Amvera project: prizolov-sports
 # Paste this into Amvera UI → Конфигурация (Docker, no run.command)
 
-meta:
-  environment: docker
-  toolchain:
-    name: docker
+# amvera.yaml
+name: prizolov-sports-ai
+type: docker
+dockerfile: Dockerfile
 
-build:
-  dockerfile: Dockerfile
+# Порт, на котором слушает приложение (из EXPOSE и CMD)
+port: 8000
 
-run:
-  persistenceMount: /data
-  containerPort: 8080
-  servicePort: 80
+# Переменные окружения, которые нужно задать в интерфейсе Amvera:
+# SPORTS_API_KEY – ваш ключ API спортивных данных
+# DEBUG – опционально (true/false)
