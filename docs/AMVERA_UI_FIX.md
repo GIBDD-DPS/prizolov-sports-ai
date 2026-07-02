@@ -37,8 +37,8 @@ Amvera показывает: *«В коде не найден указанный
 
 После успеха в логах:
 ```
-=== PRIZOLOV DOCKER START v14.18 ===
-PRIZOLOV SPORTS AI v14.18
+=== PRIZOLOV DOCKER START v14.40 ===
+PRIZOLOV SPORTS AI v14.40
 ```
 
 Проверка: `https://prizolov-sports-dmandreyanov.amvera.io/api/v1/health`
@@ -85,10 +85,10 @@ Bookmaker background scrape ... pari.ru ...
 ### Правильный билд (из GitHub `main`)
 
 ```
-=== PRIZOLOV DOCKERFILE v14.24 (port 8080, no appuser) ===
+=== PRIZOLOV DOCKERFILE v14.40 (port 8080, no appuser) ===
 COPY backend/requirements.txt
 EXPOSE 8080
-=== PRIZOLOV DOCKER START v14.24 ===
+=== PRIZOLOV DOCKER START v14.40 ===
 ```
 
 ### Неправильный билд (старый код в Artifacts Amvera)
@@ -122,5 +122,5 @@ Amvera по умолчанию делает pull из ветки **`master`**.
 - целевая ветка: **`main`** (или **`master`**, если создали алиас)
 
 **Проверьте Dockerfile в Amvera → Репозиторий → Code:**
-- должна быть строка `PRIZOLOV DOCKERFILE v14.24` и `EXPOSE 8080`
+- должна быть строка `PRIZOLOV DOCKERFILE v14.40` и `EXPOSE 8080`
 - если видите `appuser` и `8000` — замените файл содержимым из GitHub `main` и сохраните
