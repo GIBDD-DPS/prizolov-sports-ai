@@ -22,7 +22,7 @@ from app.main import app  # noqa: E402
 
 class MainRouteRegistrationTest(unittest.TestCase):
     def test_api_routes_are_registered_under_v1_prefix(self) -> None:
-        route_paths = {getattr(route, "path", "") for route in app.routes}
+        route_paths = set(app.openapi()["paths"])
 
         self.assertTrue(
             {
