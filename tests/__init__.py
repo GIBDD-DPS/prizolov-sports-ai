@@ -5,4 +5,3 @@
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
 
-"""API route package."""

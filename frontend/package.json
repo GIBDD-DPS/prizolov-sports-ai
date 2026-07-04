@@ -1,8 +1,8 @@
 {
   "name": "prizolov-sports-ai-frontend",
-  "version": "14.18.0",
+  "version": "14.40.0",
   "private": true,
-  "description": "PRIZOLOV SPORTS AI v14.18 — public storefront",
+  "description": "PRIZOLOV SPORTS AI v14.40 — public storefront",
   "author": "Dm.Andreyanov",
   "scripts": {
     "dev": "next dev",
