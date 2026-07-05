@@ -1,11 +1,17 @@
 <!-- ============================================
 Copyright (c) 2026
-PRIZOLOV SPORTS AI v14.18 (STORE-FRONT OPTIMIZED)
+PRIZOLOV SPORTS AI v14.40 (STORE-FRONT OPTIMIZED)
 Author: Dm.Andreyanov
 Organization: Prizolov Market / Prizolov Lab
 ============================================ -->
 
 # Changelog
+
+## [14.40] - 2026-07-05
+
+### Fixed
+- Restored production FastAPI wiring for `/api/v1` routers, CORS, static storefront, and parser scheduler startup.
+- Aligned Docker/Amvera ASGI entrypoints with `app.main:app` and `/app/backend` import path.
 
 ## [14.38] - 2026-06-10
 
