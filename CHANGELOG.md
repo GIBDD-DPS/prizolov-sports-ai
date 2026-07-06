@@ -1,11 +1,17 @@
 <!-- ============================================
 Copyright (c) 2026
-PRIZOLOV SPORTS AI v14.18 (STORE-FRONT OPTIMIZED)
+PRIZOLOV SPORTS AI v14.40 (STORE-FRONT OPTIMIZED)
 Author: Dm.Andreyanov
 Organization: Prizolov Market / Prizolov Lab
 ============================================ -->
 
 # Changelog
+
+## [14.40] - 2026-07-06
+
+### Fixed
+- Restored the full FastAPI app wiring for `/api/v1/health`, sports, events, predictions, admin parse, CORS, static storefront, and parser scheduler startup after the production entrypoint was reduced to a stub.
+- Aligned Docker and Amvera startup with `app.main:app` and `/app/backend` imports so the restored application starts in the deployed container.
 
 ## [14.38] - 2026-06-10
 
