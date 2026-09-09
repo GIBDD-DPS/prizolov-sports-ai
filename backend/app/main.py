@@ -8,10 +8,14 @@
 import logging
 from fastapi import FastAPI
 
+from app.agenomics_integration import router as agenomics_router
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("prizolov.api")
 
 app = FastAPI(title="Prizolov Sports AI Storefront")
+
+app.include_router(agenomics_router, prefix="/api/v1/admin")
 
 @app.get("/api/v1/storefront-widget")
 async def storefront_widget():
