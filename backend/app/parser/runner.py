@@ -14,6 +14,7 @@ from app.db.session import SessionLocal
 from app.engine.predictor import rebuild_predictions
 from app.parser.persistence import persist_source_error, persist_source_events
 from app.parser.sources import PARSERS
+from app.agenomics_integration import PARSER_AGENT, FORECAST_AGENT
 
 logger = logging.getLogger("prizolov.parser")
 
@@ -28,6 +29,7 @@ async def run_all() -> dict:
             fetched_count = len(events)
             persisted_count = persist_source_events(parser.source_id, events)
             results[parser.source_id] = persisted_count
+            PARSER_AGENT.record_success()
             logger.info(
                 "%s: fetched %d items, persisted %d",
                 parser.source_id,
@@ -37,15 +39,34 @@ async def run_all() -> dict:
         except Exception as exc:
             results[parser.source_id] = f"error: {exc}"
             persist_source_error(parser.source_id, str(exc))
+            PARSER_AGENT.record_failure(exc)
             logger.exception("Parser failed: %s", parser.source_id)
 
     db = SessionLocal()
     try:
         predictions_written = rebuild_predictions(db)
         results["predictions"] = predictions_written
+        FORECAST_AGENT.record_success()
         logger.info("Predictions rebuilt: %d", predictions_written)
+    except Exception as exc:
+        results["predictions"] = f"error: {exc}"
+        FORECAST_AGENT.record_failure(exc)
+        logger.exception("Predictions rebuild failed")
     finally:
         db.close()
+
+    # Trust Score считается по накопленным метрикам, не на каждый прогон —
+    # это дёшево (чистая арифметика), так что можно логировать каждый раз
+    try:
+        parser_trust = PARSER_AGENT.score()
+        forecast_trust = FORECAST_AGENT.score()
+        results["trust"] = {
+            PARSER_AGENT.agent_id: parser_trust.score,
+            FORECAST_AGENT.agent_id: forecast_trust.score,
+        }
+    except RuntimeError as exc:
+        # agenomics не установлен — не роняем сам парсер из-за этого
+        logger.warning("Agenomics недоступен: %s", exc)
 
     logger.info("Parser run finished")
     return results
