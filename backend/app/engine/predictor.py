@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.market import Market
 from app.models.odds import Odds
 from app.models.prediction import Prediction
@@ -18,12 +19,22 @@ from app.models.prediction import Prediction
 SOURCE_WEIGHTS = {
     "the_odds_api": 0.60,
     "api_football": 0.40,
+    # forebet/predictz/betensured сейчас не в PARSERS (403/фейковые заглушки) —
+    # веса убраны, чтобы не запутывать; вернёшь строки сюда, если снова включишь
+    # эти источники в app/parser/sources/__init__.py.
 }
 
 
 def aggregate_source_predictions(sources: list[dict]) -> dict | None:
     """Merge normalized source predictions using configured weights."""
     if not sources:
+        return None
+
+    # Минимальный кворум источников — защита от построения прогноза на
+    # единственном (потенциально сбойном) источнике данных. Сейчас активен
+    # только the_odds_api, поэтому порог по умолчанию = 1; подними до 2+,
+    # когда в PARSERS снова появится второй рабочий источник.
+    if len(sources) < settings.min_sources_for_prediction:
         return None
 
     total_weight = 0.0
