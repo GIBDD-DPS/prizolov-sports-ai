@@ -17,8 +17,8 @@
 
 ВАЖНО ПРО ЛИМИТЫ: бесплатный тариф — как правило 100 запросов/день.
 Поэтому здесь ровно 2 запроса за один прогон парсера:
-  1) GET /fixtures?date=YYYY-MM-DD — матчи на сегодня
-  2) GET /odds?date=YYYY-MM-DD     — коэффициенты одним пакетом на дату
+  1) GET /fixtures?next=N       — ближайшие N матчей
+  2) GET /odds?date=YYYY-MM-DD  — коэффициенты одним пакетом на дату
 а не по одному /odds на каждый матч (это истощило бы лимит за один прогон
 при PARSER_INTERVAL_MINUTES=30).
 """
@@ -32,9 +32,11 @@ import httpx
 
 from app.core.config import settings
 from app.parser.sources.base import BaseSourceParser
+from app.parser.validation import is_valid_odds
 
 BASE_URL = "https://v3.football.api-sports.io"
 
+# id ставки "Match Winner" (1X2) в таксономии API-Football
 MATCH_WINNER_BET_ID = 1
 _VALUE_TO_SELECTION = {"Home": "1", "Draw": "X", "Away": "2"}
 
@@ -48,6 +50,8 @@ class ApiFootballParser(BaseSourceParser):
 
     async def fetch_football_events(self) -> list[dict[str, Any]]:
         if not settings.api_football_key:
+            # Осознанно не тихий fallback на фейковые данные, а явная ошибка —
+            # чтобы сразу было видно в логах/ParseLog, что ключ не задан.
             raise RuntimeError("API_FOOTBALL_KEY не задан в .env")
 
         async with httpx.AsyncClient(
@@ -75,11 +79,17 @@ class ApiFootballParser(BaseSourceParser):
             return events
 
     async def _fetch_fixtures(self, client: httpx.AsyncClient) -> list[dict[str, Any]]:
+        # На бесплатном тарифе параметр `next` недоступен ("Free plans do not
+        # have access to the Next parameter") — используем `date` (сегодня, UTC),
+        # это доступно на бесплатном плане.
         today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
         response = await client.get("/fixtures", params={"date": today})
         response.raise_for_status()
         data = response.json()
 
+        # API-Football часто отвечает HTTP 200 даже при ошибке аккаунта/лимита —
+        # сама ошибка лежит в data["errors"], а не в статус-коде. Без этой проверки
+        # исключение не поднимается, и парсер молча решает, что фикстур просто нет.
         errors = data.get("errors")
         if errors:
             raise RuntimeError(f"API-Football вернул ошибку: {errors}")
@@ -87,15 +97,20 @@ class ApiFootballParser(BaseSourceParser):
         return data.get("response", [])
 
     async def _fetch_odds_bulk(self, client: httpx.AsyncClient) -> dict[int, list[dict[str, Any]]]:
+        """Возвращает {fixture_id: [markets]} на сегодняшнюю дату (UTC), одним запросом."""
         today = datetime.now(tz=UTC).strftime("%Y-%m-%d")
         response = await client.get("/odds", params={"date": today})
 
         if response.status_code == 403 or response.status_code == 499:
+            # Типично для бесплатного тарифа, если odds недоступны на плане —
+            # не фейковые числа, а просто нет markets для этой даты.
             return {}
         response.raise_for_status()
 
         data = response.json()
         if data.get("errors"):
+            # Не роняем весь прогон из-за отсутствия доступа к odds на тарифе —
+            # фикстуры (события) всё равно полезны сами по себе.
             return {}
 
         result: dict[int, list[dict[str, Any]]] = {}
@@ -106,6 +121,7 @@ class ApiFootballParser(BaseSourceParser):
             if not fixture_id or not bookmakers:
                 continue
 
+            # Берём первого доступного букмекера из ответа для рынка 1X2
             selections: list[dict[str, Any]] = []
             for bookmaker in bookmakers:
                 match_winner_bet = next(
@@ -117,14 +133,11 @@ class ApiFootballParser(BaseSourceParser):
                 for value in match_winner_bet.get("values", []):
                     selection = _VALUE_TO_SELECTION.get(value.get("value"))
                     odd_raw = value.get("odd")
-                    if not selection or odd_raw is None:
+                    if not selection or not is_valid_odds(odd_raw):
                         continue
-                    try:
-                        selections.append({"selection": selection, "odds_value": float(odd_raw)})
-                    except (TypeError, ValueError):
-                        continue
+                    selections.append({"selection": selection, "odds_value": float(odd_raw)})
                 if selections:
-                    break
+                    break  # нашли рабочего букмекера — этого достаточно для 1X2
 
             if selections:
                 result[fixture_id] = [
