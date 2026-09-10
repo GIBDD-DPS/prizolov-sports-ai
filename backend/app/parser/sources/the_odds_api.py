@@ -27,6 +27,7 @@ import httpx
 
 from app.core.config import settings
 from app.parser.sources.base import BaseSourceParser
+from app.parser.validation import is_valid_odds
 
 BASE_URL = "https://api.the-odds-api.com"
 
@@ -52,6 +53,10 @@ class TheOddsApiParser(BaseSourceParser):
             response.raise_for_status()
             data = response.json()
 
+            # В отличие от API-Football, при реальных ошибках (неверный ключ,
+            # неизвестная лига, исчерпанная квота) The Odds API отдаёт
+            # соответствующий HTTP-статус (401/404/429), так что raise_for_status()
+            # выше их уже ловит. Доп. проверка — на случай нестандартного тела.
             if not isinstance(data, list):
                 raise RuntimeError(f"Неожиданный ответ The Odds API: {data}")
 
@@ -91,7 +96,7 @@ class TheOddsApiParser(BaseSourceParser):
             for outcome in h2h_market.get("outcomes", []):
                 name = outcome.get("name")
                 price = outcome.get("price")
-                if price is None:
+                if price is None or not is_valid_odds(price):
                     continue
                 if name == home_team:
                     selection = "1"
@@ -101,10 +106,7 @@ class TheOddsApiParser(BaseSourceParser):
                     selection = "X"
                 else:
                     continue
-                try:
-                    selections.append({"selection": selection, "odds_value": float(price)})
-                except (TypeError, ValueError):
-                    continue
+                selections.append({"selection": selection, "odds_value": float(price)})
 
             if selections:
                 return [{"market_type": "1X2", "line_value": None, "selections": selections}]
