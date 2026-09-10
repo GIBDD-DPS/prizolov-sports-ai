@@ -40,6 +40,18 @@ class Settings(BaseSettings):
         "PRIZOLOV-Sports-AI/14.14 (+https://prizolov-sports-dmandreyanov.amvera.io)"
     )
 
+    # --- API-Football (v3.football.api-sports.io, прямая регистрация, не RapidAPI) ---
+    api_football_key: str = ""
+    api_football_fixtures_lookahead: int = 10  # сколько ближайших матчей запрашивать за прогон
+
+    # --- The Odds API (the-odds-api.com) ---
+    odds_api_key: str = ""
+    odds_api_sport_key: str = "soccer_epl"  # см. GET /v4/sports для полного списка лиг
+    odds_api_region: str = "eu"
+    # ВНИМАНИЕ: бесплатный тариф The Odds API — маленькая квота (порядка сотен
+    # запросов/мес). При PARSER_INTERVAL_MINUTES=30 квота сгорит за 1-2 дня.
+    # Проверь актуальный расход на dashboard.the-odds-api.com после первых прогонов.
+
     @cached_property
     def sqlalchemy_database_url(self) -> str:
         if self.database_url:

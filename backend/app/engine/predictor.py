@@ -16,9 +16,8 @@ from app.models.odds import Odds
 from app.models.prediction import Prediction
 
 SOURCE_WEIGHTS = {
-    "forebet": 0.40,
-    "predictz": 0.30,
-    "betensured": 0.30,
+    "the_odds_api": 0.60,
+    "api_football": 0.40,
 }
 
 
