@@ -5,17 +5,17 @@
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
 # Root requirements for Amvera python-pip builds.
-# Docker build uses backend/requirements.txt (keep in sync).
+# Docker build uses ЭТОТ файл (COPY requirements.txt . в Dockerfile указывает
+# на корень репозитория) — backend/requirements.txt Docker'ом не используется,
+# несмотря на более старый комментарий здесь же. Держи оба файла в синхроне
+# вручную, пока это не объединено в один источник правды.
 
 fastapi==0.110.0
 uvicorn==0.29.0
 sqlalchemy==2.0.25
 psycopg2-binary==2.9.10
 pydantic-settings==2.1.0
-requests==2.31.0
-beautifulsoup4==4.12.3
-scikit-learn==1.3.2
-pandas==2.1.4
+httpx==0.27.0
 python-dotenv==1.0.0
 jinja2==3.1.3
 alembic==1.13.1
