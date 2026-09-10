@@ -55,13 +55,44 @@ def aggregate_source_predictions(sources: list[dict]) -> dict | None:
     if total_weight == 0:
         return None
 
+    home_result = round(home_prob / total_weight, 2)
+    draw_result = round(draw_prob / total_weight, 2)
+    away_result = round(away_prob / total_weight, 2)
+
     return {
-        "home_prob": round(home_prob / total_weight, 2),
-        "draw_prob": round(draw_prob / total_weight, 2),
-        "away_prob": round(away_prob / total_weight, 2),
-        "confidence": "medium",
+        "home_prob": home_result,
+        "draw_prob": draw_result,
+        "away_prob": away_result,
+        "confidence": _estimate_confidence(sources, home_result, draw_result, away_result),
         "sources_used": [s.get("source_id") for s in sources],
     }
+
+
+def _estimate_confidence(
+    sources: list[dict], home_prob: float, draw_prob: float, away_prob: float
+) -> str:
+    """Оценка уверенности по согласию источников друг с другом.
+
+    При одном источнике оценить "согласие" не из чего — остаётся нейтральный
+    'medium'. Как только активно ≥2 источника (например, вернётся
+    api_football), confidence начинает реально отражать разброс их мнений:
+    маленький разброс по победившему исходу = высокая уверенность, большой = низкая.
+    """
+    if len(sources) < 2:
+        return "medium"
+
+    probs = {"1": home_prob, "X": draw_prob, "2": away_prob}
+    winning_selection = max(probs, key=probs.get)
+    key = {"1": "home_prob", "X": "draw_prob", "2": "away_prob"}[winning_selection]
+
+    values = [float(s.get(key, 0.0)) for s in sources]
+    spread = max(values) - min(values) if values else 1.0
+
+    if spread < 0.08:
+        return "high"
+    if spread < 0.20:
+        return "medium"
+    return "low"
 
 
 def rebuild_predictions(db: Session) -> int:
