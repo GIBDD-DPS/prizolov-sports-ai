@@ -40,6 +40,10 @@ class Settings(BaseSettings):
         "PRIZOLOV-Sports-AI/14.14 (+https://prizolov-sports-dmandreyanov.amvera.io)"
     )
 
+    # Минимальное число источников, согласных друг с другом, чтобы прогноз
+    # вообще строился. 1 = текущий режим (единственный источник the_odds_api).
+    min_sources_for_prediction: int = 1
+
     # --- API-Football (v3.football.api-sports.io, прямая регистрация, не RapidAPI) ---
     api_football_key: str = ""
     api_football_fixtures_lookahead: int = 10  # сколько ближайших матчей запрашивать за прогон
