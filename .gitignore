@@ -47,3 +47,4 @@ dist/
 
 # Optional: frontend build output only in backend/static when ready
 # backend/static/
+*.db

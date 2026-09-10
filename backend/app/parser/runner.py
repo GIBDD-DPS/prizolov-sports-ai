@@ -11,6 +11,7 @@ import asyncio
 import logging
 
 from app.db.session import SessionLocal
+from app.engine.accuracy import reconcile_finished_events
 from app.engine.predictor import rebuild_predictions
 from app.parser.persistence import persist_source_error, persist_source_events
 from app.parser.sources import PARSERS
@@ -55,8 +56,19 @@ async def run_all() -> dict:
     finally:
         db.close()
 
-    # Trust Score считается по накопленным метрикам, не на каждый прогон —
-    # это дёшево (чистая арифметика), так что можно логировать каждый раз
+    # Сверка прогнозов с фактическими исходами уже завершившихся матчей.
+    db = SessionLocal()
+    try:
+        reconciled = await reconcile_finished_events(db)
+        results["reconciled"] = reconciled
+        if reconciled:
+            logger.info("Reconciled %d finished events with actual outcomes", reconciled)
+    except Exception as exc:
+        results["reconciled"] = f"error: {exc}"
+        logger.exception("Accuracy reconciliation failed")
+    finally:
+        db.close()
+
     try:
         parser_trust = PARSER_AGENT.score()
         forecast_trust = FORECAST_AGENT.score()
@@ -65,7 +77,6 @@ async def run_all() -> dict:
             FORECAST_AGENT.agent_id: forecast_trust.score,
         }
     except RuntimeError as exc:
-        # agenomics не установлен — не роняем сам парсер из-за этого
         logger.warning("Agenomics недоступен: %s", exc)
 
     logger.info("Parser run finished")
