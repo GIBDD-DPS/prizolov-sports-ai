@@ -1,6 +1,6 @@
 # ============================================
 # Copyright (c) 2026
-# PRIZOLOV SPORTS AI v14.18 (STORE-FRONT OPTIMIZED)
+# PRIZOLOV SPORTS AI v14.40 (STORE-FRONT OPTIMIZED)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
@@ -12,6 +12,7 @@ import logging
 
 from app.db.session import SessionLocal
 from app.engine.accuracy import reconcile_finished_events
+from app.engine.agenomics_evidence import freeze_upcoming_forecasts
 from app.engine.predictor import rebuild_predictions
 from app.parser.persistence import persist_source_error, persist_source_events
 from app.parser.sources import PARSERS
@@ -53,6 +54,17 @@ async def run_all() -> dict:
         results["predictions"] = f"error: {exc}"
         FORECAST_AGENT.record_failure(exc)
         logger.exception("Predictions rebuild failed")
+    finally:
+        db.close()
+
+    # Agenomics Q4: прогнозы на матчи ближайшего окна замораживаются вместе с
+    # Trust Score до начала матча. Ошибка здесь не мешает остальному прогону.
+    db = SessionLocal()
+    try:
+        results["agenomics_frozen"] = freeze_upcoming_forecasts(db)
+    except Exception as exc:
+        results["agenomics_frozen"] = f"error: {exc}"
+        logger.exception("Agenomics freeze failed")
     finally:
         db.close()
 

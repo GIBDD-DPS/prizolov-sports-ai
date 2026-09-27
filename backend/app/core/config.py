@@ -1,6 +1,6 @@
 # ============================================
 # Copyright (c) 2026
-# PRIZOLOV SPORTS AI v14.18 (STORE-FRONT OPTIMIZED)
+# PRIZOLOV SPORTS AI v14.40 (STORE-FRONT OPTIMIZED)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
@@ -47,6 +47,15 @@ class Settings(BaseSettings):
     # --- API-Football (v3.football.api-sports.io, прямая регистрация, не RapidAPI) ---
     api_football_key: str = ""
     api_football_fixtures_lookahead: int = 10  # сколько ближайших матчей запрашивать за прогон
+
+    # --- Agenomics: внешнее подтверждение исходов (Q4) ---
+    # Файл базы доказательств agenomics. Пусто: /data/agenomics_evidence.db
+    # (persistenceMount Amvera), локально ./agenomics_evidence.db.
+    agenomics_evidence_db: str = ""
+    # Прогноз замораживается, если до начала матча осталось не больше этого
+    # окна. Должно быть больше интервала парсера, иначе матч между двумя
+    # прогонами может проскочить без заморозки.
+    agenomics_freeze_window_minutes: int = 45
 
     # --- The Odds API (the-odds-api.com) ---
     odds_api_key: str = ""

@@ -1,6 +1,6 @@
 # ============================================
 # Copyright (c) 2026
-# PRIZOLOV SPORTS AI v14.18 (STORE-FRONT OPTIMIZED)
+# PRIZOLOV SPORTS AI v14.40 (STORE-FRONT OPTIMIZED)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
@@ -20,10 +20,14 @@
      сохранённому прогнозу на это событие, записать в accuracy_log,
      сообщить результат в Agenomics через FORECAST_AGENT.record_outcome().
   5. Пометить событие как "finished", чтобы не сверять его повторно.
+  6. Подтвердить в EvidenceStore agenomics прогнозы, замороженные до начала
+     матча (Q4, engine/agenomics_evidence.py). Сверяется замороженный выбор,
+     а не текущая строка predictions: её парсер мог переписать по ходу матча.
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -31,12 +35,15 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.agenomics_integration import FORECAST_AGENT
+from app.engine.agenomics_evidence import confirm_finished_event
 from app.core.config import settings
 from app.models.accuracy_log import AccuracyLog
 from app.models.event import Event
 from app.models.prediction import Prediction
 
 BASE_URL = "https://api.the-odds-api.com"
+
+logger = logging.getLogger("prizolov.accuracy")
 
 # Не сверяем матчи раньше, чем через это время после kickoff — футбольный матч
 # идёт ~2 часа, оставляем небольшой запас.
@@ -110,12 +117,14 @@ async def reconcile_finished_events(db: Session) -> int:
         raw_scores = await _fetch_scores(client)
 
     scores_by_teams: dict[tuple[str, str], tuple[int, int]] = {}
+    score_ids: dict[tuple[str, str], str] = {}
     for item in raw_scores:
         parsed = _parse_scores(item)
         if parsed is None:
             continue
         key = (str(item.get("home_team", "")).strip(), str(item.get("away_team", "")).strip())
         scores_by_teams[key] = parsed
+        score_ids[key] = str(item.get("id", ""))
 
     reconciled = 0
     for event in pending_events:
@@ -160,6 +169,15 @@ async def reconcile_finished_events(db: Session) -> int:
 
         event.status = "finished"
         reconciled += 1
+
+        # Agenomics Q4. Ссылка указывает на запись /scores, по которой
+        # установлен исход; ошибка agenomics не мешает сверке.
+        reference = (f"the-odds-api:scores:{settings.odds_api_sport_key}:{score_ids.get(key) or ''}:"
+                     f"{event.home_team} {home_score}-{away_score} {event.away_team}")
+        try:
+            confirm_finished_event(event.id, actual, reference)
+        except Exception:
+            logger.exception("Agenomics confirmation failed for event %s", event.id)
 
     db.commit()
     return reconciled
