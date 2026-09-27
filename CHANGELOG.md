@@ -1,11 +1,25 @@
 <!-- ============================================
 Copyright (c) 2026
-PRIZOLOV SPORTS AI v14.18 (STORE-FRONT OPTIMIZED)
+PRIZOLOV SPORTS AI v14.40 (STORE-FRONT OPTIMIZED)
 Author: Dm.Andreyanov
 Organization: Prizolov Market / Prizolov Lab
 ============================================ -->
 
 # Changelog
+
+## [14.40] - 2026-09-27
+
+### Added
+- Agenomics Q4 (`backend/app/engine/agenomics_evidence.py`): прогноз 1X2 замораживается в EvidenceStore agenomics вместе с Trust Score прогнозирующего агента, когда до начала матча остаётся не больше `AGENOMICS_FREEZE_WINDOW_MINUTES` (45). Выбор и вероятность входят в снимок предсказания с SHA-256.
+- После матча `reconcile_finished_events` подтверждает замороженный выбор итоговым счётом из The Odds API `/scores` через `agenomics.record_external_outcome()`: исход Q4, `ground_truth`, ссылка на запись `/scores`. Первый реальный источник Q4 для валидации Agenomics.
+- База доказательств: `/data/agenomics_evidence.db` (persistenceMount), настройка `AGENOMICS_EVIDENCE_DB`.
+- `backend/tests/`: тесты заморозки и подтверждения (`python -m pytest tests/` из `backend/`).
+
+### Changed
+- `agenomics` закреплён на теге `v0.9.6` вместо ветки `main`.
+
+### Notes
+- Сверяется замороженный до матча выбор, а не текущая строка `predictions`: `rebuild_predictions` переписывает прогнозы каждый прогон, включая начавшиеся матчи (The Odds API `/odds` отдаёт и live-события), поэтому к моменту сверки строка может отражать коэффициенты по ходу игры. `accuracy_log` по-прежнему сверяет текущую строку.
 
 ## [14.38] - 2026-06-10
 

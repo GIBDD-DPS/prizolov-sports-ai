@@ -1,0 +1,129 @@
+# ============================================
+# Copyright (c) 2026
+# PRIZOLOV SPORTS AI v14.40 (STORE-FRONT OPTIMIZED)
+# Author: Dm.Andreyanov
+# Organization: Prizolov Market / Prizolov Lab
+# ============================================
+
+"""Связка Q4 с моделями приложения: какие прогнозы замораживаются и как
+сверка матча подтверждает замороженный выбор, а не текущую строку."""
+
+from datetime import UTC, datetime, timedelta
+
+import pytest
+
+from app.engine import agenomics_evidence as ae
+
+pytestmark = pytest.mark.skipif(not ae.available(), reason="нужен agenomics >= 0.9.6")
+
+NOW = datetime(2026, 9, 27, 12, 0, tzinfo=UTC)
+
+
+@pytest.fixture()
+def evidence_db(tmp_path, monkeypatch):
+    """Своя база доказательств на каждый тест: номера матчей в тестах
+    повторяются, и общая база смешала бы заморозки разных тестов."""
+    from app.core.config import settings
+    path = str(tmp_path / "agenomics_evidence.db")
+    monkeypatch.setattr(settings, "agenomics_evidence_db", path)
+    return path
+
+
+@pytest.fixture()
+def db(evidence_db):
+    from app.db.base import Base
+    from app.db.session import SessionLocal, engine
+    import app.models  # noqa: F401  регистрирует таблицы
+    import app.models.accuracy_log  # noqa: F401  не входит в app.models, в проде таблицу создаёт alembic 002
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    yield session
+    session.close()
+
+
+def _match(db, kickoff, selection="1", market_type="1X2", status="scheduled", n=[0]):
+    from app.models import Event, Market, Prediction, Sport
+    n[0] += 1
+    sport = db.query(Sport).filter_by(slug="football").first() or Sport(slug="football", name="Football")
+    db.add(sport)
+    db.flush()
+    event = Event(sport_id=sport.id, home_team=f"H{n[0]}", away_team=f"A{n[0]}", kickoff_at=kickoff, status=status)
+    db.add(event)
+    db.flush()
+    market = Market(event_id=event.id, market_type=market_type)
+    db.add(market)
+    db.flush()
+    prediction = Prediction(event_id=event.id, market_id=market.id, selection=selection, probability=0.5,
+                            factors={"home_prob": 0.5, "draw_prob": 0.3, "away_prob": 0.2})
+    db.add(prediction)
+    db.commit()
+    return event, prediction
+
+
+def _frozen(store):
+    return {ae.parse_task_version(p.snapshot["task_version"])["event"]: p for p in store.get_predictions(ae.AGENT_ID)}
+
+
+def test_only_upcoming_1x2_matches_in_window_are_frozen(db, evidence_db):
+    soon, _ = _match(db, NOW + timedelta(minutes=30))
+    later, _ = _match(db, NOW + timedelta(hours=5))
+    started, _ = _match(db, NOW - timedelta(minutes=10))
+    totals, _ = _match(db, NOW + timedelta(minutes=20), market_type="TOTALS")
+    finished, _ = _match(db, NOW + timedelta(minutes=10), status="finished")
+    assert ae.freeze_upcoming_forecasts(db, now=NOW) == 1
+    assert ae.freeze_upcoming_forecasts(db, now=NOW + timedelta(minutes=5)) == 0  # уже заморожен
+    store = ae.open_store(ae.evidence_db_path(evidence_db))
+    try:
+        assert set(_frozen(store)) == {soon.id}
+    finally:
+        store.close()
+
+
+def test_confirmation_checks_frozen_selection_not_rewritten_row(db, evidence_db):
+    event, prediction = _match(db, NOW + timedelta(minutes=30), selection="1")
+    ae.freeze_upcoming_forecasts(db, now=NOW)
+    prediction.selection = "X"  # парсер переписал прогноз по ходу матча
+    db.commit()
+    assert ae.confirm_finished_event(event.id, "X", "the-odds-api:scores:epl:id:H 1-1 A") == 1
+    store = ae.open_store(ae.evidence_db_path(evidence_db))
+    try:
+        assert len(_frozen(store)) == 1
+        outcome = _frozen(store)[event.id].outcomes[0]
+        assert outcome.occurred is True  # заморожен "1", исход "X": прогноз не сбылся
+        assert outcome.quality_level == "Q4"
+    finally:
+        store.close()
+
+
+def test_reconcile_confirms_frozen_forecast_with_final_score(db, evidence_db, monkeypatch):
+    """Полный путь через reconcile_finished_events: счёт из /scores (подменён)
+    пишется в accuracy_log и подтверждает замороженный прогноз в agenomics."""
+    import asyncio
+
+    from app.core.config import settings
+    from app.engine import accuracy
+    from app.models.accuracy_log import AccuracyLog
+
+    kickoff = datetime.now(tz=UTC) + timedelta(minutes=20)
+    event, _ = _match(db, kickoff, selection="2")
+    assert ae.freeze_upcoming_forecasts(db, now=datetime.now(tz=UTC)) == 1
+    event.kickoff_at = datetime.now(tz=UTC) - timedelta(hours=4)  # матч сыгран
+    db.commit()
+
+    async def fake_scores(client):
+        return [{"id": "evt-1", "completed": True, "home_team": event.home_team, "away_team": event.away_team,
+                 "scores": [{"name": event.home_team, "score": "0"}, {"name": event.away_team, "score": "2"}]}]
+
+    monkeypatch.setattr(settings, "odds_api_key", "test-key")
+    monkeypatch.setattr(accuracy, "_fetch_scores", fake_scores)
+    assert asyncio.run(accuracy.reconcile_finished_events(db)) == 1
+    assert db.query(AccuracyLog).one().correct is True
+
+    store = ae.open_store(ae.evidence_db_path(evidence_db))
+    try:
+        outcome = _frozen(store)[event.id].outcomes[0]
+        assert outcome.occurred is False and outcome.quality_level == "Q4"
+        assert "evt-1" in outcome.source_reference and "0-2" in outcome.source_reference
+    finally:
+        store.close()
