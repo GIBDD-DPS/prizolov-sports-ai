@@ -1,6 +1,6 @@
 # ============================================
 # Copyright (c) 2026
-# PRIZOLOV SPORTS AI v14.18 (STORE-FRONT OPTIMIZED)
+# PRIZOLOV SPORTS AI v14.42 (STORE-FRONT OPTIMIZED)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
@@ -9,9 +9,12 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.models.event import Event
 from app.models.market import Market
 from app.models.odds import Odds
 from app.models.prediction import Prediction
@@ -95,9 +98,22 @@ def _estimate_confidence(
     return "low"
 
 
-def rebuild_predictions(db: Session) -> int:
-    """Rebuild aggregated 1X2 predictions from stored source odds."""
-    markets = db.query(Market).filter(Market.market_type == "1X2").all()
+def rebuild_predictions(db: Session, now: datetime | None = None) -> int:
+    """Rebuild aggregated 1X2 predictions from stored source odds.
+
+    Только для матчей, которые ещё не начались. The Odds API /odds отдаёт и
+    live-события, и без этого фильтра прогноз начавшегося матча
+    переписывался бы по коэффициентам по ходу игры, а сверка в accuracy.py
+    засчитывала бы такой прогноз как сделанный до матча. После начала
+    матча прогноз остаётся таким, каким был на последнем прогоне до kickoff.
+    """
+    now = now or datetime.now(tz=UTC)
+    markets = (
+        db.query(Market)
+        .join(Event, Market.event_id == Event.id)
+        .filter(Market.market_type == "1X2", Event.kickoff_at > now)
+        .all()
+    )
     written = 0
 
     for market in markets:
