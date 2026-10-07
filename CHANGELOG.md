@@ -7,6 +7,11 @@ Organization: Prizolov Market / Prizolov Lab
 
 # Changelog
 
+## [14.43] - 2026-10-07
+
+### Fixed
+- Amvera: после 14.42 контейнер по-прежнему не стартовал с той же ошибкой (`exec: "uvicorn backend.app.main:app --host 0.0.0.0 --port 8080": executable file not found in $PATH`), хотя в `amvera.yaml` строки `command` уже не было: команда запуска хранится в настройках проекта на Amvera. Добавлен `start.sh` (переход в `backend/` и `exec uvicorn app.main:app`), он же в `CMD` Dockerfile и в `run.command` `amvera.yaml`. Команда одним словом без пробелов запускается и как имя исполняемого файла, и через shell.
+
 ## [14.42] - 2026-09-28
 
 ### Fixed

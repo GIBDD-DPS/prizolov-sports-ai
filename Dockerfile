@@ -1,6 +1,6 @@
 # ============================================
 # Copyright (c) 2026
-# PRIZOLOV SPORTS AI v14.42 (STORE-FRONT OPTIMIZED)
+# PRIZOLOV SPORTS AI v14.43 (STORE-FRONT OPTIMIZED)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
@@ -33,9 +33,8 @@ USER appuser
 
 EXPOSE 8080
 
-# Приложение импортирует себя как пакет app (from app.core.config ...), а
-# статику ищет в ./static относительно текущего каталога: обе вещи лежат в
-# backend/, поэтому запуск идёт из backend/ как app.main:app. Запуск из
-# корня как backend.app.main:app падал с ModuleNotFoundError: No module named 'app'.
-WORKDIR /app/backend
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+# Точка входа: start.sh (запуск uvicorn из backend/, где пакет app и
+# статика ./static). Тот же путь стоит в amvera.yaml run.command: Amvera
+# передаёт команду контейнеру одной строкой как имя исполняемого файла,
+# и строка с пробелами ("uvicorn backend.app.main:app ...") не запускалась.
+CMD ["/app/start.sh"]
