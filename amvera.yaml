@@ -9,6 +9,7 @@ build:
 run:
   persistenceMount: /data
   image: null
+  command: /app/start.sh
   args: null
   containerPort: 8080
   servicePort: 80
