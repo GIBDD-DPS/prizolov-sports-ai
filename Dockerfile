@@ -1,6 +1,6 @@
 # ============================================
 # Copyright (c) 2026
-# PRIZOLOV SPORTS AI v14.24 (STORE-FRONT OPTIMIZED)
+# PRIZOLOV SPORTS AI v14.42 (STORE-FRONT OPTIMIZED)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
@@ -33,5 +33,9 @@ USER appuser
 
 EXPOSE 8080
 
-# Правильная точка входа – приложение внутри папки backend/app
-CMD ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+# Приложение импортирует себя как пакет app (from app.core.config ...), а
+# статику ищет в ./static относительно текущего каталога: обе вещи лежат в
+# backend/, поэтому запуск идёт из backend/ как app.main:app. Запуск из
+# корня как backend.app.main:app падал с ModuleNotFoundError: No module named 'app'.
+WORKDIR /app/backend
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
