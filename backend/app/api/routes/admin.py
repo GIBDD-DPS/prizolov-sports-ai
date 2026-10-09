@@ -1,6 +1,6 @@
 # ============================================
 # Copyright (c) 2026
-# PRIZOLOV SPORTS AI v14.18 (STORE-FRONT OPTIMIZED)
+# PRIZOLOV SPORTS AI v14.44 (STORE-FRONT OPTIMIZED)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
@@ -29,6 +29,15 @@ async def trigger_parse(x_api_secret: str | None = Header(default=None)) -> dict
     _check_secret(x_api_secret)
     results = await run_all()
     return {"status": "ok", "results": results}
+
+
+@router.get("/agenomics")
+def get_agenomics(x_api_secret: str | None = Header(default=None)) -> dict:
+    """База доказательств Agenomics (Q4): сколько прогнозов заморожено до
+    начала матча, сколько подтверждено итоговым счётом, сколько ждут."""
+    _check_secret(x_api_secret)
+    from app.engine.agenomics_evidence import evidence_status
+    return evidence_status(settings.agenomics_evidence_db)
 
 
 @router.get("/accuracy")

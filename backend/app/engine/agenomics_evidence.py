@@ -1,6 +1,6 @@
 # ============================================
 # Copyright (c) 2026
-# PRIZOLOV SPORTS AI v14.40 (STORE-FRONT OPTIMIZED)
+# PRIZOLOV SPORTS AI v14.44 (STORE-FRONT OPTIMIZED)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
@@ -186,6 +186,39 @@ def confirm_event(store, event_id: int, actual_selection: str, source_reference:
         if record_external_outcome(store, p.id, verifier) is not None:
             confirmed += 1
     return confirmed
+
+
+def evidence_summary(store) -> dict:
+    """Сводка базы доказательств по прогнозирующему агенту: сколько
+    прогнозов заморожено, сколько подтверждено исходом матча (Q4), сколько
+    ждут результата, и когда были последняя заморозка и подтверждение."""
+    predictions = store.get_predictions(AGENT_ID)
+    confirmations = [o for p in predictions for o in p.outcomes if o.donor_id == RESULTS_DONOR["donor_id"]]
+    confirmed_ids = {p.id for p in predictions if any(o.donor_id == RESULTS_DONOR["donor_id"] for o in p.outcomes)}
+    return {
+        "frozen_predictions": len(predictions),
+        "confirmed_q4": len(confirmations),
+        "awaiting_result": len(predictions) - len(confirmed_ids),
+        "forecast_correct": sum(1 for o in confirmations if not o.occurred),  # task_failure не произошёл
+        "forecast_wrong": sum(1 for o in confirmations if o.occurred),
+        "last_frozen_at": max((p.frozen_at for p in predictions), default=None),
+        "last_confirmed_at": max((o.observed_at for o in confirmations), default=None),
+    }
+
+
+def evidence_status(configured_path: str = "") -> dict:
+    """Для /api/v1/admin/agenomics: путь к базе, есть ли она и сводка.
+    Отсутствующий файл не создаётся: «базы нет» тоже ответ."""
+    path = evidence_db_path(configured_path)
+    status = {"agenomics_available": available(), "evidence_db": path, "exists": Path(path).is_file()}
+    if not status["agenomics_available"] or not status["exists"]:
+        return status
+    store = EvidenceStore(path)
+    try:
+        status.update(evidence_summary(store))
+    finally:
+        store.close()
+    return status
 
 
 def open_store(configured_path: str = ""):

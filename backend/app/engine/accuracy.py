@@ -1,6 +1,6 @@
 # ============================================
 # Copyright (c) 2026
-# PRIZOLOV SPORTS AI v14.40 (STORE-FRONT OPTIMIZED)
+# PRIZOLOV SPORTS AI v14.44 (STORE-FRONT OPTIMIZED)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
@@ -127,6 +127,7 @@ async def reconcile_finished_events(db: Session) -> int:
         score_ids[key] = str(item.get("id", ""))
 
     reconciled = 0
+    q4_confirmed = q4_events = 0
     for event in pending_events:
         key = (event.home_team, event.away_team)
         score = scores_by_teams.get(key)
@@ -175,9 +176,14 @@ async def reconcile_finished_events(db: Session) -> int:
         reference = (f"the-odds-api:scores:{settings.odds_api_sport_key}:{score_ids.get(key) or ''}:"
                      f"{event.home_team} {home_score}-{away_score} {event.away_team}")
         try:
-            confirm_finished_event(event.id, actual, reference)
+            confirmed = confirm_finished_event(event.id, actual, reference)
+            q4_confirmed += confirmed
+            q4_events += 1 if confirmed else 0
         except Exception:
             logger.exception("Agenomics confirmation failed for event %s", event.id)
 
     db.commit()
+    if reconciled:
+        logger.info("Agenomics Q4: подтверждено прогнозов %d по %d матчам из %d сверенных",
+                    q4_confirmed, q4_events, reconciled)
     return reconciled

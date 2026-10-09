@@ -1,6 +1,6 @@
 # ============================================
 # Copyright (c) 2026
-# PRIZOLOV SPORTS AI v14.40 (STORE-FRONT OPTIMIZED)
+# PRIZOLOV SPORTS AI v14.44 (STORE-FRONT OPTIMIZED)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
@@ -62,6 +62,7 @@ async def run_all() -> dict:
     db = SessionLocal()
     try:
         results["agenomics_frozen"] = freeze_upcoming_forecasts(db)
+        logger.info("Agenomics: заморожено прогнозов до начала матча: %s", results["agenomics_frozen"])
     except Exception as exc:
         results["agenomics_frozen"] = f"error: {exc}"
         logger.exception("Agenomics freeze failed")
