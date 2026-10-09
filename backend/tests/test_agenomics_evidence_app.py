@@ -1,6 +1,6 @@
 # ============================================
 # Copyright (c) 2026
-# PRIZOLOV SPORTS AI v14.40 (STORE-FRONT OPTIMIZED)
+# PRIZOLOV SPORTS AI v14.44 (STORE-FRONT OPTIMIZED)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
@@ -96,7 +96,7 @@ def test_confirmation_checks_frozen_selection_not_rewritten_row(db, evidence_db)
         store.close()
 
 
-def test_reconcile_confirms_frozen_forecast_with_final_score(db, evidence_db, monkeypatch):
+def test_reconcile_confirms_frozen_forecast_with_final_score(db, evidence_db, monkeypatch, caplog):
     """Полный путь через reconcile_finished_events: счёт из /scores (подменён)
     пишется в accuracy_log и подтверждает замороженный прогноз в agenomics."""
     import asyncio
@@ -117,6 +117,7 @@ def test_reconcile_confirms_frozen_forecast_with_final_score(db, evidence_db, mo
 
     monkeypatch.setattr(settings, "odds_api_key", "test-key")
     monkeypatch.setattr(accuracy, "_fetch_scores", fake_scores)
+    caplog.set_level("INFO")
     assert asyncio.run(accuracy.reconcile_finished_events(db)) == 1
     assert db.query(AccuracyLog).one().correct is True
 
@@ -127,3 +128,38 @@ def test_reconcile_confirms_frozen_forecast_with_final_score(db, evidence_db, mo
         assert "evt-1" in outcome.source_reference and "0-2" in outcome.source_reference
     finally:
         store.close()
+    assert any("Agenomics Q4: подтверждено прогнозов 1 по 1 матчам из 1 сверенных" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_evidence_status_summary(db, evidence_db):
+    status = ae.evidence_status(evidence_db)
+    assert status["exists"] is False and "frozen_predictions" not in status  # файла нет и он не создаётся
+    assert not __import__("os").path.exists(evidence_db)
+    confirmed, _ = _match(db, NOW + timedelta(minutes=30), selection="1")
+    _match(db, NOW + timedelta(minutes=40), selection="2")
+    assert ae.freeze_upcoming_forecasts(db, now=NOW) == 2
+    ae.confirm_finished_event(confirmed.id, "1", "the-odds-api:scores:epl:id:H 1-0 A")
+    status = ae.evidence_status(evidence_db)
+    assert status["exists"] and status["agenomics_available"]
+    assert (status["frozen_predictions"], status["confirmed_q4"], status["awaiting_result"]) == (2, 1, 1)
+    assert (status["forecast_correct"], status["forecast_wrong"]) == (1, 0)
+    assert status["last_frozen_at"] and status["last_confirmed_at"]
+
+
+def test_admin_agenomics_endpoint(db, evidence_db, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.api.routes import admin
+    from app.core.config import settings
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    app.include_router(admin.router, prefix="/api/v1")
+    client = TestClient(app)
+    monkeypatch.setattr(settings, "api_secret", "s3cret")
+    assert client.get("/api/v1/admin/agenomics").status_code == 403
+    _match(db, NOW + timedelta(minutes=30))
+    ae.freeze_upcoming_forecasts(db, now=NOW)
+    body = client.get("/api/v1/admin/agenomics", headers={"X-Api-Secret": "s3cret"}).json()
+    assert body["evidence_db"] == evidence_db and body["frozen_predictions"] == 1 and body["confirmed_q4"] == 0
