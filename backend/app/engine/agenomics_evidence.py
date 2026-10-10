@@ -1,6 +1,6 @@
 # ============================================
 # Copyright (c) 2026
-# PRIZOLOV SPORTS AI v14.44 (STORE-FRONT OPTIMIZED)
+# PRIZOLOV SPORTS AI v14.45 (STORE-FRONT OPTIMIZED)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
@@ -206,6 +206,61 @@ def evidence_summary(store) -> dict:
     }
 
 
+def _round(value, digits=4):
+    return None if value is None else round(float(value), digits)
+
+
+def q4_validation(store) -> dict:
+    """Проверка Q4: предсказывает ли Trust Score, замороженный до матча, что
+    прогноз не сбудется. Только исходы Q4 (итоговый счёт из внешнего
+    источника), только прогнозирующий агент. Это та же проверка, что
+    `agenomics validate <база> --target task_failure --min-quality Q4`."""
+    from agenomics import validate
+
+    report = validate(store, target=TARGET, agent_id=AGENT_ID, min_quality="Q4")
+    h = report.holdout
+    return {
+        "verdict": report.verdict,
+        "detail": report.detail,
+        "claim_level": report.claim_level,
+        "claim_blockers": report.claim_blockers,
+        "pairs": report.n_pairs,
+        "forecast_wrong": report.n_positive,
+        "independence_groups": report.independence_groups,
+        "roc_auc_all": _round(report.overall.roc_auc),
+        "brier_all": _round(report.overall.brier),
+        "period": [report.period_start, report.period_end],
+        "holdout": None if h is None else {
+            "calibration": h.calibration_n,
+            "test": h.test_n,
+            "test_events": h.trust_score.n_positive,
+            "roc_auc": _round(h.trust_score.roc_auc),
+            "roc_auc_ci": h.roc_auc_ci,
+            "baseline_history_roc_auc": _round(h.baseline_agent_history.roc_auc),
+            "auc_difference_ci": h.auc_difference_vs_agent_history_ci,
+            "baseline_constant_brier": _round(h.baseline_constant_brier),
+        },
+        "note": "Один прогнозирующий агент: baseline «история агента» здесь это его средняя частота ошибок. "
+                "Уровни утверждений и пороги: docs/VALIDATION_PROTOCOL.md в agenomics.",
+    }
+
+
+def recent_confirmations(store, limit: int = 10) -> list:
+    """Последние подтверждённые прогнозы: что было заморожено и что вышло."""
+    rows = []
+    for p in store.get_predictions(AGENT_ID):
+        info = parse_task_version(p.snapshot.get("task_version")) or {}
+        for o in p.outcomes:
+            if o.donor_id == RESULTS_DONOR["donor_id"]:
+                rows.append({
+                    "event_id": info.get("event"), "frozen_selection": info.get("selection"),
+                    "probability": info.get("p"), "trust_score_at_freeze": p.trust_score,
+                    "frozen_at": p.frozen_at, "confirmed_at": o.observed_at,
+                    "forecast_correct": not o.occurred, "source_reference": o.source_reference,
+                })
+    return sorted(rows, key=lambda r: r["confirmed_at"], reverse=True)[:limit]
+
+
 def evidence_status(configured_path: str = "") -> dict:
     """Для /api/v1/admin/agenomics: путь к базе, есть ли она и сводка.
     Отсутствующий файл не создаётся: «базы нет» тоже ответ."""
@@ -216,6 +271,22 @@ def evidence_status(configured_path: str = "") -> dict:
     store = EvidenceStore(path)
     try:
         status.update(evidence_summary(store))
+        scores = [p.trust_score for p in store.get_predictions(AGENT_ID)]
+        status["trust_score_at_freeze"] = None if not scores else {
+            "min": min(scores), "mean": round(sum(scores) / len(scores), 2), "max": max(scores),
+        }
+        try:
+            status["q4_validation"] = q4_validation(store)
+        except Exception as exc:  # отчёт не должен ронять эндпоинт
+            status["q4_validation"] = {"error": f"{type(exc).__name__}: {exc}"[:300]}
+        status["recent_confirmations"] = recent_confirmations(store)
+        try:
+            from agenomics import accumulation_scorecard
+            status["scorecard"] = {r.metric: {"current": r.current, "target": r.target}
+                                   for r in accumulation_scorecard(store)
+                                   if r.metric in ("observations", "evidence_q4", f"events:{TARGET}")}
+        except Exception as exc:
+            status["scorecard"] = {"error": f"{type(exc).__name__}: {exc}"[:300]}
     finally:
         store.close()
     return status

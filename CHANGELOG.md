@@ -7,6 +7,17 @@ Organization: Prizolov Market / Prizolov Lab
 
 # Changelog
 
+## [14.45] - 2026-10-10
+
+### Added
+- `GET /api/v1/admin/agenomics` показывает не только счётчики, но и проверку Q4:
+  - `q4_validation`: вердикт и уровень утверждений с тем, чего не хватает; пары и сколько прогнозов не сбылось; ROC-AUC Trust Score на всей выборке и на holdout с интервалом; baseline «история агента» и интервал разницы; Brier; период. Это та же проверка, что `agenomics validate <база> --target task_failure --min-quality Q4`, только по исходам, подтверждённым итоговым счётом;
+  - `trust_score_at_freeze`: минимум, среднее и максимум Trust Score на момент заморозки;
+  - `recent_confirmations`: последние 10 подтверждений — матч, замороженный выбор и вероятность, Trust Score, сбылся ли прогноз, ссылка на запись `/scores`;
+  - `scorecard`: накоплено прогонов, доказательств Q4 и событий против ориентиров agenomics.
+
+  Работает на закреплённой `agenomics v0.9.6`.
+
 ## [14.44] - 2026-10-09
 
 ### Added
