@@ -1,6 +1,6 @@
 # ============================================
 # Copyright (c) 2026
-# PRIZOLOV SPORTS AI v14.44 (STORE-FRONT OPTIMIZED)
+# PRIZOLOV SPORTS AI v14.45 (STORE-FRONT OPTIMIZED)
 # Author: Dm.Andreyanov
 # Organization: Prizolov Market / Prizolov Lab
 # ============================================
@@ -145,6 +145,16 @@ def test_evidence_status_summary(db, evidence_db):
     assert (status["frozen_predictions"], status["confirmed_q4"], status["awaiting_result"]) == (2, 1, 1)
     assert (status["forecast_correct"], status["forecast_wrong"]) == (1, 0)
     assert status["last_frozen_at"] and status["last_confirmed_at"]
+    # проверка Q4: только подтверждённые счётом пары; два матча, один ещё не сыгран
+    q4 = status["q4_validation"]
+    assert "error" not in q4, q4
+    assert q4["pairs"] == 1 and q4["forecast_wrong"] == 0 and q4["verdict"] == "insufficient_data"
+    assert q4["independence_groups"] == ["the_odds_api_scores"] and q4["claim_level"] == "exploratory"
+    recent = status["recent_confirmations"]
+    assert len(recent) == 1 and recent[0]["event_id"] == confirmed.id and recent[0]["forecast_correct"] is True
+    assert recent[0]["frozen_selection"] == "1" and recent[0]["trust_score_at_freeze"] is not None
+    assert status["trust_score_at_freeze"]["min"] <= status["trust_score_at_freeze"]["max"]
+    assert status["scorecard"]["evidence_q4"]["current"] == 1
 
 
 def test_admin_agenomics_endpoint(db, evidence_db, monkeypatch):
